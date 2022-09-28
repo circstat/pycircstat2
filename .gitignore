@@ -1,5 +1,6 @@
 .ipynb_checkpoints/
 .pytest_cache
+.DS_Store
 
 *.egg-info
 */__pycache__
