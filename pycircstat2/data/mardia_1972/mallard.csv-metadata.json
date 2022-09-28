@@ -1,0 +1,16 @@
+{
+    "Description": "Vanishing angles of 714 British mallards",
+    "Source": "matthews, 1961",
+    "Examples": "Mardia (1972) Table 1.1",
+    "Columns": {
+        "θ": {
+            "name": "θ",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "w": {
+            "name": "frequency",
+            "type": "int"
+        }
+    }
+}

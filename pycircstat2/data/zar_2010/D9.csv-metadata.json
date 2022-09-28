@@ -1,0 +1,10 @@
+{
+    "Description": "Testing for Symmetry Around the Median Angle.",
+    "Examples": "27.6",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}

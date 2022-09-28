@@ -1,0 +1,19 @@
+{
+    "Description": "Twelve nests of a partiular bird species were recordd on braches extending in various directions from the trunks of trees.",
+    "Excercises": "26.1",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "w": {
+            "name": "frequency",
+            "type": "int"
+        },
+        "orientation": {
+            "name": "orientation",
+            "type": "str"
+        }
+    }
+}

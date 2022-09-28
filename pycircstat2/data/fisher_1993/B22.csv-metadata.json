@@ -1,0 +1,12 @@
+{
+    "Title": "B.22 Face-cleat in a coal seam",
+    "Description": "63 measurements of median direction of face-cleat from the Wallsend Borehole Colliery, NSW, Australia.",
+    "Source": "Shepherd & Fisher (1981, 1982)",
+    "Examples": "7.1, 7.5",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "axes"
+        }
+    }
+}

@@ -1,0 +1,11 @@
+{
+    "Description": "Compass directions of eight trees learning toward.",
+    "Examples": "26.2, 26.4, 27.1, 27.24",
+    "Columns": {
+        "θ": {
+            "name": "θ",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

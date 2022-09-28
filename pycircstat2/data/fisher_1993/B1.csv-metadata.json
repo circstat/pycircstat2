@@ -1,0 +1,13 @@
+{
+    "Title": "B.1 Arrival times at an intensive care unit",
+    "Description": "Arrival times on a 24-hour clock of 254 patients at an intnsive care unit, over a period of about 12 months",
+    "Type": "Vectors",
+    "Source": "Cox & Lewis (1966, pp. 254-5)",
+    "Examples": "2.1, 2.3, 2.4, 2.5, 2.6, 2.8, 2.10",
+    "Columns": {
+        "time": {
+            "name": "time",
+            "type": "vectors"
+        }
+    }
+}

@@ -1,0 +1,16 @@
+{
+    "Title": "B.18 Wind direction and ozone concentration",
+    "Description": "19 measurements of wind direction (θ) and ozone level (x) taken at 6.00am at four-day intervals between April 18th and June 29th, 1975 at a wather station in Milwaukee.",
+    "Source": "Johnson & Wehrly (1977, Table 1)",
+    "Examples": "6.1, 6.4, 6.5",
+    "Columns": {
+        "θ": {
+            "name": "wind direction",
+            "type": "vectors"
+        },
+        "x": {
+            "name": "ozone level",
+            "type": "float"
+        }
+    }
+}

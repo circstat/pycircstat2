@@ -1,0 +1,10 @@
+{
+    "Description": "The Hodges-Ajne Test and Batschelet Test for Ciruclar Uniformity.",
+    "Examples": "27.4, 27.5",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}

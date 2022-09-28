@@ -1,0 +1,18 @@
+{
+    "Description": "The mean of a set of mean angles.",
+    "Examples": "26.8, 27.14, 27.15, 27.16",
+    "Columns": {
+        "sample": {
+            "name": "sample",
+            "type": "int"
+        },
+        "mean": {
+            "name": "sample mean",
+            "type": "float"
+        },
+        "r": {
+            "name": "resultant vector length",
+            "type": "float"
+        }
+    }
+}

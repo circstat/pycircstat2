@@ -1,0 +1,14 @@
+{
+    "Description": "Watson U2 Test for Nonparametric Two-Sample Testing; The Wheeler and Watson Two-Sample Test.",
+    "Examples": "27.9, 27.11",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "sample": {
+            "name": "sample",
+            "type": "int"
+        }
+    }
+}

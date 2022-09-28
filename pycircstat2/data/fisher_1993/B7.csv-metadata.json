@@ -1,0 +1,13 @@
+{
+    "Title": "B.7 Movements of ants",
+    "Description": "Directions chosen by 100 ants in response to an evenly illuminated black target placed as shown.",
+    "Source": "Randomly selected values from Jander (1957, Figure 18A)",
+    "Examples": "4.4, 4.18, 4.19",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

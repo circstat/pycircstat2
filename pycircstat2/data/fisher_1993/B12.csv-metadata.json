@@ -1,0 +1,12 @@
+{
+    "Title": "B.12 Vanishing directions of homing pigeons",
+    "Description": "Vanishing directions of 15 homing pigeons, released just over 16 kilometres Northwest of their loft.",
+    "Source": "SchidtßKoenig (1963)",
+    "Examples": "4.21, 4.22, 4.23, 4.24",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}

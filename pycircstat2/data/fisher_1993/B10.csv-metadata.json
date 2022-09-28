@@ -1,0 +1,17 @@
+{
+    "Title": "B.10 Directions of desert ants",
+    "Description": "Directions of 11 long-legged desert ants (Cataglyphis fotis) after one eye on each ant was 'trained' to learn the ant's home direction, then covered and the other eye uncovered.",
+    "Source": "Prof. Dr R. Wehner (Personal communication); experiment described in Wehner & Müller (1985).",
+    "Examples": "4.15, 5.10",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "set": {
+            "name": "set",
+            "type": "int",
+            "values": "[1,2,3]"
+        }
+    }
+}

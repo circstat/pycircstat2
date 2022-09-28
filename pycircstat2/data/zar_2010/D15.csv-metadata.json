@@ -1,0 +1,21 @@
+{
+    "Description": "The times of day that males and females are born are tabulated.",
+    "Examples": "27.13",
+    "Columns": {
+        "time": {
+            "name": "time",
+            "type": "str",
+            "unit": "hour"
+        },
+        "distance": {
+            "name": "angular distance",
+            "type": "vectors",
+            "unit": "hour"
+        },
+        "sex": {
+            "name": "sex",
+            "type": "int",
+            "values": "['Male', 'Female']"
+        }
+    }
+}

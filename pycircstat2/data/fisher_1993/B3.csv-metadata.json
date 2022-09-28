@@ -1,0 +1,13 @@
+{
+    "Title": "B.3 Movements of turtles",
+    "Description": "Measurements of the directions taken by 76 turtles after treatment.",
+    "Source": "Stephens (1969b)",
+    "Examples": "2.9, 4.25",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

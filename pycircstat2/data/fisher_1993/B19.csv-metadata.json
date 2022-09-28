@@ -1,0 +1,16 @@
+{
+    "Title": "B.19 Nest orientations and creek directions",
+    "Description": "Orientations of the nests of 50 noisy scrub birds (θ) along the bank of a creek bed, together with the corresponding directions (φ) of creek flow at the nearest point to the nest.",
+    "Source": "Data kindly supplied by Dr Graham Smith.",
+    "Examples": "6.2, 6.6",
+    "Columns": {
+        "θ": {
+            "name": "nest orientation",
+            "type": "vectors"
+        },
+        "φ": {
+            "name": "creek flow direction",
+            "type": "vectors"
+        }
+    }
+}

@@ -1,0 +1,16 @@
+{
+    "Title": "B.20 Movements of blue periwinkles",
+    "Description": "Distances (x) and directions (θ) moved by small blue periwinkles, Nodilittorina unifasciata, after they had been transplanted downshore from the height at which they normally live.",
+    "Source": "Data kindly supplied by Dr A. Underwood and Ms G. Chapman.",
+    "Examples": "6.3, 6.9, 6.10, 6.11",
+    "Columns": {
+        "x": {
+            "name": "distance",
+            "type": "int"
+        },
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}

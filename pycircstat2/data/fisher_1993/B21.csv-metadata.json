@@ -1,0 +1,16 @@
+{
+    "Title": "B.21 Pairs of wind directions",
+    "Description": "Measurements of wind directions at 6.00am and 12.00 noon, on each of 21 consecutive days, at a weather station in Milwaukee.",
+    "Source": "Johnson & Wherly (1977, Table 2)",
+    "Examples": "6.7, 6.8",
+    "Columns": {
+        "θ": {
+            "name": "6.00am",
+            "type": "vectors"
+        },
+        "φ": {
+            "name": "12.00 noon",
+            "type": "vectors"
+        }
+    }
+}

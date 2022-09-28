@@ -1,0 +1,13 @@
+{
+    "Title": "B.4 Directional preferences of starhead topminnows",
+    "Description": "Sun compass orientations of 50 starhead topminnos, measured under heavily overcast conditions.",
+    "Source": "Goodyear (1970, Figure 1D)",
+    "Examples": "4.1, 4.12",
+    "Columns": {
+        "θ": {
+            "name": "orientation",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

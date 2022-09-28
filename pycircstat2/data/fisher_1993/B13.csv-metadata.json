@@ -1,0 +1,24 @@
+{
+    "Title": "B.13 Orientations of termite mounds",
+    "Description": "Orientations of termite mounds of Amitermes laurensis at 14 sites in Cape York Peninsula, North Queensland.",
+    "Source": "Data kindly supplied by Dr A. V. Spain, from an experiment reported in Spain et al. (1983).",
+    "Examples": "5.2, 5.5, 5.9, 5.14, 5.15, 5.18, 5.19",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "set": {
+            "name": "set",
+            "type": "int"
+        },
+        "latitude": {
+            "name": "latitude",
+            "type": "float"
+        },
+        "longitude": {
+            "name": "longitude",
+            "type": "float"
+        }
+    }
+}

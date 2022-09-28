@@ -1,0 +1,18 @@
+{
+    "Title": "B.6 Cross-bed azimuths of palaeocurrents",
+    "Description": "Sets of cross-bed azimuths of palaeocurrents measured in the Belford Anticline (New South Wales).",
+    "Source": "Fisher & Powell (1989)",
+    "Examples": "4.3, 4.6, 4.13, 4.14, 4.16, 4.17, 5.1, 5.11",
+    "Columns": {
+        "θ": {
+            "name": "azimuths",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "set": {
+            "name": "set",
+            "type": "int",
+            "values": "[1,2,3]"
+        }
+    }
+}

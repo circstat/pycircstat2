@@ -11,4 +11,7 @@ setup(
     author=["Ziwei Huang", "Philipp Berens"],
     author_email="huang-ziwei@outlook.com",
     install_requires=required,
+    packages=["pycircstat2"],
+    include_package_data=True,
+    package_data={"pycircstat2": ["data/fisher_1993/*.csv", "data/fisher_1993/*.json"]},
 )

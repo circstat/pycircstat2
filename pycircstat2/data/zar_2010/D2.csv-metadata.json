@@ -1,0 +1,29 @@
+{
+    "Description": "A sample of circular data, presented as a frequency table, where θi is an angle and fi is the observed frequency of θi.",
+    "Examples": "26.3, 26.5",
+    "Columns": {
+        "θ": {
+            "name": "center of intervals",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "θ_lower": {
+            "name": "lower bound of θ",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "θ_uppwer": {
+            "name": "upper bound of θ",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "w": {
+            "name": "frequency",
+            "type": "int"
+        },
+        "v": {
+            "name": "relative frequency",
+            "type": "float"
+        }
+    }
+}

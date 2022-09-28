@@ -1,0 +1,10 @@
+{
+    "Description": "A total of 15 human births occurred in various time in a day.",
+    "Exercises": "26.2",
+    "Columns": {
+        "time": {
+            "name": "time",
+            "type": "str"
+        }
+    }
+}

@@ -1,0 +1,13 @@
+{
+    "Title": "B.5 Long-axis orientations of feldspar laths",
+    "Description": "Measurements of long-axis orientation of 164 feldspar laths in bassalt.",
+    "Source": "Randomly selected from Smith (1988, set 24-6-5.co.prn)",
+    "Examples": "4.2, 4.5, 4.7, 4.8, 4.11",
+    "Columns": {
+        "θ": {
+            "name": "orientation",
+            "type": "axes",
+            "unit": "degree"
+        }
+    }
+}

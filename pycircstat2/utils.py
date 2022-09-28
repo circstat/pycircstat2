@@ -4,14 +4,15 @@ import numpy as np
 
 
 def data2rad(
-    data: Union[np.ndarray, float, int], k: Union[float, int] = 360
-) -> Union[np.ndarray, float]:  # eq(26.1)
+    data: Union[np.ndarray, float, int],  #
+    k: Union[float, int] = 360,  # number of intervals in the full cycle
+) -> Union[np.ndarray, float]:  # eq(26.1), zar 2010
     return 2 * np.pi * data / k
 
 
 def rad2data(
     rad: Union[np.ndarray, float, int], k: Union[float, int] = 360
-) -> Union[np.ndarray, float]:  # eq(26.12)
+) -> Union[np.ndarray, float]:  # eq(26.12), zar 2010
     return k * rad / (2 * np.pi)
 
 
@@ -30,5 +31,4 @@ def significance_code(p: float) -> str:
         sig = "."
     else:
         sig = ""
-    return sig
     return sig

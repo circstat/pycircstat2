@@ -1,0 +1,11 @@
+{
+    "Description": "A bimodal circular distribution.",
+    "Examples": "26.7",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

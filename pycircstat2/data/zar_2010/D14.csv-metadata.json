@@ -1,0 +1,21 @@
+{
+    "Description": "Birds of both sexes are transported away fro their homes and released, with their directions of travel tabulated. The homeward direction for each sex is 135 degree.",
+    "Examples": "27.12",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "φ": {
+            "name": "angular distance",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "sex": {
+            "name": "sex",
+            "type": "int",
+            "values": "['Male', 'Female']"
+        }
+    }
+}

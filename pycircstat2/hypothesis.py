@@ -133,62 +133,62 @@ def V_test(
     return V, u, p
 
 
-# def one_sample_test(
-#     lb: float = None,
-#     ub: float = None,
-#     alpha: Union[np.ndarray, None] = None,
-#     w: Union[np.ndarray, None] = None,
-#     angle: Union[int, float] = 0,
-#     unit: str = "degree",
-# ) -> bool:
+def one_sample_test(
+    lb: float = None,
+    ub: float = None,
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
+    angle: Union[int, float] = 0,
+    unit: str = "degree",
+) -> bool:
 
-#     """
-#     To test wheter the population mean agle is equal to a specified value.
+    """
+    To test wheter the population mean agle is equal to a specified value.
 
-#     Parameters
-#     ----------
+    Parameters
+    ----------
 
-#     lb: float
-#         Lower bound of circular mean from `descriptive.circ_mean_ci()`.
+    lb: float
+        Lower bound of circular mean from `descriptive.circ_mean_ci()`.
 
-#     ub: float
-#         Upper bound of circular mean from `descriptive.circ_mean_ci()`.
+    ub: float
+        Upper bound of circular mean from `descriptive.circ_mean_ci()`.
 
-#     alpha: np.array or None
-#         Angles in radian.
+    alpha: np.array or None
+        Angles in radian.
 
-#     w: np.array or None.
-#         Frequencies of angles
+    w: np.array or None.
+        Frequencies of angles
 
-#     angle: float or int
-#         Angle (in radian or degree) to be compared with mean angle.
+    angle: float or int
+        Angle (in radian or degree) to be compared with mean angle.
 
-#     unit: str
-#         Radian or degree. Default is degree,
-#         which will be converted to radian.
+    unit: str
+        Radian or degree. Default is degree,
+        which will be converted to radian.
 
-#     Return
-#     ------
-#     reject: bool
-#         Reject or not reject the null hypothesis.
-#     """
+    Return
+    ------
+    reject: bool
+        Reject or not reject the null hypothesis.
+    """
 
-#     if lb is None or ub is None:
-#         assert isinstance(
-#             alpha, np.ndarray
-#         ), "If `ub` or `lb` is None, then `alpha` (and `w`) is needed."
-#         if w is None:
-#             w = np.ones_like(alpha)
-#         _, lb, ub = circ_mean_ci(alpha=alpha, w=w)
+    if lb is None or ub is None:
+        assert isinstance(
+            alpha, np.ndarray
+        ), "If `ub` or `lb` is None, then `alpha` (and `w`) is needed."
+        if w is None:
+            w = np.ones_like(alpha)
+        _, lb, ub = circ_mean_ci(alpha=alpha, w=w)
 
-#     if unit == "radian":
-#         angle = angle
-#     elif unit == "degree":
-#         angle = np.deg2rad(angle)
+    if unit == "radian":
+        angle = angle
+    elif unit == "degree":
+        angle = np.deg2rad(angle)
 
-#     if lb < angle < ub:
-#         reject = False  # not able reject null (mean angle == angle)
-#     else:
-#         reject = True  # reject null (mean angle == angle)
+    if lb < angle < ub:
+        reject = False  # not able reject null (mean angle == angle)
+    else:
+        reject = True  # reject null (mean angle == angle)
 
-#     return reject
+    return reject

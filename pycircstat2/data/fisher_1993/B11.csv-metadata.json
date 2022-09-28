@@ -1,0 +1,12 @@
+{
+    "Title": "B.11 Movements of sea stars",
+    "Description": "Resultant directions of 22 sea stars 11 dazs after being displaced from their natural habitat.",
+    "Source": "Upton & Fingleton (1989, p. 274), as adapted from Pabst & Vicentini (1978)",
+    "Examples": "4.20",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}

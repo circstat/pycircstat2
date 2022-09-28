@@ -1,0 +1,17 @@
+{
+    "Title": "B.15 Groove and tool marks, and flute marks",
+    "Description": "Groove and tool marks, and flute marks, measured in the Murruin Creek area, southwest of Yerranderie, New South Wales.",
+    "Source": "Fisher & Powell (1989)",
+    "Examples": "5.4, 5.7, 5.8",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "marks": {
+            "name": "set",
+            "type": "str",
+            "values": "['flutes', 'grooves and tools']"
+        }
+    }
+}

@@ -1,0 +1,17 @@
+{
+    "Title": "B.14 Seasonal wind directions",
+    "Description": "Wind direction at Gorleston, England between 11.00am and noon on Sundays during 1968 (two values missing).",
+    "Source": "Mardia (1972a, Table 6.3)",
+    "Examples": "5.3, 5.12",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "season": {
+            "name": "set",
+            "type": "str",
+            "values": "['Spring', 'Summer', 'Autumn', 'Winter']"
+        }
+    }
+}

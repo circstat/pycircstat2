@@ -1,0 +1,14 @@
+{
+    "Description": "The Watson-Williams Test for Two Samples.",
+    "Examples": "27.7",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "sample": {
+            "name": "sample",
+            "type": "int"
+        }
+    }
+}

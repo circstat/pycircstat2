@@ -1,0 +1,12 @@
+{
+    "Title": "B.23 Wind directions",
+    "Description": "Time series of 72 wind directions, comprising hourly measurements for three days at a sit on Black Mountain, ACT, Australia.",
+    "Source": "Data kindly supplied by Dr M. A. Cameron.",
+    "Examples": "7.2, 7.7, 7.8",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}

@@ -1,0 +1,21 @@
+{
+    "Title": "B.16 Cross-bed measurements from Himalayan molasse",
+    "Description": "Cross-bed measurements from Himalayan molasse in Pakistan..",
+    "Source": "Wells (1990)",
+    "Examples": "5.6, 5.13, 5.17",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "set": {
+            "name": "set",
+            "type": "int",
+            "values": "[1, 2]",
+            "extra": {
+                "set 1": "25 measurements of Rakhi Nala ripple cross-beds",
+                "set 2": "104 measurements of Chaudan Zam large bedforms"
+            }
+        }
+    }
+}

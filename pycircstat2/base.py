@@ -3,14 +3,8 @@ from typing import Union
 import numpy as np
 import pandas as pd
 
-from .descriptive import (
-    circ_mean,
-    circ_mean_ci,
-    circ_median,
-    circ_median_ci,
-    circ_std,
-    circ_kappa,
-)
+from .descriptive import (circ_kappa, circ_mean, circ_mean_ci, circ_median,
+                          circ_median_ci, circ_std)
 from .hypothesis import rayleigh_test
 from .plot import plot_rose, plot_scatter
 from .utils import data2rad, rad2data, significance_code
@@ -52,11 +46,11 @@ class Circular:
 
     def __init__(
         self,
-        data: Union[np.ndarray, list],
-        w: Union[np.ndarray, list, None] = None,
-        unit: str = "degree",
-        k: Union[int, float] = 360,
+        data: Union[np.ndarray, list],  # angle
+        w: Union[np.ndarray, list, None] = None,  # frequency
         bins: Union[int, np.array, None] = None,
+        unit: str = "degree",
+        k: Union[int, float] = 360,  # number of intervals in the full cycle
         kwargs_median={"method": "deviation"},
         kwargs_mean_ci=None,
     ):

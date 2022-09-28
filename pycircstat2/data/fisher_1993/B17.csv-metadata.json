@@ -1,0 +1,17 @@
+{
+    "Title": "B.17 Orientations of rock cores",
+    "Description": "Orientations of core samples collected at five sampling locations in the Pacheco Pass area of the Diablo Range, California, USA.",
+    "Source": "Upton & Fingleton (1989, Table 9.13)",
+    "Examples": "5.16",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "axes"
+        },
+        "site": {
+            "name": "site",
+            "type": "int",
+            "values": "[1,4,5,9,11]"
+        }
+    }
+}

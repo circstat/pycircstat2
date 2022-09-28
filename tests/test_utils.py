@@ -1,6 +1,6 @@
 import numpy as np
 
-from pycircstat2.utils import data2rad, rad2data, angrange
+from pycircstat2.utils import angrange, data2rad, rad2data
 
 
 def test_data2rad():

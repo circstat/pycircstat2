@@ -1,0 +1,12 @@
+{
+    "Title": "B.24 time series of flare azimuths",
+    "Description": "Measurements of azimuth of flare when it starts burning, based on 60 successive launches",
+    "Source": "Data kindly supplied by Dr F. Lombard; description of experiment in Lombard (1986)",
+    "Examples": "7.6",
+    "Columns": {
+        "θ": {
+            "name": "azimuth",
+            "type": "vectors"
+        }
+    }
+}

@@ -1,0 +1,16 @@
+{
+    "Title": "B.8 Orientations of pebbles",
+    "Description": "Horizontal axes of 100 outwash pebbles from a late Wisconsin outwash terrace along Fox River, near Cary, Illinois.",
+    "Source": "Randomly selected values from Jander (1957, Figure 18A)",
+    "Examples": "4.9",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "axes"
+        },
+        "w": {
+            "name": "frequency",
+            "type": "int"
+        }
+    }
+}

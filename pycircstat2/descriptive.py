@@ -1,6 +1,3 @@
-from multiprocessing.sharedctypes import Value
-from re import I
-from tokenize import group
 from typing import Union
 
 import numpy as np
@@ -108,10 +105,10 @@ def circ_moment(
 
 def circ_dispersion(alpha: np.ndarray, w: Union[np.ndarray, None] = None, mean=None):
 
-    """
+    r"""
     Sample Circular Dispersion, defined by Fisher eq(2.28):
 
-        \hat\delta = (1 - \hat\rho_{2})/(2 \hat\rho_{1}^{2})
+       \hat\delta = (1 - \hat\rho_{2})/(2 \hat\rho_{1}^{2})
 
     Parameters
     ----------
@@ -143,7 +140,7 @@ def circ_dispersion(alpha: np.ndarray, w: Union[np.ndarray, None] = None, mean=N
 
 def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
 
-    """
+    r"""
     Circular skewness, as defined by Fisher eq(2.29):
 
         \hat s = [\hat\rho_2 \sin(\hat\mu_2 - 2 \hat\mu_1)] / (1 - \hat\rho_1)^{\frac{3}{2}}
@@ -177,7 +174,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
 
 def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
 
-    """
+    r"""
     Circular kurtosis, as defined by Fisher eq(2.30):
 
         \hat k = [\hat\rho_2 \cos(\hat\mu_2 - 2 \hat\mu_1) - \hat\rho_1^4] / (1 - \hat\rho_1)^{2}
@@ -307,7 +304,7 @@ def circ_median(
         elif method == "deviation":
             median = _circ_median_mean_deviation(alpha, w)
 
-    return median
+    return angrange(median)
 
 
 def _circ_median_groupped(alpha, w):

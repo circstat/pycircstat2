@@ -1,0 +1,16 @@
+{
+    "Title": "B.9 Dance directions of bees",
+    "Description": "Dance directions of 279 honey bees viewing a zenith patch of artificially polarised light.",
+    "Source": "Adapted from Wehner & Strasser (1985, p. 346), based on advice from Prof. Dr Wehner.",
+    "Examples": "4.10",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "w": {
+            "name": "frequency",
+            "type": "int"
+        }
+    }
+}

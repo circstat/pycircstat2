@@ -1,0 +1,18 @@
+{
+    "Description": "Watson U2 Test for Data Containing Ties.",
+    "Examples": "27.10",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        },
+        "w": {
+            "name": "frequency",
+            "type": "int"
+        },
+        "sample": {
+            "name": "sample",
+            "type": "int"
+        }
+    }
+}

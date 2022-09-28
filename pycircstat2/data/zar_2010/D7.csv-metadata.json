@@ -1,0 +1,10 @@
+{
+    "Description": "The V Test for Circular Uniformity Under the Alternative of Nonuniformity and a Specified Mean Direction",
+    "Examples": "27.2, 27.3",
+    "Columns": {
+        "θ": {
+            "name": "direction",
+            "type": "vectors"
+        }
+    }
+}
