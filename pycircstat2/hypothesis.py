@@ -4,10 +4,7 @@ import numpy as np
 from scipy.stats import norm, wilcoxon
 
 from .descriptive import circ_mean, circ_mean_ci
-
-###########################################
-# Testing Significance for the mean angle #
-###########################################
+from .utils import angrange
 
 
 def rayleigh_test(
@@ -64,28 +61,22 @@ def rayleigh_test(
 
 
 def V_test(
+    angle: Union[int, float],
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
     mean: float = None,
     r: float = None,
     n: int = None,
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    angle: Union[int, float] = 0,
     unit: str = "degree",
 ) -> tuple:
 
     """
-    Modified Rayleigh Test for Uniformity versus a Specified Mean Angle.
+    Modified Rayleigh Test for Uniformity versus a Specified Angle.
 
     Parameters
     ----------
-    mean: float or None
-        Circular mean from `descriptive.circ_mean()`.
-
-    r: float or None
-        Resultant vector length from `descriptive.circ_mean()`.
-
-    n: int or None
-        Sample size
+    angle: float or int
+        Angle (in radian or degree) to be compared with mean angle.
 
     alpha: np.array or None
         Angles in radian.
@@ -93,8 +84,14 @@ def V_test(
     w: np.array or None.
         Frequencies of angles
 
-    angle: float or int
-        Angle (in radian or degree) to be compared with mean angle.
+    mean: float or None
+        Circular mean from `descriptive.circ_mean()`. Needed if `alpha` is None.
+
+    r: float or None
+        Resultant vector length from `descriptive.circ_mean()`. Needed if `alpha` is None.
+
+    n: int or None
+        Sample size. Needed if `alpha` is None.
 
     unit: str
         Radian or degree. Default is degree,
@@ -192,3 +189,135 @@ def one_sample_test(
         reject = True  # reject null (mean angle == angle)
 
     return reject
+
+
+def omnibus_test(
+    alpha: np.ndarray, precision: float = 1.0, unit: str = "degree"
+) -> float:
+
+    """
+    A simple alternative to the Rayleigh test, aka Hodge-Ajne test,
+    which does notassume sampling from a specific distribution. This
+    is called an "omnibus test" because it works well for unimodal,
+    bimodal, and multimodal distributions.
+
+    H0: The population is uniformly distributed around the circle
+    H1: The population is not uniformly distributed.
+
+    If pval < threshold, H0 is rejected.
+
+    Parameters
+    ----------
+    alpha: np.array or None
+        Angles in radian.
+
+    precision: float
+        lines to be tested in degree.
+
+    degree: str
+        `radian` or `degree`. Default is `degree`
+
+    Return
+    ------
+    pval: float
+        p-value.
+    """
+
+    if unit == "radian":
+        lines = np.arange(0, np.pi, precision)
+    elif unit == "degree":
+        lines = np.deg2rad(np.arange(0, 180.0, precision))
+
+    n = len(alpha)
+
+    lines_rotated = angrange((lines[:, None] - alpha)).round(5)
+
+    # # count number of points on the right half circle, excluding the boundaries
+    right = n - np.logical_and(
+        lines_rotated > 0.0, lines_rotated < np.round(np.pi, 5)
+    ).sum(1)
+    m = np.min(right)
+    pval = (
+        (n - 2 * m)
+        * np.math.factorial(n)
+        / (np.math.factorial(m) * np.math.factorial(n - m))
+        / 2 ** (n - 1)
+    )
+
+    return pval
+
+
+def batschelet_test(
+    angle: float,
+    alpha: np.ndarray,
+    unit: str = "degree",
+) -> float:
+
+    """Modified Hodges-Ajne Test for Uniformity versus a specified Angle.
+
+    A nonparametric test for circular uniformity against a specified angle
+    by Batschelet (1981)
+
+    Parameters
+    ----------
+    angle: np.array
+        A specified angle.
+
+    alpha: np.array or None
+        Angles in radian.
+
+    Return
+    ------
+    pval: float
+        p-value
+    """
+
+    from scipy.stats import binom_test
+
+    if unit == "radian":
+        angle = angle
+    elif unit == "degree":
+        angle = np.deg2rad(angle)
+
+    n = len(alpha)
+    angle_diff = angrange(((angle + 0.5 * np.pi) - alpha)).round(5)
+    m = np.logical_and(angle_diff > 0.0, angle_diff < np.round(np.pi, 5)).sum()
+    C = n - m
+
+    return binom_test(C, n=n, p=0.5)
+
+
+def wilcoxon_paired_sample_test(
+    alpha: np.ndarray,
+    median: Union[int, float, None] = None,
+):
+
+    """Non-parametric test for symmetry around the median. Works by performing a
+    Wilcoxon sign rank test on the differences to the median.
+
+    H0: the population is symmetrical around the median
+    HA: the population is not symmetrical around the median
+
+    Parameters
+    ----------
+    alpha: np.array
+        Angles in radian.
+
+    median: float or None.
+        Median computed by `descriptive.median()`.
+
+    Return
+    ------
+    pval: float
+        p-value
+
+    """
+
+    from scipy.stats import wilcoxon
+
+    if median is None:
+        median = circ_median(alpha=alpha)
+
+    d = (alpha - median).round(5)
+
+    return wilcoxon(d, alternative="two-sided").pvalue

@@ -4,33 +4,30 @@ import numpy as np
 from .utils import angrange
 
 
-def plot_scatter(circ_data, ax=None, outward=True, **kwargs):
+def plot_scatter(circ_data, ax=None, **kwargs):
 
     assert circ_data.grouped is False, "Scatter plot is for groupped data only."
 
-    alpha, freq = np.unique(circ_data.alpha, return_counts=True)
-    alpha = np.repeat(alpha, freq, axis=0)
+    alpha, counts = np.unique(circ_data.alpha, return_counts=True)
+    alpha = np.repeat(alpha, counts, axis=0)
+
+    outward = kwargs["outward"] if "outward" in kwargs else True
     if outward:
         radii = np.hstack(
-            [1 + np.arange(0, 0.05 * int(f), 0.05)[: int(f)] for f in freq]
+            [1 + np.arange(0, 0.05 * int(f), 0.05)[: int(f)] for f in counts]
         )
     else:
         radii = np.hstack(
-            [1 - np.arange(0, 0.05 * int(f), 0.05)[: int(f)] for f in freq]
+            [1 - np.arange(0, 0.05 * int(f), 0.05)[: int(f)] for f in counts]
         )
 
     if ax is None:
-
         figsize = kwargs["figsize"] if "figsize" in kwargs else (8, 8)
         fig = plt.figure(figsize=figsize)
         ax = fig.add_subplot(projection="polar")
 
-    if "rticks" in kwargs:
-        rticks = kwargs["rticks"]
-        ax.set_rticks(rticks)
-    else:
-        rticks = [0, 1]
-        ax.set_rticks(rticks)
+    rticks = kwargs["rticks"] if "rticks" in kwargs else [0, 1]
+    ax.set_rticks(rticks)
 
     zero_location = kwargs["zero_location"] if "zero_location" in kwargs else "N"
     clockwise = kwargs["clockwise"] if "clockwise" in kwargs else -1

@@ -3,8 +3,7 @@ from typing import Union
 import numpy as np
 import pandas as pd
 
-from .descriptive import (circ_kappa, circ_mean, circ_mean_ci, circ_median,
-                          circ_median_ci, circ_std)
+from .descriptive import circ_mean, circ_median, circ_std
 from .hypothesis import rayleigh_test
 from .plot import plot_rose, plot_scatter
 from .utils import data2rad, rad2data, significance_code
@@ -195,15 +194,15 @@ class Circular:
 
         return self.__repr__()
 
-    def plot(self, ax=None, kind=None):
+    def plot(self, ax=None, kind=None, **kwargs):
 
         if kind is None:
             kind = "rose" if self.grouped else "scatter"
 
         if kind == "scatter":
 
-            plot_scatter(self, ax=ax)
+            plot_scatter(self, ax=ax, **kwargs)
 
         elif kind == "rose":
 
-            plot_rose(self, ax=ax)
+            plot_rose(self, ax=ax, **kwargs)
