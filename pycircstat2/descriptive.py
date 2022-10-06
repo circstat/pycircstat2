@@ -7,8 +7,8 @@ from .utils import angrange
 
 
 def circ_mean(
-    alpha: np.array,
-    w: Union[np.array, None] = None,
+    alpha: np.ndarray,
+    w: Union[np.ndarray, None] = None,
 ) -> tuple:
 
     """
@@ -52,12 +52,12 @@ def circ_mean(
 
 
 def circ_moment(
-    alpha: np.array,
-    w: Union[np.array, None] = None,
+    alpha: np.ndarray,
+    w: Union[np.ndarray, None] = None,
     p: int = 1,
     mean=None,
     centered=False,
-):
+) -> tuple:
     """
     Circular moment. When p=1, it's the same as circular mean.
 
@@ -103,7 +103,11 @@ def circ_moment(
     )
 
 
-def circ_dispersion(alpha: np.ndarray, w: Union[np.ndarray, None] = None, mean=None):
+def circ_dispersion(
+    alpha: np.ndarray,
+    w: Union[np.ndarray, None] = None,
+    mean=None,
+) -> float:
 
     r"""
     Sample Circular Dispersion, defined by Fisher eq(2.28):
@@ -138,7 +142,7 @@ def circ_dispersion(alpha: np.ndarray, w: Union[np.ndarray, None] = None, mean=N
     return dispersion
 
 
-def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
+def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float:
 
     r"""
     Circular skewness, as defined by Fisher eq(2.29):
@@ -172,7 +176,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
     return skewness
 
 
-def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
+def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float:
 
     r"""
     Circular kurtosis, as defined by Fisher eq(2.30):
@@ -207,10 +211,10 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None):
 
 
 def circ_std(
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
     r: Union[float, None] = None,
     bin_size: Union[float, None] = None,
-    alpha: Union[np.array, None] = None,
-    w: Union[np.array, None] = None,
 ) -> tuple:
 
     """
@@ -307,7 +311,10 @@ def circ_median(
     return angrange(median)
 
 
-def _circ_median_groupped(alpha, w):
+def _circ_median_groupped(
+    alpha: np.array,
+    w: Union[np.array, None] = None,
+) -> float:
 
     n = np.sum(w)  # sample size
     n_bins = len(alpha)  # number of intervals
@@ -364,7 +371,7 @@ def _circ_median_groupped(alpha, w):
     return median
 
 
-def _circ_median_count(alpha):
+def _circ_median_count(alpha: np.ndarray) -> float:
 
     n = len(alpha)
     alpha_rotated = angrange((alpha[:, None] - alpha)).round(5)
@@ -399,7 +406,10 @@ def _circ_median_count(alpha):
     return median
 
 
-def _circ_median_mean_deviation(alpha, w):
+def _circ_median_mean_deviation(
+    alpha: np.array,
+    w: Union[np.array, None] = None,
+) -> float:
 
     # get pairwise circular mean deviation
     angdist = circ_mean_deviation(alpha, alpha)
@@ -423,9 +433,9 @@ def _circ_median_mean_deviation(alpha, w):
 
 
 def circ_mean_deviation(
-    alpha: Union[np.array, float, int, list],
-    beta: Union[np.array, float, int, list],
-) -> np.array:
+    alpha: Union[np.ndarray, float, int, list],
+    beta: Union[np.ndarray, float, int, list],
+) -> np.ndarray:
 
     """
     Circular mean deviation.
@@ -457,11 +467,11 @@ def circ_mean_deviation(
 
 
 def circ_mean_ci(
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
     mean: Union[float, None] = None,
     r: Union[float, None] = None,
     n: Union[int, None] = None,
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
     ci: float = 0.95,
     method: str = "approximate",
 ) -> tuple:
@@ -485,7 +495,7 @@ def _circ_mean_ci_dispersion(
     w: Union[np.ndarray, None] = None,
     mean: Union[float, None] = None,
     ci: float = 0.95,
-):
+) -> tuple:
 
     # TODO
 
@@ -565,7 +575,7 @@ def circ_median_ci(
     w: Union[np.ndarray, None] = None,
     grouped: bool = False,
     ci: float = 0.95,
-):
+) -> tuple:
 
     if median is None:
         assert isinstance(
@@ -596,7 +606,7 @@ def circ_median_ci(
     if idx_lb < 0:
         idx_lb = n + idx_lb
 
-    return alpha[int(idx_lb)], alpha[int(idx_ub)]
+    return (alpha[int(idx_lb)], alpha[int(idx_ub)])
 
 
 def circ_kappa(

@@ -105,7 +105,7 @@ def test_circ_mean_ci():
 
     # computed directly from r and n
     d, lb, ub = circ_mean_ci(
-        circ_zar_ex4_ch26.mean, circ_zar_ex4_ch26.r, circ_zar_ex4_ch26.n
+        mean=circ_zar_ex4_ch26.mean, r=circ_zar_ex4_ch26.r, n=circ_zar_ex4_ch26.n
     )
 
     np.testing.assert_approx_equal(np.rad2deg(d), 31, significant=1)
