@@ -8,10 +8,10 @@ from .utils import angrange
 
 
 def rayleigh_test(
-    r: Union[float, None] = None,
-    n: Union[int, None] = None,
     alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
+    r: Union[float, None] = None,
+    n: Union[int, None] = None,
 ) -> tuple:
 
     """
@@ -20,17 +20,17 @@ def rayleigh_test(
     Parameters
     ----------
 
-    r: float or None
-        Resultant vector length from `descriptive.circ_mean()`.
-
-    n: int or None
-        Sample size
-
     alpha: np.array or None
         Angles in radian.
 
     w: np.array or None.
         Frequencies of angles
+
+    r: float or None
+        Resultant vector length from `descriptive.circ_mean()`.
+
+    n: int or None
+        Sample size
 
     Returns
     -------
@@ -131,11 +131,11 @@ def V_test(
 
 
 def one_sample_test(
-    lb: float = None,
-    ub: float = None,
+    angle: Union[int, float] = 0,
     alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
-    angle: Union[int, float] = 0,
+    lb: float = None,
+    ub: float = None,
     unit: str = "degree",
 ) -> bool:
 
@@ -145,11 +145,8 @@ def one_sample_test(
     Parameters
     ----------
 
-    lb: float
-        Lower bound of circular mean from `descriptive.circ_mean_ci()`.
-
-    ub: float
-        Upper bound of circular mean from `descriptive.circ_mean_ci()`.
+    angle: float or int
+        Angle (in radian or degree) to be compared with mean angle.
 
     alpha: np.array or None
         Angles in radian.
@@ -157,8 +154,11 @@ def one_sample_test(
     w: np.array or None.
         Frequencies of angles
 
-    angle: float or int
-        Angle (in radian or degree) to be compared with mean angle.
+    lb: float
+        Lower bound of circular mean from `descriptive.circ_mean_ci()`.
+
+    ub: float
+        Upper bound of circular mean from `descriptive.circ_mean_ci()`.
 
     unit: str
         Radian or degree. Default is degree,
@@ -290,7 +290,7 @@ def batschelet_test(
 def wilcoxon_paired_sample_test(
     alpha: np.ndarray,
     median: Union[int, float, None] = None,
-):
+) -> float:
 
     """Non-parametric test for symmetry around the median. Works by performing a
     Wilcoxon sign rank test on the differences to the median.
