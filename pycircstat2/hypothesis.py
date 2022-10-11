@@ -3,7 +3,7 @@ from typing import Union
 import numpy as np
 from scipy.stats import norm, wilcoxon
 
-from .descriptive import circ_mean, circ_mean_ci
+from .descriptive import circ_mean, circ_mean_ci, circ_median
 from .utils import angrange
 
 
@@ -176,7 +176,7 @@ def one_sample_test(
         ), "If `ub` or `lb` is None, then `alpha` (and `w`) is needed."
         if w is None:
             w = np.ones_like(alpha)
-        _, lb, ub = circ_mean_ci(alpha=alpha, w=w)
+        lb, ub = circ_mean_ci(alpha=alpha, w=w)
 
     if unit == "radian":
         angle = angle

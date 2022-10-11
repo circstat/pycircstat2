@@ -3,7 +3,8 @@ from typing import Union
 import numpy as np
 import pandas as pd
 
-from .descriptive import circ_mean, circ_median, circ_std
+from .descriptive import (circ_mean, circ_mean_ci, circ_median, circ_median_ci,
+                          circ_std)
 from .hypothesis import rayleigh_test
 from .plot import plot_rose, plot_scatter
 from .utils import data2rad, rad2data, significance_code
@@ -110,33 +111,29 @@ class Circular:
 
         # confidence interval for angular mean
         # in practice, the equations for mean ci for 8 <= n <= 12 can still yield nan
-        # if kwargs_mean_ci is None:
-        #     if not np.isclose(self.r, 0) and (8 <= self.n < 25):
-        #         # Approximate ci for mean of a von Mises distribution (Upton, 1986)
-        #         self.method_mean_ci = method_mean_ci = "approximate"
-        #     elif not np.isclose(self.r, 0) and self.n >= 25:
-        #         # Eq 4.22 (Fisher, 1995)
-        #         self.method_mean_ci = method_mean_ci = "dispersion"
-        #     else:
-        #         self.method_mean_ci = (
-        #             method_mean_ci
-        #         ) = "approximate"  # TODO should be bootstrap
-        # else:
-        #     self.method_mean_ci = method_mean_ci = (
-        #         kwargs_mean_ci["method"]
-        #         if "method" in kwargs_mean_ci
-        #         else "approximate"
-        #     )
+        if kwargs_mean_ci is None:
+            if not np.isclose(self.r, 0) and self.n < 25:
+                # Approximate ci for mean of a von Mises distribution (Upton, 1986)
+                self.method_mean_ci = method_mean_ci = "bootstrap"
+                ci = 0.95
+            elif not np.isclose(self.r, 0) and self.n >= 25:
+                # Eq 4.22 (Fisher, 1995)
+                self.method_mean_ci = method_mean_ci = "dispersion"
+                ci = 0.95
+        else:
+            self.method_mean_ci = method_mean_ci = kwargs_mean_ci.pop(
+                "method", "bootstrap"
+            )
 
-        # self.d, self.mean_lb, self.mean_ub = d, mean_lb, mean_ub = circ_mean_ci(
-        #     alpha=self.alpha,
-        #     w=self.w,
-        #     mean=self.mean,
-        #     r=self.r,
-        #     n=self.n,
-        #     ci=0.95,
-        #     method=method_mean_ci,
-        # )
+        self.mean_lb, self.mean_ub = mean_lb, mean_ub = circ_mean_ci(
+            alpha=self.alpha,
+            w=self.w,
+            mean=self.mean,
+            r=self.r,
+            n=self.n,
+            ci=ci,
+            method=method_mean_ci,
+        )
 
         # angular deviation, circular standard deviation, adjusted resultant vector length (if needed)
         self.s, self.s0, self.rc = s, s0, rc = circ_std(r=r, bin_size=bin_size)
@@ -146,12 +143,21 @@ class Circular:
             alpha=alpha, w=w, grouped=grouped, method=kwargs_median["method"]
         )
 
-        # confidence inerval for angular median
-        # TODO how to calculate CI for grouped data?
-        # if not grouped and not np.isnan(median) and n > 16:
-        #     self.median_lb, self.median_ub = median_lb, median_ub = circ_median_ci(
-        #         median=median, alpha=alpha, w=w
-        #     )
+        # confidence inerval for angular median (only for ungrouped data)
+        # it's unclear how to do it for grouped data.
+        if not grouped and not np.isnan(median):
+            if n not in np.arange(7, 14):
+                self.median_lb, self.median_ub, self.ci = (
+                    median_lb,
+                    median_ub,
+                    ci,
+                ) = circ_median_ci(median=median, alpha=alpha)
+            else:
+                self.median_lb, self.median_ub, self.ci = (
+                    median_lb,
+                    median_ub,
+                    ci,
+                ) = circ_median_ci(median=median, alpha=alpha)[0]
 
     def __repr__(self):
 

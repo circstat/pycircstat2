@@ -27,6 +27,10 @@ def circ_mean(
         Circular mean
     r: float
         Resultant vector length
+
+    Note
+    ----
+    Implementation of Example 26.5 (Zar, 2010)
     """
 
     if w is None:
@@ -78,6 +82,10 @@ def circ_moment(
     -------
     mp: complex
         Circular moment
+
+    Note
+    ----
+    Implementation of Equation 2.24 (Fisher, 1993)
     """
 
     if w is None:
@@ -129,6 +137,10 @@ def circ_dispersion(
     dispersion: float
         Sample Circular Dispersion
 
+    Note
+    ----
+    Implementation of Equation 2.28 (Fisher, 1993)
+
     """
 
     if w is None:
@@ -161,6 +173,10 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     -------
     skewness: float
         Circular Skewness
+
+    Note
+    ----
+    Implementation of Equation 2.29 (Fisher, 1993)
     """
 
     if w is None:
@@ -195,6 +211,10 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     -------
     kurtosis: float
         Circular Kurtosis
+
+    Note
+    ----
+    Implementation of Equation 2.30 (Fisher, 1993)
     """
 
     if w is None:
@@ -238,6 +258,10 @@ def circ_std(
         Mean angular deviation.
     s0: float
         Circular standard deviation.
+
+    Note
+    ----
+    Implementation of Equation 26.15-16/20-21 (Zar, 2010)
     """
 
     if r is None:
@@ -259,8 +283,8 @@ def circ_std(
     if bin_size == 0:
         rc = r
     else:
-        c = bin_size / 2 / np.sin(bin_size / 2)
-        rc = r * c
+        c = bin_size / 2 / np.sin(bin_size / 2)  # eq(26.16)
+        rc = r * c  # eq(26.15)
 
     s = np.sqrt(2 * (1 - rc))  # eq(26.20)
     s0 = np.sqrt(-2 * np.log(rc))  # eq(26.21)
@@ -280,7 +304,6 @@ def circ_median(
 
     Parameters
     ----------
-
     alpha: np.array (n, )
         Angles in radian.
     w: np.array (n,) or None
@@ -414,9 +437,9 @@ def _circ_median_mean_deviation(
     # get pairwise circular mean deviation
     angdist = circ_mean_deviation(alpha, alpha)
     # data point(s) with minimal circular mean deviation is/are
-    # potential median(s)
+    # potential median(s); pitfall: angdist sound be rounded!
+    # (fixed in circ_mean_deviation())
     idx_candidates = np.where(angdist == angdist.min())[0]
-
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Retrun Nan.
     if len(idx_candidates) == len(alpha):
@@ -446,10 +469,8 @@ def circ_mean_deviation(
 
     Parameters
     ---------
-
     alpha: np.array, int or float
         Data in radian.
-
     beta: np.array, int or float
         reference angle in radian.
 
@@ -463,7 +484,7 @@ def circ_mean_deviation(
     if not isinstance(beta, np.ndarray):
         beta = np.array([beta])
 
-    return np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)
+    return (np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)).round(5)
 
 
 def circ_mean_ci(
@@ -474,20 +495,28 @@ def circ_mean_ci(
     n: Union[int, None] = None,
     ci: float = 0.95,
     method: str = "approximate",
+    B: int = 200,  # number of samples for bootstrap
+    return_samples: bool = False,  # bootstrap option
 ) -> tuple:
 
     # TODO
 
     if method == "approximate":
-        (d, lb, ub) = _circ_mean_ci_approximate(mean, r, n, alpha, w, ci)
+        (lb, ub) = _circ_mean_ci_approximate(
+            alpha=alpha, w=w, mean=mean, r=r, n=n, ci=ci
+        )
     elif method == "dispersion":
-        (d, lb, ub) = _circ_mean_ci_dispersion(alpha, w, mean, ci)
+        (lb, ub) = _circ_mean_ci_dispersion(alpha=alpha, w=w, mean=mean, ci=ci)
+    elif method == "bootstrap":
+        (lb, ub) = _circ_mean_ci_bootstrap(
+            alpha=alpha, B=B, ci=ci, return_samples=return_samples
+        )
     else:
         raise ValueError(
-            f"Method `{method}` for `circ_mean_ci` is not supported.\nTry `dispersion` or `approximate`"
+            f"Method `{method}` for `circ_mean_ci` is not supported.\nTry `dispersion`, `approximate` or `bootstrap`"
         )
 
-    return d, lb, ub
+    return lb, ub
 
 
 def _circ_mean_ci_dispersion(
@@ -497,7 +526,12 @@ def _circ_mean_ci_dispersion(
     ci: float = 0.95,
 ) -> tuple:
 
-    # TODO
+    """Confidence intervals based on circular dispersion.
+
+    Note
+    ----
+    Implementation of Section 4.4.4b (Fisher, 1993)
+    """
 
     if w is None:
         w = np.ones_like(alpha)
@@ -505,26 +539,35 @@ def _circ_mean_ci_dispersion(
         mean, r = circ_mean(alpha, w)
 
     n = np.sum(w)
+    if n < 25:
+        raise ValueError(
+            f"n={n} is too small (< 25) for computing CI with circular dispersion."
+        )
     d = np.arcsin(
-        np.sqrt(circ_dispersion(alpha, w, mean) / n) * norm.ppf(1 - 0.5 * (1 - ci))
+        np.sqrt(circ_dispersion(alpha=alpha, w=w, mean=mean) / n)
+        * norm.ppf(1 - 0.5 * (1 - ci))
     )
     lb = mean - d
     ub = mean + d
 
-    return (d, lb, ub)
+    return (lb, ub)
 
 
 def _circ_mean_ci_approximate(
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
     mean: Union[float, None] = None,
     r: Union[float, None] = None,
     n: Union[int, None] = None,
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
     ci: float = 0.95,
 ) -> tuple:
 
     """
     Confidence Interval of circular mean.
+
+    Note
+    ----
+    Implementation of Example 26.6 (Zar, 2010)
     """
 
     if r is None:
@@ -563,10 +606,71 @@ def _circ_mean_ci_approximate(
         lb = mean - d
         ub = mean + d
 
-        return (d, lb, ub)
+        return (lb, ub)
 
     else:
-        raise ValueError("`n` is too small (<= 12) for computing confidence interval.")
+        raise ValueError(
+            f"n={n} is too small (<= 8) for computing CI with approximation method."
+        )
+
+
+def _circ_mean_ci_bootstrap(alpha, B=200, ci=0.95, return_samples=False):
+    from scipy.stats import t
+
+    beta = np.array([_circ_mean_resample(alpha) for i in range(B)])
+
+    lb, ub = t.interval(ci, len(beta) - 1, loc=np.mean(beta), scale=np.std(beta))
+
+    if return_samples:
+        return lb, ub, beta
+    else:
+        return lb, ub
+
+
+def _circ_mean_resample(alpha):
+    """
+    Implementation of Section 8.3.5 (Fisher, 1993)
+    """
+
+    θ = np.random.choice(alpha, len(alpha), replace=True)
+    X = np.cos(θ)
+    Y = np.sin(θ)
+    z1 = np.mean(X)
+    z2 = np.mean(Y)
+
+    u11 = np.mean((X - z1) ** 2)
+    u22 = np.mean((X - z2) ** 2)
+    u12 = u21 = np.mean((X - z1) * (Y - z2))
+
+    β = (u11 - u22) / (2 * u12) - np.sqrt((u11 - u22) ** 2 / (4 * u12**2 + 1))
+    t1 = np.sqrt(β**2 * u11 + 2 * β * u12 + u22) / np.sqrt(1 + β**2)
+    t2 = np.sqrt(u11 - 2 * β * u12 + β**2 * u22) / np.sqrt(1 + β**2)
+    v11 = (β**2 * t1 + t2) / (1 + β**2)
+    v22 = (t1 + β**2 * t2) / (1 + β**2)
+    v12 = v21 = β * (t1 - t2) / (1 + β**2)
+
+    q1 = np.sqrt(1 + β**2) / np.sqrt(β**2 * u11 + 2 * β * u12 + u22)
+    q2 = np.sqrt(1 + β**2) / np.sqrt(u11 - 2 * β * u12 + β**2 * u22)
+    w11 = (β**2 * q1 + q2) / (1 + β**2)
+    w22 = (q1 + β**2 * q2) / (1 + β**2)
+    w12 = w21 = β * (t1 - q2) / (1 + β**2)
+
+    z0 = np.array([z1, z2])
+    u0 = np.array([[u11, u12], [u21, u22]])
+    v0 = np.array([[v11, v12], [v21, v22]])
+    w0 = np.array([[w11, w12], [w21, w22]])
+
+    Cbar, Sbar = z0 + v0 @ w0 @ (z0 - z0)
+    Cbar = np.power(Cbar**2 + Sbar**2, -0.5) * Cbar
+    Sbar = np.power(Cbar**2 + Sbar**2, -0.5) * Sbar
+
+    r = np.sqrt(Cbar**2 + Sbar**2)
+
+    if Cbar != 0 and Sbar != 0:
+        m = np.arctan2(Sbar, Cbar)
+    else:
+        m = np.arccos(Cbar / r)
+    return angrange(m)
 
 
 def circ_median_ci(
@@ -576,6 +680,29 @@ def circ_median_ci(
     grouped: bool = False,
     ci: float = 0.95,
 ) -> tuple:
+
+    """Confidence interval for circular median
+
+    Parameters
+    ----------
+    median: float or None
+        Circular median.
+    alpha: np.array or None
+        Data in radian.
+    w: np.array or None
+        Frequencies or weights
+
+    Returns
+    -------
+    lower, upper, ci: tuple
+        confidence intervals and alpha-level
+        Exception: for n = 7 ~ 13, two levels with
+        difference alpha-levels will be returned.
+
+    Note
+    ----
+    Implementation of section 4.4.2 (Fisher,1993)
+    """
 
     if median is None:
         assert isinstance(
@@ -590,23 +717,83 @@ def circ_median_ci(
             "`alpha` is needed for computing the confidence interval for circular median."
         )
 
-    alpha = np.unique(alpha)
+    # alpha, counts = np.unique(alpha)
     n = len(alpha)
 
-    z = norm.ppf(1 - 0.5 * (1 - ci))
+    if n > 15:
+        z = norm.ppf(1 - 0.5 * (1 - ci))
 
-    offset = 1 + np.floor(0.5 * np.sqrt(n) * z)  # fisher:eq(4.19)
+        offset = int(1 + np.floor(0.5 * np.sqrt(n) * z))  # fisher:eq(4.19)
 
-    idx_ub = np.where(median.round(5) < alpha.round(5))[0][0] + offset
-    idx_lb = np.where(median.round(5) > alpha.round(5))[0][-1] - offset
+        idx_median = np.where(alpha.round(5) < median.round(5))[0][-1]
+        idx_lb = idx_median - offset + 1
+        idx_ub = idx_median + offset
+        if median.round(5) in alpha.round(5):  # don't count the median per se
+            idx_ub += 1
 
-    if idx_ub > n:
-        idx_ub = idx_ub - n
+        if idx_ub > n:
+            idx_ub = idx_ub - n
 
-    if idx_lb < 0:
-        idx_lb = n + idx_lb
+        if idx_lb < 0:
+            idx_lb = n + idx_lb
 
-    return (alpha[int(idx_lb)], alpha[int(idx_ub)])
+        lower, upper = alpha[int(idx_lb)], alpha[int(idx_ub)]
+    else:
+        if n == 3:
+            lower, upper = alpha[0], alpha[2]
+            ci = 0.75
+        elif n == 4:
+            lower, upper = alpha[0], alpha[3]
+            ci = 0.875
+        elif n == 5:
+            lower, upper = alpha[0], alpha[4]
+            ci = 0.937
+        elif n == 6:
+            lower, upper = alpha[0], alpha[5]
+            ci = 0.97
+        elif n == 7:
+            return (
+                (alpha[0], alpha[6], 0.984),
+                (alpha[1], alpha[5], 0.875),
+            )
+        elif n == 8:
+            return (
+                (alpha[0], alpha[7], 0.992),
+                (alpha[1], alpha[6], 0.93),
+            )
+        elif n == 9:
+            return (
+                (alpha[0], alpha[8], 0.996),
+                (alpha[1], alpha[7], 0.961),
+            )
+        elif n == 10:
+            return (
+                (alpha[1], alpha[8], 0.978),
+                (alpha[2], alpha[7], 0.893),
+            )
+        elif n == 11:
+            return (
+                (alpha[1], alpha[9], 0.99),
+                (alpha[2], alpha[8], 0.934),
+            )
+        elif n == 12:
+            return (
+                (alpha[2], alpha[9], 0.962),
+                (alpha[3], alpha[8], 0.854),
+            )
+        elif n == 13:
+            return (
+                (alpha[2], alpha[10], 0.978),
+                (alpha[3], alpha[9], 0.928),
+            )
+        elif n == 14:
+            lower, upper = alpha[3], alpha[10]
+            ci = 0.937
+        elif n == 15:
+            lower, upper = alpha[2], alpha[12]
+            ci = 0.965
+
+    return (lower, upper, ci)
 
 
 def circ_kappa(

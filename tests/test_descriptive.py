@@ -4,8 +4,8 @@ from pycircstat2 import Circular, load_data
 from pycircstat2.descriptive import (
     circ_mean,
     circ_mean_ci,
-    circ_mean_deviation,
     circ_median,
+    circ_median_ci,
     circ_std,
 )
 
@@ -100,20 +100,60 @@ def test_circ_mean_deviation():
 
 def test_circ_mean_ci():
 
+    # method: approximate (from P619, Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar_2010")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
 
-    # computed directly from r and n
-    d, lb, ub = circ_mean_ci(
-        mean=circ_zar_ex4_ch26.mean, r=circ_zar_ex4_ch26.r, n=circ_zar_ex4_ch26.n
+    ## computed directly from r and n
+    lb, ub = circ_mean_ci(
+        mean=circ_zar_ex4_ch26.mean,
+        r=circ_zar_ex4_ch26.r,
+        n=circ_zar_ex4_ch26.n,
+        method="approximate",
     )
 
-    np.testing.assert_approx_equal(np.rad2deg(d), 31, significant=1)
     np.testing.assert_approx_equal(np.rad2deg(lb), 68, significant=1)
     np.testing.assert_approx_equal(np.rad2deg(ub), 130, significant=1)
 
-    # computed from alpha and w
-    d, lb, ub = circ_mean_ci(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
-    np.testing.assert_approx_equal(np.rad2deg(d), 31, significant=1)
+    ## computed from alpha and w
+    lb, ub = circ_mean_ci(
+        alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w, method="approximate"
+    )
     np.testing.assert_approx_equal(np.rad2deg(lb), 68, significant=1)
     np.testing.assert_approx_equal(np.rad2deg(ub), 130, significant=1)
+
+    # method: dispersion (from P78, Fisher, 1993)
+    d_ex3 = load_data("B6", "fisher_1993")
+    c_ex3_s2 = Circular(np.sort(d_ex3[d_ex3.set == 2]["θ"].values))
+    lb, ub = circ_mean_ci(method="dispersion", alpha=c_ex3_s2.alpha)
+    np.testing.assert_approx_equal(np.rad2deg(lb), 232.7, significant=4)
+    np.testing.assert_approx_equal(np.rad2deg(ub), 262.5, significant=4)
+
+    # method: bootstrap (from P78, Fisher, 1993)
+    # but how to test boostrap?
+
+
+def test_circ_median_ci():
+
+    d_ex3 = load_data("B6", "fisher_1993")
+    c_ex3_s0 = Circular(
+        np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:10]),
+        kwargs_median={"method": "count"},
+    )
+    c_ex3_s1 = Circular(
+        np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:20]),
+        kwargs_median={"method": "deviation"},
+    )
+    c_ex3_s2 = Circular(np.sort(d_ex3[d_ex3.set == 2]["θ"].values))
+
+    lb, ub, ci = circ_median_ci(median=c_ex3_s0.median, alpha=c_ex3_s0.alpha)[0]
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 245.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 315.0, significant=3)
+
+    lb, ub, ci = circ_median_ci(median=c_ex3_s1.median, alpha=c_ex3_s1.alpha)
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 277.0, significant=3)
+
+    lb, ub, ci = circ_median_ci(median=c_ex3_s2.median, alpha=c_ex3_s2.alpha)
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 267.0, significant=3)
