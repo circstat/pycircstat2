@@ -4,6 +4,7 @@ import numpy as np
 from scipy.stats import norm
 
 from pycircstat2 import Circular
+from pycircstat2.descriptive import circ_mean
 
 
 def aacorr(
@@ -106,13 +107,21 @@ def _aacorr_js(
 
     if isinstance(a, Circular):
         assert a.mean_pval < 0.01, "Data `a` is uniformly distributed."
+        a_mean = a.mean
         a = a.alpha
+    else:
+        a_mean = circ_mean(a)[0]
+        
     if isinstance(b, Circular):
         assert b.mean_pval < 0.01, "Data `b` is uniformly distributed."
+        b_mean = b.mean
         b = b.alpha
+    else:
+        b_mean = circ_mean(b)[0]
 
-    abar = a.alpha - a.mean
-    bbar = b.alpha - b.mean
+
+    abar = a - a_mean
+    bbar = b - b_mean
     num = np.sum(np.sin(abar) * np.sin(bbar))
     den = np.sqrt(np.sum(np.sin(abar) ** 2) * np.sum(np.sin(bbar) ** 2))
 
