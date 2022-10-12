@@ -112,7 +112,7 @@ class Circular:
         # confidence interval for angular mean
         # in practice, the equations for mean ci for 8 <= n <= 12 can still yield nan
         if kwargs_mean_ci is None:
-            if not np.isclose(self.r, 0) and self.n < 25:
+            if not np.isclose(self.r, 0) and (8 < self.n < 25):
                 # Approximate ci for mean of a von Mises distribution (Upton, 1986)
                 self.method_mean_ci = method_mean_ci = "bootstrap"
                 ci = 0.95
@@ -120,20 +120,24 @@ class Circular:
                 # Eq 4.22 (Fisher, 1995)
                 self.method_mean_ci = method_mean_ci = "dispersion"
                 ci = 0.95
+            else:
+                self.method_mean_ci = method_mean_ci = None
+                ci = 0.95
         else:
             self.method_mean_ci = method_mean_ci = kwargs_mean_ci.pop(
                 "method", "bootstrap"
             )
 
-        self.mean_lb, self.mean_ub = mean_lb, mean_ub = circ_mean_ci(
-            alpha=self.alpha,
-            w=self.w,
-            mean=self.mean,
-            r=self.r,
-            n=self.n,
-            ci=ci,
-            method=method_mean_ci,
-        )
+        if method_mean_ci is not None:
+            self.mean_lb, self.mean_ub = mean_lb, mean_ub = circ_mean_ci(
+                alpha=self.alpha,
+                w=self.w,
+                mean=self.mean,
+                r=self.r,
+                n=self.n,
+                ci=ci,
+                method=method_mean_ci,
+            )
 
         # angular deviation, circular standard deviation, adjusted resultant vector length (if needed)
         self.s, self.s0, self.rc = s, s0, rc = circ_std(r=r, bin_size=bin_size)

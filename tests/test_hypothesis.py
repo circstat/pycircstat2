@@ -1,8 +1,13 @@
 import numpy as np
 
 from pycircstat2 import Circular, load_data
-from pycircstat2.hypothesis import (V_test, batschelet_test, omnibus_test,
-                                    one_sample_test, rayleigh_test)
+from pycircstat2.hypothesis import (
+    V_test,
+    batschelet_test,
+    omnibus_test,
+    one_sample_test,
+    rayleigh_test,
+)
 
 
 def test_rayleigh_test():

@@ -1,0 +1,16 @@
+{
+    "Description": "Orientation of insects and the direction of a light source",
+    "Examples": "27.20",
+    "Columns": {
+        "Insect": {
+            "name": "Insect",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "Light": {
+            "name": "light",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

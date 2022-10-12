@@ -17,6 +17,12 @@ def rayleigh_test(
     """
     Rayleigh's Test for Circular Uniformity.
 
+    For method is for ungrouped data. For testing uniformity with
+    grouped data, use scipy.stats.chisquare().
+
+    H0: The data in the population are distributed uniformly around the circle.
+    H1: THe data in the population are not disbutrited uniformly around the circle.
+
     Parameters
     ----------
 
@@ -58,6 +64,40 @@ def rayleigh_test(
     p = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
 
     return z, p
+
+
+def chisquare_test(w: np.ndarray):
+
+    """Chi-Square Goodness of Fit for Circular data.
+
+    For method is for grouped data.
+
+    H0: The data in the population are distributed uniformly around the circle.
+    H1: THe data in the population are not disbutrited uniformly around the circle.
+
+    Parameter
+    ---------
+    w: np.ndarray
+        Frequencies of angles
+
+    Returns
+    -------
+    chi2: float
+        The chi-squared test statistic.
+    pval: float
+        The p-value of the test.
+
+    Note
+    ----
+    It's a wrapper of scipy.stats.chisquare()
+    """
+    from scipy.stats import chisquare
+
+    res = chisquare(w)
+    chi2 = res.statistic
+    pval = res.pvalue
+
+    return chi2, pval
 
 
 def V_test(
@@ -140,7 +180,7 @@ def one_sample_test(
 ) -> bool:
 
     """
-    To test wheter the population mean agle is equal to a specified value.
+    To test wheter the population mean angle is equal to a specified value.
 
     Parameters
     ----------
@@ -199,12 +239,10 @@ def omnibus_test(
     A simple alternative to the Rayleigh test, aka Hodge-Ajne test,
     which does notassume sampling from a specific distribution. This
     is called an "omnibus test" because it works well for unimodal,
-    bimodal, and multimodal distributions.
+    bimodal, and multimodal distributions (for ungrouped data).
 
     H0: The population is uniformly distributed around the circle
     H1: The population is not uniformly distributed.
-
-    If pval < threshold, H0 is rejected.
 
     Parameters
     ----------
@@ -253,7 +291,8 @@ def batschelet_test(
     unit: str = "degree",
 ) -> float:
 
-    """Modified Hodges-Ajne Test for Uniformity versus a specified Angle.
+    """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
+    (for ungrouped data).
 
     A nonparametric test for circular uniformity against a specified angle
     by Batschelet (1981)
@@ -287,7 +326,7 @@ def batschelet_test(
     return binom_test(C, n=n, p=0.5)
 
 
-def wilcoxon_paired_sample_test(
+def symmetry_test(
     alpha: np.ndarray,
     median: Union[int, float, None] = None,
 ) -> float:
@@ -310,7 +349,6 @@ def wilcoxon_paired_sample_test(
     ------
     pval: float
         p-value
-
     """
 
     from scipy.stats import wilcoxon

@@ -1,0 +1,16 @@
+{
+    "Description": "distance traveled and direction traveled.",
+    "Examples": "27.21",
+    "Columns": {
+        "X": {
+            "name": "distance",
+            "type": "vectors",
+            "unit": "km"
+        },
+        "θ": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

@@ -1,13 +1,8 @@
 import numpy as np
 
 from pycircstat2 import Circular, load_data
-from pycircstat2.descriptive import (
-    circ_mean,
-    circ_mean_ci,
-    circ_median,
-    circ_median_ci,
-    circ_std,
-)
+from pycircstat2.descriptive import (circ_mean, circ_mean_ci, circ_median,
+                                     circ_median_ci, circ_std)
 
 
 def test_circ_mean():
