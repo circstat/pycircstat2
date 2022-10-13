@@ -141,9 +141,10 @@ def test_circ_median_ci():
     )
     c_ex3_s2 = Circular(np.sort(d_ex3[d_ex3.set == 2]["θ"].values))
 
-    lb, ub, ci = circ_median_ci(median=c_ex3_s0.median, alpha=c_ex3_s0.alpha)[0]
-    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 245.0, significant=3)
-    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 315.0, significant=3)
+    # n is too small for proper estimation of median ci
+    # lb, ub, ci = circ_median_ci(median=c_ex3_s0.median, alpha=c_ex3_s0.alpha)
+    # np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 245.0, significant=3)
+    # np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 315.0, significant=3)
 
     lb, ub, ci = circ_median_ci(median=c_ex3_s1.median, alpha=c_ex3_s1.alpha)
     np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)

@@ -516,7 +516,7 @@ def circ_mean_ci(
             f"Method `{method}` for `circ_mean_ci` is not supported.\nTry `dispersion`, `approximate` or `bootstrap`"
         )
 
-    return lb, ub
+    return angrange(lb), angrange(ub)
 
 
 def _circ_mean_ci_dispersion(
@@ -719,6 +719,7 @@ def circ_median_ci(
 
     # alpha, counts = np.unique(alpha)
     n = len(alpha)
+    alpha = np.sort(alpha)
 
     if n > 15:
         z = norm.ppf(1 - 0.5 * (1 - ci))
@@ -739,96 +740,62 @@ def circ_median_ci(
 
         lower, upper = alpha[int(idx_lb)], alpha[int(idx_ub)]
     else:
-        if n == 3:
-            lower, upper = alpha[0], alpha[2]
-            ci = 0.75
-        elif n == 4:
-            lower, upper = alpha[0], alpha[3]
-            ci = 0.875
-        elif n == 5:
-            lower, upper = alpha[0], alpha[4]
-            ci = 0.937
-        elif n == 6:
-            lower, upper = alpha[0], alpha[5]
-            ci = 0.97
-        elif n == 7:
-            return (
-                (alpha[0], alpha[6], 0.984),
-                (alpha[1], alpha[5], 0.875),
-            )
-        elif n == 8:
-            return (
-                (alpha[0], alpha[7], 0.992),
-                (alpha[1], alpha[6], 0.93),
-            )
-        elif n == 9:
-            return (
-                (alpha[0], alpha[8], 0.996),
-                (alpha[1], alpha[7], 0.961),
-            )
-        elif n == 10:
-            return (
-                (alpha[1], alpha[8], 0.978),
-                (alpha[2], alpha[7], 0.893),
-            )
-        elif n == 11:
-            return (
-                (alpha[1], alpha[9], 0.99),
-                (alpha[2], alpha[8], 0.934),
-            )
-        elif n == 12:
-            return (
-                (alpha[2], alpha[9], 0.962),
-                (alpha[3], alpha[8], 0.854),
-            )
-        elif n == 13:
-            return (
-                (alpha[2], alpha[10], 0.978),
-                (alpha[3], alpha[9], 0.928),
-            )
-        elif n == 14:
-            lower, upper = alpha[3], alpha[10]
-            ci = 0.937
-        elif n == 15:
-            lower, upper = alpha[2], alpha[12]
-            ci = 0.965
+        lower, upper = np.nan, np.nan
 
-    return (lower, upper, ci)
+    return (angrange(lower), angrange(upper), ci)
+    # else:
+    #     if n == 3:
+    #         lower, upper = alpha[0], alpha[2]
+    #         ci = 0.75
+    #     elif n == 4:
+    #         lower, upper = alpha[0], alpha[3]
+    #         ci = 0.875
+    #     elif n == 5:
+    #         lower, upper = alpha[0], alpha[4]
+    #         ci = 0.937
+    #     elif n == 6:
+    #         lower, upper = alpha[0], alpha[5]
+    #         ci = 0.97
+    #     elif n == 7:
+    #         return (
+    #             (alpha[0], alpha[6], 0.984),
+    #             (alpha[1], alpha[5], 0.875),
+    #         )
+    #     elif n == 8:
+    #         return (
+    #             (alpha[0], alpha[7], 0.992),
+    #             (alpha[1], alpha[6], 0.93),
+    #         )
+    #     elif n == 9:
+    #         return (
+    #             (alpha[0], alpha[8], 0.996),
+    #             (alpha[1], alpha[7], 0.961),
+    #         )
+    #     elif n == 10:
+    #         return (
+    #             (alpha[1], alpha[8], 0.978),
+    #             (alpha[2], alpha[7], 0.893),
+    #         )
+    #     elif n == 11:
+    #         return (
+    #             (alpha[1], alpha[9], 0.99),
+    #             (alpha[2], alpha[8], 0.934),
+    #         )
+    #     elif n == 12:
+    #         return (
+    #             (alpha[2], alpha[9], 0.962),
+    #             (alpha[3], alpha[8], 0.854),
+    #         )
+    #     elif n == 13:
+    #         return (
+    #             (alpha[2], alpha[10], 0.978),
+    #             (alpha[3], alpha[9], 0.928),
+    #         )
+    #     elif n == 14:
+    #         lower, upper = alpha[3], alpha[10]
+    #         ci = 0.937
+    #     elif n == 15:
+    #         lower, upper = alpha[2], alpha[12]
+    #         ci = 0.965
 
-
-def circ_kappa(
-    r: Union[float, None] = None,
-    n: Union[int, None] = None,
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-) -> float:
-
-    if r is None:
-        assert isinstance(
-            alpha, np.ndarray
-        ), "If `r` is None, then `alpha` (and `w`) is needed."
-        if w is None:
-            w = np.ones_like(alpha)
-        n = np.sum(w)
-        mean, r = circ_mean(alpha, w)
-
-    if n is None:
-        raise ValueError("Sample size `n` is missing.")
-
-    if r < 0.53:
-        kappa_ml = 2 * r + r**3 + 5 * r / 6
-    elif r < 0.85:
-        kappa_ml = -0.4 + 1.39 * r + 0.43 / (1 - r)
-    else:
-        kappa_ml = 1 / (r**3 - 4 * r**2 + 3 * r)
-
-    if n <= 15:
-        if kappa_ml < 2:
-            kappa = np.max(0, kappa_ml - 2 * (n * kappa_ml) ** (-1))
-        else:
-            kappa = (n - 1) ** 3 * kappa_ml / (n**3 + n)
-
-    else:
-        kappa = kappa_ml
-
-    return kappa
+    # return (lower, upper, ci)

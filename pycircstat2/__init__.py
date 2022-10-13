@@ -1,3 +1,4 @@
 from .base import Circular
-from .data import load_data
+from .utils import load_data
 from .version import __version__
+from .visualization import circ_plot
