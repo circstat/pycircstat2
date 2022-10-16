@@ -495,7 +495,7 @@ def circ_mean_ci(
     n: Union[int, None] = None,
     ci: float = 0.95,
     method: str = "approximate",
-    B: int = 200,  # number of samples for bootstrap
+    B: int = 2000,  # number of samples for bootstrap
     return_samples: bool = False,  # bootstrap option
 ) -> tuple:
 
@@ -614,12 +614,17 @@ def _circ_mean_ci_approximate(
         )
 
 
-def _circ_mean_ci_bootstrap(alpha, B=200, ci=0.95, return_samples=False):
+def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95, return_samples=False):
     from scipy.stats import t
 
-    beta = np.array([_circ_mean_resample(alpha) for i in range(B)])
+    beta = np.array([_circ_mean_resample(alpha) for i in range(B)]).flatten()
 
-    lb, ub = t.interval(ci, len(beta) - 1, loc=np.mean(beta), scale=np.std(beta))
+    lb, ub = t.interval(
+        ci,
+        len(beta) - 1,
+        loc=circ_mean(alpha=beta)[0],
+        scale=circ_std(alpha=beta, w=np.ones_like(beta))[0],
+    )
 
     if return_samples:
         return lb, ub, beta
@@ -739,6 +744,7 @@ def circ_median_ci(
             idx_lb = n + idx_lb
 
         lower, upper = alpha[int(idx_lb)], alpha[int(idx_ub)]
+
     else:
         lower, upper = np.nan, np.nan
 
