@@ -3,8 +3,8 @@ from typing import Union
 import numpy as np
 import pandas as pd
 
-from .descriptive import (circ_mean, circ_mean_ci, circ_median, circ_median_ci,
-                          circ_std)
+from .descriptive import (circ_kappa, circ_mean, circ_mean_ci, circ_median,
+                          circ_median_ci, circ_std)
 from .hypothesis import rayleigh_test
 from .utils import data2rad, rad2data, significance_code
 from .visualization import circ_plot
@@ -50,19 +50,19 @@ class Circular:
         w: Union[np.ndarray, list, None] = None,  # frequency
         bins: Union[int, np.array, None] = None,
         unit: str = "degree",
-        k: Union[int, float] = 360,  # number of intervals in the full cycle
+        n_intervals: Union[int, float] = 360,  # number of intervals in the full cycle
         kwargs_median={"method": "deviation"},
         kwargs_mean_ci=None,
     ):
 
         # meta
-        self.k = k
         self.unit = unit
+        self.n_intervals = n_intervals
         self.kwargs_median = kwargs_median
 
         # data
         self.data = np.array(data) if isinstance(data, list) else data
-        self.alpha = alpha = data2rad(data, k)
+        self.alpha = alpha = data2rad(data, n_intervals)
 
         # data preprocessing
         if bins is None:
@@ -107,7 +107,7 @@ class Circular:
         self.R = n * r
 
         # kappa
-        # self.kappa = kappa = circ_kappa(r=r, n=n)
+        self.kappa = kappa = circ_kappa(r=r, n=n)
 
         # confidence interval for angular mean
         # in practice, the equations for mean ci for 8 <= n <= 12 can still yield nan
@@ -160,7 +160,7 @@ class Circular:
     def __repr__(self):
 
         unit = self.unit
-        k = self.k
+        k = self.n_intervals
 
         docs = "Circular Data\n"
         docs += "=============\n\n"

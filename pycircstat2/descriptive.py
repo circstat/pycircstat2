@@ -286,7 +286,9 @@ def circ_std(
         c = bin_size / 2 / np.sin(bin_size / 2)  # eq(26.16)
         rc = r * c  # eq(26.15)
 
+    # mean angular deviation
     s = np.sqrt(2 * (1 - rc))  # eq(26.20)
+    # circular standard deviation
     s0 = np.sqrt(-2 * np.log(rc))  # eq(26.21)
 
     return (s, s0, rc)
@@ -805,3 +807,112 @@ def circ_median_ci(
     #         ci = 0.965
 
     # return (lower, upper, ci)
+
+
+def circ_kappa(r: float, n: int) -> float:
+
+    """Approximate kappa
+    Parameters
+    ----------
+    r: float
+        resultant vector length
+    n: int
+        sample size
+
+    Return
+    ------
+    kappa: float
+        concentration parameter
+
+    Reference
+    ---------
+    Section 4.5.5 (P88, Fisher, 1993)
+    """
+
+    # eq 4.40
+    if r < 0.53:
+        kappa = 2 * r + r**3 + 5 * r**5 / 6
+    elif r < 0.85:
+        kappa = -0.4 + 1.39 * r + 0.43 / (1 - r)
+    else:
+        kappa = 1 / (r**3 - 4 * r**2 + 3 * r)
+
+    # eq 4.41
+    if n <= 15 and r < 0.7:
+        if kappa < 2:
+            kappa = np.max(kappa - 2 * 1 / (n * kappa), 0)
+        else:
+            kappa = (n - 1) ** 3 * kappa / (n**3 + n)
+
+    return kappa
+
+
+def compute_smooth_params(r: float, n: int) -> float:
+
+    """
+    Parameters
+    ----------
+    r: float
+        resultant vector length
+    n: int
+        sample size
+
+    Return
+    ------
+    h: float
+        smoothing parameter
+
+    Reference
+    ---------
+    Section 2.2 (P26, Fisher, 1993)
+    """
+
+    kappa = circ_kappa(r, n)
+    l = 1 / np.sqrt(kappa)  # eq 2.3
+    h = np.sqrt(7) * l / np.power(n, 0.2)  # eq 2.4
+
+    return h
+
+
+def nonparametric_density_estimation(
+    alpha: np.ndarray,  # angles in radian
+    h: float,  # smoothing parameters
+    radius: float = 1,  # radius of the plotted circle
+) -> tuple:
+
+    """Nonparametric density estimates with
+    a quartic kernel function.
+
+    Parameters
+    ----------
+    alpha: np.ndarray (n, )
+        Angles in radian
+    h: float
+        Smoothing parameters
+    radius: float
+        radius of the plotted circle
+
+    Returns
+    -------
+    x: np.ndarray (100, )
+        grid
+    f: np.ndarray (100, )
+        density
+
+    Reference
+    ---------
+    Section 2.2 (P26, Fisher, 1993)
+    """
+
+    # vectorized version of step 3
+    a = alpha
+    x = np.linspace(0, 2 * np.pi, 100)
+    d = np.abs(x[:, None] - a)
+    e = np.minimum(d, 2 * np.pi - d)
+    e = np.minimum(e, h)
+    sum = np.sum((1 - e**2 / h**2) ** 2, 1)
+    f = 0.9375 * sum / len(a) / h
+
+    f = radius * np.sqrt(1 + np.pi * f)
+
+    return x, f

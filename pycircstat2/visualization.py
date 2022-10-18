@@ -1,13 +1,9 @@
-from typing import Type, Union
-
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import ticker
 
-from pycircstat2.utils import (compute_smooth_params,
-                               nonparametric_density_estimation)
-
-from .utils import angrange
+from pycircstat2.descriptive import (compute_smooth_params,
+                                     nonparametric_density_estimation)
 
 
 def circ_plot(
