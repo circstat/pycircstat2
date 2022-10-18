@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.stats import vonmises
 
-from .base import Circular
 from .descriptive import circ_kappa, circ_mean
+from .utils import data2rad
 
 
 class MoVM:
@@ -45,7 +45,10 @@ class MoVM:
 
         # meta
         self.x = x
-        self.x_rad = x_rad = Circular(x, n_intervals=n_intervals, unit=unit).alpha
+        if unit != "radian":
+            self.x_rad = x_rad = np.data2rad(x, n_intervals)
+        else:
+            self.x_rad = x_rad = x
 
         self.n = n = len(x)
         self.n_clusters = k = n_clusters

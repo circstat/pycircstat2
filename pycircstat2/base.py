@@ -3,6 +3,7 @@ from typing import Union
 import numpy as np
 import pandas as pd
 
+from .clustering import MoVM
 from .descriptive import (circ_kappa, circ_mean, circ_mean_ci, circ_median,
                           circ_median_ci, circ_std)
 from .hypothesis import rayleigh_test
@@ -157,6 +158,17 @@ class Circular:
                 ci,
             ) = circ_median_ci(median=median, alpha=alpha)
 
+        # check multimodality
+        if not grouped:
+            ms = []
+            bics = []
+            for k in range(1, 3):
+                m = MoVM()
+                m.fit(alpha, n_clusters=k, unit="radian", random_seed=0)
+                bics.append(m.BIC()[0])
+                ms.append(m)
+            self.clusters = ms[np.nanargmin(bics)]
+
     def __repr__(self):
 
         unit = self.unit
@@ -180,12 +192,18 @@ class Circular:
             docs += f"  Angular mean CI: {rad2data(self.mean_lb, k=k):.02f} - {rad2data(self.mean_ub, k=k):.02f}\n"
 
         docs += f"  Angular median: {rad2data(self.median, k=k):.02f} \n"
-        if hasattr(self, "median_lb"):
+        if hasattr(self, "median_lb") and not np.isnan(self.median_lb):
             docs += f"  Angular median CI: {rad2data(self.median_lb, k=k):.02f} - {rad2data(self.median_ub, k=k):.02f}\n"
 
         docs += f"  Angular deviation (s): {rad2data(self.s, k=k):.02f} \n"
         docs += f"  Circular standard deviation (s0): {rad2data(self.s0, k=k):.02f} \n"
-        docs += f"  Concentration (r): {self.r:0.2f}\n\n"
+        docs += f"  Concentration (r): {self.r:0.2f}\n"
+        if not self.grouped:
+            docs += (
+                f"  Unimodal?: Yes \n\n"
+                if len(self.clusters.m) == 1
+                else f"  Unimodal?: No (n_clusters={len(self.clusters.m)}) \n\n"
+            )
 
         docs += "Signif. codes:\n"
         docs += "--------------\n"
@@ -194,7 +212,7 @@ class Circular:
         docs += "Method\n"
         docs += "------\n"
         docs += f"  Angular median: {self.kwargs_median['method']}\n"
-        # docs += f"  Angular mean CI: {self.method_mean_ci}"
+
         return docs
 
     def __str__(self):
