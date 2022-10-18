@@ -46,7 +46,7 @@ class MoVM:
         # meta
         self.x = x
         if unit != "radian":
-            self.x_rad = x_rad = np.data2rad(x, n_intervals)
+            self.x_rad = x_rad = data2rad(x, n_intervals)
         else:
             self.x_rad = x_rad = x
 
