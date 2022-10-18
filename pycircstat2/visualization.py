@@ -2,8 +2,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import ticker
 
-from pycircstat2.descriptive import (compute_smooth_params,
-                                     nonparametric_density_estimation)
+from pycircstat2.descriptive import (
+    compute_smooth_params,
+    nonparametric_density_estimation,
+)
 
 
 def circ_plot(
@@ -26,7 +28,7 @@ def circ_plot(
     plot_axis = kwargs.pop("plot_axis", True)
 
     plot_density = kwargs.pop("plot_density", True)
-    plot_histogram = kwargs.pop("plot_histogram", True)
+    plot_rose = kwargs.pop("plot_rose", True)
 
     plot_mean = kwargs.pop("plot_mean", True)
     if np.isclose(circ_data.r, 0):
@@ -98,7 +100,7 @@ def circ_plot(
             ax.set_ylim(0, radii.max() + 0.025)
 
     # plot histogram
-    if plot_histogram:
+    if plot_rose:
         if not circ_data.grouped:
             alpha = circ_data.alpha
             w, beta = np.histogram(

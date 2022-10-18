@@ -16,15 +16,15 @@ class MoVM:
 
     def _initialize(
         self,
-        x,
+        x: np.ndarray,
         n_clusters_init: int = 5,
     ):
 
         n = len(x)
         p = np.ones(n_clusters_init) / n_clusters_init
-        l = np.random.choice(np.arange(n_clusters_init), size=n)
+        z = np.random.choice(np.arange(n_clusters_init), size=n)
         m, r = map(
-            np.array, zip(*[circ_mean(x[l == i]) for i in range(n_clusters_init)])
+            np.array, zip(*[circ_mean(x[z == i]) for i in range(n_clusters_init)])
         )
         kappa = np.array([circ_kappa(r=r[i], n=n) for i in range(n_clusters_init)])
 
