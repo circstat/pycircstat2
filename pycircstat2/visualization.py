@@ -2,10 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import ticker
 
-from pycircstat2.descriptive import (
-    compute_smooth_params,
-    nonparametric_density_estimation,
-)
+from pycircstat2.descriptive import (circ_mean, compute_smooth_params,
+                                     nonparametric_density_estimation)
 
 
 def circ_plot(
@@ -28,6 +26,13 @@ def circ_plot(
     plot_axis = kwargs.pop("plot_axis", True)
 
     plot_density = kwargs.pop("plot_density", True)
+    density_kwargs = kwargs.pop(
+        "density_kwargs",
+        {
+            "method": "nonparametric",
+        },
+    )
+
     plot_rose = kwargs.pop("plot_rose", True)
 
     plot_mean = kwargs.pop("plot_mean", True)
@@ -35,20 +40,22 @@ def circ_plot(
         plot_mean = False
         print("Mean is not plotted because `r` is close to 0")
     mean_kwargs = kwargs.pop(
-        "mean_kwargs", {"color": "C3", "linestyle": "-", "kind": "arrow"}
+        "mean_kwargs", {"color": "black", "linestyle": "-", "kind": "arrow"}
     )
 
     plot_mean_ci = kwargs.pop("plot_mean_ci", True)
     if not hasattr(circ_data, "mean_ub"):
         plot_mean_ci = False
-        print("Mean CI is not plotted because `r` is close to 0")
+        print("Mean CI is not plotted because it is not computed")
 
     plot_median = kwargs.pop("plot_median", True)
     if np.isnan(circ_data.median):
         plot_median = False
         print("Median is not plotted because `median` is nan")
 
-    median_kwargs = kwargs.pop("median_kwargs", {"color": "C0", "linestyle": "-"})
+    median_kwargs = kwargs.pop(
+        "median_kwargs", {"color": "black", "linestyle": "dotted"}
+    )
 
     plot_median_ci = kwargs.pop("plot_median_ci", True)
     if not hasattr(circ_data, "median_ub") or np.isnan(circ_data.median_ub):
@@ -87,38 +94,51 @@ def circ_plot(
             )
 
         ax.scatter(alpha, radii, color=marker_color, marker=marker)
-        # ax.set_ylim(0, radii.max() + 0.05)
 
+        # plot density
         if plot_density and not np.isclose(circ_data.r, 0):
-            h0 = compute_smooth_params(circ_data.r, circ_data.n)
-            # for h in [1.5 * h0, h0, 0.25 * h0]:
-            x, f = nonparametric_density_estimation(circ_data.alpha, 0.75 * h0, 1.05)
-            ax.plot(x, f, color="black", linestyle="-")
 
+            if density_kwargs["method"] == "nonparametric":
+                h0 = density_kwargs.pop(
+                    "h0", compute_smooth_params(circ_data.r, circ_data.n)
+                )
+                x, f = nonparametric_density_estimation(circ_data.alpha, h0, 1.05)
+
+            elif density_kwargs["method"] == "MoVM":
+                x = np.linspace(0, 2 * np.pi, 100)
+                f = circ_data.clusters_opt.predict(x=x) + 1.05
+
+            else:
+                raise ValueError(
+                    f"`{density_kwargs['method']}` in `density_kwargs` is not supported."
+                )
+
+            ax.plot(x, f, color="black", linestyle="-")
             ax.set_ylim(0, f.max())
         else:
             ax.set_ylim(0, radii.max() + 0.025)
 
-    # plot histogram
+    # plot rose diagram
     if plot_rose:
+
         if not circ_data.grouped:
             alpha = circ_data.alpha
             w, beta = np.histogram(
                 alpha, bins=bins, range=(0, 2 * np.pi)
             )  # np.histogram return bin edges
             beta = 0.5 * (beta[:-1] + beta[1:])
-            w = np.sqrt(w)
-            w = w / w.max()
         else:
-            beta = circ_data.alpha
             w = circ_data.w
-            rticks = np.linspace(0, np.ceil(np.max(w) / 5) * 5 + 5, 5)
+            beta = circ_data.alpha
+
+        w_sqrt = np.sqrt(w)
+        w_norm = w_sqrt / w_sqrt.max()
 
         width = kwargs.pop("width", 2 * np.pi / len(beta))
 
         ax.bar(
             beta,
-            w,
+            w_norm,
             width=width,
             color="gray",
             ec="black",
@@ -126,20 +146,30 @@ def circ_plot(
             bottom=0,
             zorder=2,
         )
+        for i, v in enumerate(w):
+            if v != 0:
+                ax.text(beta[i], w_norm[i] - 0.1, str(v), color="black")
+
+        if circ_data.grouped and plot_density:
+            x = np.linspace(0, 2 * np.pi, 100)
+            f = circ_data.clusters_opt.predict(x=x) + 1
+            ax.plot(x, f, color="black", linestyle="-")
+            ax.set_ylim(0, f.max())
     else:
         w = circ_data.w
         rticks = [1]  # overwrite
 
     if plot_mean:
 
-        radius = circ_data.r if not circ_data.grouped else np.max(w) + 0.025
+        radius = circ_data.r
 
         ax.plot(
             [0, circ_data.mean],
             [0, radius],
-            color=mean_kwargs.pop("color", "C3"),
+            color=mean_kwargs.pop("color", "black"),
             ls=mean_kwargs.pop("linestyle", "-"),
-            label="circ mean",
+            label="mean",
+            zorder=5,
         )
 
     if plot_mean_ci is True:
@@ -149,22 +179,27 @@ def circ_plot(
         else:
             x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub + 2 * np.pi, num=50)
 
+        # plot arc
         ax.plot(
             x1,
             np.ones_like(x1) * radius,
             ls="-",
-            color="C3",
-            alpha=0.75,
-            zorder=9,
+            color="black",
+            zorder=5,
+            lw=2,
         )
+        # plot arc cap
+        ax.errorbar(x1[0], radius, yerr=0.03, capsize=0, color="black", lw=2)
+        ax.errorbar(x1[-1], radius, yerr=0.03, capsize=0, color="black", lw=2)
 
     if plot_median:
         ax.plot(
             [0, circ_data.median],
-            [0, np.max(w) - 0.025],
-            color=median_kwargs["color"],
-            ls=median_kwargs["linestyle"],
-            label="circ median",
+            [0, .95],
+            color=median_kwargs.pop("color", "black"),
+            ls=median_kwargs.pop("linestyle", "dotted"),
+            label="median",
+            zorder=5,
         )
 
     if plot_median_ci is True:
@@ -174,21 +209,25 @@ def circ_plot(
             x1 = np.linspace(
                 circ_data.median_lb, circ_data.median_ub + 2 * np.pi, num=50
             )
+        # plot arc
         ax.plot(
             x1,
-            np.ones_like(x1) * np.ones_like(x1) - 0.025,
-            ls="-",
-            color="C0",
-            alpha=0.75,
+            np.ones_like(x1) - 0.05,
+            ls="dotted",
+            color="black",
             zorder=5,
+            lw=2,
         )
+        # plot arc cap
+        ax.errorbar(x1[0], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
+        ax.errorbar(x1[-1], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
 
     ax.set_theta_zero_location(zero_location)
     ax.set_theta_direction(clockwise)
     ax.grid(plot_grid)
     ax.axis(plot_axis)
     ax.spines["polar"].set_visible(plot_spine)
-    ax.set_rticks(rticks)
+    ax.set_rgrids(rticks, ["" for _ in range(len(rticks))], fontsize=16)
 
     if circ_data.unit == "hour":
         position_major = np.arange(0, 2 * np.pi, 2 * np.pi / 8)

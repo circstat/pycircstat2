@@ -835,7 +835,12 @@ def circ_kappa(r: float, n: int) -> float:
     elif r < 0.85:
         kappa = -0.4 + 1.39 * r + 0.43 / (1 - r)
     else:
-        kappa = 1 / (r**3 - 4 * r**2 + 3 * r)
+        nom = r**3 - 4 * r**2 + 3 * r
+        if nom != 0:
+            kappa = 1 / nom
+        else:
+            # not sure how to handle this...
+            kappa = 1e-16
 
     # eq 4.41
     if n <= 15 and r < 0.7:

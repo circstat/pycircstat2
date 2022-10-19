@@ -56,6 +56,7 @@ class MoVM:
 
         m, kappa, p = self._initialize(x_rad, n_clusters)
 
+        # EM
         for i in range(max_iters):
 
             # E step
@@ -87,9 +88,20 @@ class MoVM:
                 for i in range(self.n_clusters)
             ]
         )
-        LL = np.sum(np.log(np.sum(gamma, axis=0)))
+        LL = np.sum(np.log(np.sum(gamma, axis=0) + 1e-16))
 
         nparams = self.n_clusters * 3 - 1  # n_means + n_kappas + (n_ps - 1)
         bic = -2 * LL + np.log(self.n) * nparams
 
         return bic, LL
+
+    def predict(self, x=None):
+
+        if x is None:
+            x = np.linspace(0, 2 * np.pi, 100)
+
+        d = [
+            self.p[i] * vonmises.pdf(x, kappa=self.kappa[i], loc=self.m[i])
+            for i in range(self.n_clusters)
+        ]
+        return np.sum(d, axis=0)

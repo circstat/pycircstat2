@@ -52,6 +52,7 @@ class Circular:
         bins: Union[int, np.array, None] = None,
         unit: str = "degree",
         n_intervals: Union[int, float] = 360,  # number of intervals in the full cycle
+        n_clusters: int = 4,  # number of clusters to be tested for mixture of von Mises
         kwargs_median={"method": "deviation"},
         kwargs_mean_ci=None,
     ):
@@ -68,7 +69,7 @@ class Circular:
         # data preprocessing
         if bins is None:
             if w is None:  # ungrouped data, because no `w` is provided.
-                self.w = w = np.ones_like(alpha)
+                self.w = w = np.ones_like(alpha).astype(int)
                 self.grouped = grouped = False
                 self.bin_size = bin_size = 0.0
             else:  # grouped data
@@ -113,7 +114,7 @@ class Circular:
         # confidence interval for angular mean
         # in practice, the equations for mean ci for 8 <= n <= 12 can still yield nan
         if kwargs_mean_ci is None:
-            if not np.isclose(self.r, 0) and (8 < self.n < 25):
+            if not np.isclose(self.r, 0) and (8 <= self.n < 25):
                 # Approximate ci for mean of a von Mises distribution (Upton, 1986)
                 self.method_mean_ci = method_mean_ci = "bootstrap"
                 ci = 0.95
@@ -159,15 +160,16 @@ class Circular:
             ) = circ_median_ci(median=median, alpha=alpha)
 
         # check multimodality
-        if not grouped:
-            ms = []
-            bics = []
-            for k in range(1, 3):
-                m = MoVM()
-                m.fit(alpha, n_clusters=k, unit="radian", random_seed=0)
-                bics.append(m.BIC()[0])
-                ms.append(m)
-            self.clusters = ms[np.nanargmin(bics)]
+        self.clusters = []
+        for k in range(1, n_clusters):
+            m = MoVM()
+            m.fit(np.repeat(alpha, w), n_clusters=k, unit="radian", random_seed=0)
+            self.clusters.append(m)
+        self.clusters_BIC = [c.BIC()[0] for c in self.clusters]
+        if not np.isnan(self.clusters_BIC).all():
+            self.clusters_opt = self.clusters[np.nanargmin(self.clusters_BIC)]
+        else:
+            self.clusters_opt = None
 
     def __repr__(self):
 
@@ -180,6 +182,13 @@ class Circular:
         docs += "Summary\n"
         docs += "-------\n"
         docs += f"  Grouped?: Yes\n" if self.grouped else f"  Grouped?: No\n"
+        if self.clusters_opt is not None:
+            docs += (
+                f"  Unimodal?: Yes \n"
+                if len(self.clusters_opt.m) == 1
+                else f"  Unimodal?: No (n_clusters={len(self.clusters_opt.m)}) \n"
+            )
+
         docs += f"  Unit: {unit}\n"
         docs += f"  Sample size: {self.n}\n"
 
@@ -198,12 +207,8 @@ class Circular:
         docs += f"  Angular deviation (s): {rad2data(self.s, k=k):.02f} \n"
         docs += f"  Circular standard deviation (s0): {rad2data(self.s0, k=k):.02f} \n"
         docs += f"  Concentration (r): {self.r:0.2f}\n"
-        if not self.grouped:
-            docs += (
-                f"  Unimodal?: Yes \n\n"
-                if len(self.clusters.m) == 1
-                else f"  Unimodal?: No (n_clusters={len(self.clusters.m)}) \n\n"
-            )
+
+        docs += f"\n"
 
         docs += "Signif. codes:\n"
         docs += "--------------\n"
