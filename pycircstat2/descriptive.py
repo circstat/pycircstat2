@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Tuple, Union
 
 import numpy as np
 from scipy.stats import chi2, norm
@@ -921,3 +921,50 @@ def nonparametric_density_estimation(
     f = radius * np.sqrt(1 + np.pi * f)
 
     return x, f
+
+
+def circ_mean_of_means(
+    circs: Union[list, None] = None,
+    ms: Union[np.ndarray, None] = None,
+    rs: Union[np.ndarray, None] = None,
+) -> Tuple[float]:
+
+    """The Mean of a set of Mean Angles
+
+    Parameters
+    ----------
+    circs: list
+        a list of Circular Objects
+
+    ms: np.array (n, )
+        a set of mean angles in radian
+
+    rs: np.array (n, )
+        a set of mean resultant vecotr lengths
+
+    Return
+    ------
+    m: float
+        mean of means in radian
+
+    r: float
+        mean of mean resultant vector lengths
+
+    """
+
+    if circs is None:
+        assert isinstance(ms, np.ndarray) and isinstance(
+            rs, np.ndarray
+        ), "If `circs` is None, then `ms` and `rs` are needed."
+    else:
+        ms, rs = map(np.array, zip(*[(circ.mean, circ.r) for circ in circs]))
+
+    X = np.mean(np.cos(ms) * rs)
+    Y = np.mean(np.sin(ms) * rs)
+    r = np.sqrt(X**2 + Y**2)
+    C = X / r
+    S = Y / r
+
+    m = angrange(np.arctan2(S, C))
+
+    return m, r

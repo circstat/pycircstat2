@@ -1,7 +1,7 @@
 import numpy as np
 
 from pycircstat2.base import Circular
-from pycircstat2.data import load_data
+from pycircstat2.utils import load_data
 
 
 def test_Circular():

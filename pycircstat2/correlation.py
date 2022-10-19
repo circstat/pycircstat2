@@ -3,8 +3,8 @@ from typing import Type, Union
 import numpy as np
 from scipy.stats import norm
 
-from pycircstat2 import Circular
-from pycircstat2.descriptive import circ_mean
+from .base import Circular
+from .descriptive import circ_mean
 
 
 def aacorr(
@@ -111,14 +111,13 @@ def _aacorr_js(
         a = a.alpha
     else:
         a_mean = circ_mean(a)[0]
-        
+
     if isinstance(b, Circular):
         assert b.mean_pval < 0.01, "Data `b` is uniformly distributed."
         b_mean = b.mean
         b = b.alpha
     else:
         b_mean = circ_mean(b)[0]
-
 
     abar = a - a_mean
     bbar = b - b_mean

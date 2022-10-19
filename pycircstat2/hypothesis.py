@@ -1,9 +1,9 @@
 from typing import Union
 
 import numpy as np
-from scipy.stats import norm, wilcoxon
+from scipy.stats import f, norm, wilcoxon
 
-from .descriptive import circ_mean, circ_mean_ci, circ_median
+from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median
 from .utils import angrange
 
 
@@ -332,7 +332,8 @@ def symmetry_test(
 ) -> float:
 
     """Non-parametric test for symmetry around the median. Works by performing a
-    Wilcoxon sign rank test on the differences to the median.
+    Wilcoxon sign rank test on the differences to the median. Also known as
+    Wilcoxon paired-sample test.
 
     H0: the population is symmetrical around the median
     HA: the population is not symmetrical around the median
@@ -351,11 +352,53 @@ def symmetry_test(
         p-value
     """
 
-    from scipy.stats import wilcoxon
-
     if median is None:
         median = circ_median(alpha=alpha)
 
     d = (alpha - median).round(5)
+    pval = wilcoxon(d, alternative="two-sided").pvalue
 
-    return wilcoxon(d, alternative="two-sided").pvalue
+    return pval
+
+
+def watson_williams_test(circs: list) -> tuple:
+
+    """The Watson-Williams Test for multiple samples.
+
+    H0: All samples are from populations with the same mean angle
+    H1: All samples are not from populations with the same mean angle
+
+    Parameter
+    ---------
+    circs: list (k, )
+        A list of Circular objects.
+
+    Returns
+    -------
+    F: float
+        F value
+
+    pval: float
+        p-value
+    """
+
+    k = len(circs)
+    N = np.sum([circ.n for circ in circs])
+    rw = np.mean([circ.r for circ in circs])
+
+    # hard-coded the n here
+    # because there is no need for correction (?)
+    K = 1 + 3 / 8 / circ_kappa(rw, n=16)
+
+    Rs = [circ.R for circ in circs]
+    R = (
+        N
+        * circ_mean(
+            alpha=np.hstack([circ.alpha for circ in circs]),
+            w=np.hstack([circ.w for circ in circs]),
+        )[1]
+    )
+    F = K * (N - k) * (np.sum(Rs) - R) / (N - np.sum(Rs)) / (k - 1)
+    pval = f.sf(F, k - 1, N - k)
+
+    return F, pval

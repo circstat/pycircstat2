@@ -7,6 +7,8 @@ from pycircstat2.hypothesis import (
     omnibus_test,
     one_sample_test,
     rayleigh_test,
+    symmetry_test,
+    watson_williams_test,
 )
 
 
@@ -107,12 +109,31 @@ def test_batschelet_test():
     np.testing.assert_approx_equal(pval, 0.00661, significant=3)
 
 
-def wilcoxon_paired_sample_test():
+def test_symmetry_test():
 
     data_zar_ex6_ch27 = load_data("D9", source="zar_2010")
     circ_zar_ex6_ch27 = Circular(data_zar_ex6_ch27["θ"].values, unit="degree")
 
-    p = wilcoxon_paired_sample_test(
-        median=circ_zar_ex6_ch27.median, alpha=circ_zar_ex6_ch27.alpha
-    )
+    p = symmetry_test(median=circ_zar_ex6_ch27.median, alpha=circ_zar_ex6_ch27.alpha)
     assert p > 0.5
+
+
+def test_watson_williams_test():
+
+    data = load_data("D10", source="zar_2010")
+    s1 = Circular(data[data["sample"] == 1]["θ"].values)
+    s2 = Circular(data[data["sample"] == 2]["θ"].values)
+    F, pval = watson_williams_test([s1, s2])
+
+    np.testing.assert_approx_equal(F, 1.61, significant=3)
+    np.testing.assert_approx_equal(pval, 0.22, significant=2)
+
+    data = load_data("D11", source="zar_2010")
+    s1 = Circular(data[data["sample"] == 1]["θ"].values)
+    s2 = Circular(data[data["sample"] == 2]["θ"].values)
+    s3 = Circular(data[data["sample"] == 3]["θ"].values)
+
+    F, pval = watson_williams_test([s1, s2, s3])
+
+    np.testing.assert_approx_equal(F, 1.86, significant=3)
+    np.testing.assert_approx_equal(pval, 0.19, significant=2)

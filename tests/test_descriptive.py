@@ -1,7 +1,8 @@
 import numpy as np
 
 from pycircstat2 import Circular, load_data
-from pycircstat2.descriptive import (circ_mean, circ_mean_ci, circ_median,
+from pycircstat2.descriptive import (circ_mean, circ_mean_ci,
+                                     circ_mean_of_means, circ_median,
                                      circ_median_ci, circ_std)
 
 
@@ -153,3 +154,14 @@ def test_circ_median_ci():
     lb, ub, ci = circ_median_ci(median=c_ex3_s2.median, alpha=c_ex3_s2.alpha)
     np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
     np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 267.0, significant=3)
+
+
+def test_circ_mean_of_means():
+
+    data = load_data("D4", source="zar_2010")
+    ms = np.deg2rad(data.values[:, 0])
+    rs = data.values[:, 1]
+
+    m, r = circ_mean_of_means(ms=ms, rs=rs)
+    np.testing.assert_approx_equal(np.rad2deg(m), 152.0, significant=3)
+    np.testing.assert_approx_equal(r, 0.59634, significant=5)
