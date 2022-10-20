@@ -12,7 +12,7 @@ from .visualization import circ_plot
 
 __names__ = ["Circular"]
 
-# Proposal: Automatic circular data analaysis pipline
+# Proposal: Automatic circular data analaysis pipeline
 #
 # Circstat(data)
 # |-> MoVM (BIC-based clustering)
@@ -25,6 +25,15 @@ __names__ = ["Circular"]
 # |     |       |       | -> list of Circular(data_cluster)
 # |     |       |               | -> MoMeans(list of Circular)
 # |     |       |       | -> Circular(data) (aggregate no matter what)
+
+
+class CircStat:
+
+    """
+    An automatic pipeline for circular data analysis.
+    """
+
+    pass
 
 
 class Circular:
