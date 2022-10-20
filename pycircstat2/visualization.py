@@ -44,7 +44,7 @@ def circ_plot(
     )
 
     plot_mean_ci = kwargs.pop("plot_mean_ci", True)
-    if not hasattr(circ_data, "mean_ub"):
+    if not hasattr(circ_data, "mean_ub") or np.isnan(circ_data.mean_ub):
         plot_mean_ci = False
         print("Mean CI is not plotted because it is not computed")
 
@@ -106,7 +106,7 @@ def circ_plot(
 
             elif density_kwargs["method"] == "MoVM":
                 x = np.linspace(0, 2 * np.pi, 100)
-                f = circ_data.clusters_opt.predict(x=x) + 1.05
+                f = circ_data.mixture_opt.predict_density(x=x, unit="radian") + 1.05
 
             else:
                 raise ValueError(
@@ -152,7 +152,7 @@ def circ_plot(
 
         if circ_data.grouped and plot_density:
             x = np.linspace(0, 2 * np.pi, 100)
-            f = circ_data.clusters_opt.predict(x=x) + 1
+            f = circ_data.mixture_opt.predict_density(x=x, unit="radian") + 1
             ax.plot(x, f, color="black", linestyle="-")
             ax.set_ylim(0, f.max())
     else:
@@ -195,7 +195,7 @@ def circ_plot(
     if plot_median:
         ax.plot(
             [0, circ_data.median],
-            [0, .95],
+            [0, 0.95],
             color=median_kwargs.pop("color", "black"),
             ls=median_kwargs.pop("linestyle", "dotted"),
             label="median",

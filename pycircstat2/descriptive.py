@@ -751,72 +751,16 @@ def circ_median_ci(
         lower, upper = np.nan, np.nan
 
     return (angrange(lower), angrange(upper), ci)
-    # else:
-    #     if n == 3:
-    #         lower, upper = alpha[0], alpha[2]
-    #         ci = 0.75
-    #     elif n == 4:
-    #         lower, upper = alpha[0], alpha[3]
-    #         ci = 0.875
-    #     elif n == 5:
-    #         lower, upper = alpha[0], alpha[4]
-    #         ci = 0.937
-    #     elif n == 6:
-    #         lower, upper = alpha[0], alpha[5]
-    #         ci = 0.97
-    #     elif n == 7:
-    #         return (
-    #             (alpha[0], alpha[6], 0.984),
-    #             (alpha[1], alpha[5], 0.875),
-    #         )
-    #     elif n == 8:
-    #         return (
-    #             (alpha[0], alpha[7], 0.992),
-    #             (alpha[1], alpha[6], 0.93),
-    #         )
-    #     elif n == 9:
-    #         return (
-    #             (alpha[0], alpha[8], 0.996),
-    #             (alpha[1], alpha[7], 0.961),
-    #         )
-    #     elif n == 10:
-    #         return (
-    #             (alpha[1], alpha[8], 0.978),
-    #             (alpha[2], alpha[7], 0.893),
-    #         )
-    #     elif n == 11:
-    #         return (
-    #             (alpha[1], alpha[9], 0.99),
-    #             (alpha[2], alpha[8], 0.934),
-    #         )
-    #     elif n == 12:
-    #         return (
-    #             (alpha[2], alpha[9], 0.962),
-    #             (alpha[3], alpha[8], 0.854),
-    #         )
-    #     elif n == 13:
-    #         return (
-    #             (alpha[2], alpha[10], 0.978),
-    #             (alpha[3], alpha[9], 0.928),
-    #         )
-    #     elif n == 14:
-    #         lower, upper = alpha[3], alpha[10]
-    #         ci = 0.937
-    #     elif n == 15:
-    #         lower, upper = alpha[2], alpha[12]
-    #         ci = 0.965
-
-    # return (lower, upper, ci)
 
 
-def circ_kappa(r: float, n: int) -> float:
+def circ_kappa(r: float, n: Union[int, None] = None) -> float:
 
     """Approximate kappa
     Parameters
     ----------
     r: float
         resultant vector length
-    n: int
+    n: int or None
         sample size
 
     Return
@@ -843,11 +787,12 @@ def circ_kappa(r: float, n: int) -> float:
             kappa = 1e-16
 
     # eq 4.41
-    if n <= 15 and r < 0.7:
-        if kappa < 2:
-            kappa = np.max(kappa - 2 * 1 / (n * kappa), 0)
-        else:
-            kappa = (n - 1) ** 3 * kappa / (n**3 + n)
+    if n is not None:
+        if n <= 15 and r < 0.7:
+            if kappa < 2:
+                kappa = np.max([kappa - 2 * 1 / (n * kappa), 0])
+            else:
+                kappa = (n - 1) ** 3 * kappa / (n**3 + n)
 
     return kappa
 
