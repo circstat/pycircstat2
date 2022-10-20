@@ -78,7 +78,7 @@ class Circular:
         bins: Union[int, np.array, None] = None,
         unit: str = "degree",
         n_intervals: Union[int, float] = 360,  # number of intervals in the full cycle
-        n_clusters_max: int = 4,  # number of clusters to be tested for mixture of von Mises
+        n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
         **kwargs,
     ):
 
@@ -236,6 +236,7 @@ class Circular:
         docs += f"  Angular deviation (s): {rad2data(self.s, k=k):.02f} \n"
         docs += f"  Circular standard deviation (s0): {rad2data(self.s0, k=k):.02f} \n"
         docs += f"  Concentration (r): {self.r:0.2f}\n"
+        docs += f"  Concentration (kappa): {self.kappa:0.2f}\n"
 
         docs += f"\n"
 

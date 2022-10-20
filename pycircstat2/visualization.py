@@ -152,7 +152,7 @@ def circ_plot(
 
         if circ_data.grouped and plot_density:
             x = np.linspace(0, 2 * np.pi, 100)
-            f = circ_data.mixture_opt.predict_density(x=x) + 1
+            f = circ_data.mixture_opt.predict_density(x=x, unit="radian") + 1
             ax.plot(x, f, color="black", linestyle="-")
             ax.set_ylim(0, f.max())
     else:
