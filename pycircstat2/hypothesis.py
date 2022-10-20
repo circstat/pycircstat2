@@ -386,9 +386,7 @@ def watson_williams_test(circs: list) -> tuple:
     N = np.sum([circ.n for circ in circs])
     rw = np.mean([circ.r for circ in circs])
 
-    # hard-coded the n here
-    # because there is no need for correction (?)
-    K = 1 + 3 / 8 / circ_kappa(rw, n=16)
+    K = 1 + 3 / 8 / circ_kappa(rw)
 
     Rs = [circ.R for circ in circs]
     R = (
