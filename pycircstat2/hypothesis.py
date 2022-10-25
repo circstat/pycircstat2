@@ -495,7 +495,7 @@ def watson_u2_test(circs: list) -> tuple:
     return U2, pval
 
 
-def wheeler_watson_test():
+def wheeler_watson_test(circs):
     """The Wheeler and Watson Two/Multi-Sample Test.
 
     H0: The two samples came from the same population,
@@ -503,9 +503,61 @@ def wheeler_watson_test():
     H1: The two samples did not come from the same population,
         or from two populations having the same directions.
 
+    Parameter
+    ---------
+    circs: list
+        A list of Circular objects.
+
+    Returns
+    -------
+    W: float
+        W value
+    pval: float
+        p value
 
     Reference
     ---------
     P640-642, Section 27.5, Example 27.11 of Zar, 2010
+
+    Note
+    ----
+    The current implementation doesn't consider ties in the data.
+    Can be improved with P144, Pewsey et al. (2013)
     """
-    raise NotImplementedError
+    from scipy.stats import chi2
+
+    def get_circrank(alpha, circ, N):
+
+        rank_of_direction = (
+            np.squeeze([np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)])
+            + 1
+        )
+        circ_rank = 2 * np.pi / N * rank_of_direction
+        return circ_rank
+
+    N = np.sum([c.n for c in circs])
+    a, t = np.unique(
+        np.hstack([np.repeat(c.alpha, c.w) for c in circs]), return_counts=True
+    )
+
+    circ_ranks = [get_circrank(a, c, N) for c in circs]
+
+    k = len(circ_ranks)
+
+    if k == 2:
+        C = np.sum(np.cos(circ_ranks[0]))
+        S = np.sum(np.sin(circ_ranks[0]))
+        W = 2 * (N - 1) * (C**2 + S**2) / np.prod([c.n for c in circs])
+
+    elif k > 3:
+        W = 0
+        for i in range(k):
+            circ_rank = circ_ranks[i]
+            C = np.sum(np.cos(circ_rank))
+            S = np.sum(np.sin(circ_rank))
+            W += (C**2 + S**2) / circs[i].n
+        W *= 2
+
+    pval = chi2.sf(W, df=2 * (k - 1))
+
+    return W, pval

@@ -8,7 +8,9 @@ from pycircstat2.hypothesis import (
     one_sample_test,
     rayleigh_test,
     symmetry_test,
+    watson_u2_test,
     watson_williams_test,
+    wheeler_watson_test,
 )
 
 
@@ -158,4 +160,10 @@ def test_watson_u2_test():
 
 
 def test_wheeler_watson_test():
-    pass
+    d = load_data("D12", source="zar_2010")
+    c0 = Circular(data=d[d["sample"] == 1]["θ"].values)
+    c1 = Circular(data=d[d["sample"] == 2]["θ"].values)
+
+    W, pval = wheeler_watson_test([c0, c1])
+    np.testing.assert_approx_equal(W, 3.678, significant=3)
+    assert 0.1 < pval < 0.25
