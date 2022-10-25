@@ -65,9 +65,9 @@ def _aacorr_fl(
     raa: float
         correlation coefficient.
 
-    Note
+    Reference
     ----
-    Implementation of Example 27.20 (Zar, 2010).
+    P6574-658, Section 27.15(a), Example 27.20 (Zar, 2010).
     """
 
     if isinstance(a, Circular):
@@ -90,7 +90,8 @@ def _aacorr_js(
     b: Union[Type[Circular], np.ndarray],
 ) -> float:
 
-    """Angular-Angular Correlation based on Jammalamadaka & SenGupta (2001)
+    """Implementation of Angular-Angular Correlation
+    in R.Circular.
 
     Parameters
     ----------
@@ -103,6 +104,10 @@ def _aacorr_js(
     ------
     raa: float
         correlation coefficient.
+
+    Reference
+    ---------
+    Jammalamadaka & SenGupta (2001)
     """
 
     if isinstance(a, Circular):
@@ -147,9 +152,9 @@ def alcorr(
     ral: float
         correlation coefficient.
 
-    Note
+    Reference
     ----
-    Implementation of Example 27.21 (Zar, 2010).
+    P658-659, Section 27.15(b) of Example 27.21 (Zar, 2010).
     """
 
     if isinstance(a, Circular):
