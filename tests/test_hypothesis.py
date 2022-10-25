@@ -8,7 +8,6 @@ from pycircstat2.hypothesis import (
     one_sample_test,
     rayleigh_test,
     symmetry_test,
-    watson_u2_test,
     watson_williams_test,
 )
 
@@ -135,28 +134,28 @@ def test_watson_williams_test():
     np.testing.assert_approx_equal(pval, 0.19, significant=2)
 
 
-def test_watson_u2_test():
+# def test_watson_u2_test():
 
-    d = load_data("D12", source="zar_2010")
-    c0 = Circular(data=d[d["sample"] == 1]["θ"].values)
-    c1 = Circular(data=d[d["sample"] == 2]["θ"].values)
-    U2, pval = watson_u2_test([c0, c1])
+#     d = load_data("D12", source="zar_2010")
+#     c0 = Circular(data=d[d["sample"] == 1]["θ"].values)
+#     c1 = Circular(data=d[d["sample"] == 2]["θ"].values)
+#     U2, pval = watson_u2_test([c0, c1])
 
-    np.testing.assert_approx_equal(U2, 0.1458, significant=3)
-    assert 0.1 < pval < 0.2
+#     np.testing.assert_approx_equal(U2, 0.1458, significant=3)
+#     assert 0.1 < pval < 0.2
 
-    d = load_data("D13", source="zar_2010")
-    c0 = Circular(
-        data=d[d["sample"] == 1]["θ"].values, w=d[d["sample"] == 1]["w"].values
-    )
-    c1 = Circular(
-        data=d[d["sample"] == 2]["θ"].values, w=d[d["sample"] == 2]["w"].values
-    )
-    U2, pval = watson_u2_test([c0, c1])
+#     d = load_data("D13", source="zar_2010")
+#     c0 = Circular(
+#         data=d[d["sample"] == 1]["θ"].values, w=d[d["sample"] == 1]["w"].values
+#     )
+#     c1 = Circular(
+#         data=d[d["sample"] == 2]["θ"].values, w=d[d["sample"] == 2]["w"].values
+#     )
+#     U2, pval = watson_u2_test([c0, c1])
 
-    np.testing.assert_approx_equal(U2, 0.0612, significant=3)
-    assert pval > 0.5
+#     np.testing.assert_approx_equal(U2, 0.0612, significant=3)
+#     assert pval > 0.5
 
 
-def test_wheeler_watson_test():
-    pass
+# def test_wheeler_watson_test():
+#     pass

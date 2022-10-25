@@ -10,12 +10,38 @@ from .hypothesis import rayleigh_test
 from .utils import data2rad, rad2data, significance_code
 from .visualization import circ_plot
 
+__names__ = ["Circular"]
+
+# Proposal: Automatic circular data analaysis pipeline
+#
+# Circstat(data)
+# |-> MoVM (BIC-based clustering)
+# |     |-> Single Cluster
+# |     |       | -> Cicular(data)
+# |     |-> Multiple Clusters
+# |     |       | -> Two Clusters: if means are 180 degree seperated
+# |     |       |       | -> Axial(data) (TODO)
+# |     |       | -> Multiple Clusters:
+# |     |       |       | -> list of Circular(data_cluster)
+# |     |       |               | -> MoMeans(list of Circular)
+# |     |       |       | -> Circular(data) (aggregate no matter what)
+
+
+class CircStat:
+
+    """
+    An automatic pipeline for circular data analysis.
+    """
+
+    pass
+
 
 class Circular:
 
     """
-    An Object to hold circular data.
-    Sufficient statistics were computed automatically when data are loaded.
+    An Object to hold one set of circular data.
+    Simple descriptive statistics and hypothesis testing were
+    computed automatically when data are loaded.
 
     Parameters
     ----------
@@ -52,15 +78,18 @@ class Circular:
         bins: Union[int, np.array, None] = None,
         unit: str = "degree",
         n_intervals: Union[int, float] = 360,  # number of intervals in the full cycle
-        n_clusters: int = 4,  # number of clusters to be tested for mixture of von Mises
-        kwargs_median={"method": "deviation"},
-        kwargs_mean_ci=None,
+        n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
+        **kwargs,
     ):
 
         # meta
         self.unit = unit
         self.n_intervals = n_intervals
-        self.kwargs_median = kwargs_median
+        self.n_clusters_max = n_clusters_max
+        self.kwargs_median = kwargs_median = kwargs.pop(
+            "kwargs_median", {"method": "deviation"}
+        )
+        self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop("kwargs_mean_ci", None)
 
         # data
         self.data = np.array(data) if isinstance(data, list) else data
@@ -113,7 +142,7 @@ class Circular:
 
         # confidence interval for angular mean
         # in practice, the equations for mean ci for 8 <= n <= 12 can still yield nan
-        if kwargs_mean_ci is None:
+        if self.kwargs_mean_ci is None:
             if not np.isclose(self.r, 0) and (8 <= self.n < 25):
                 # Approximate ci for mean of a von Mises distribution (Upton, 1986)
                 self.method_mean_ci = method_mean_ci = "bootstrap"
@@ -160,16 +189,16 @@ class Circular:
             ) = circ_median_ci(median=median, alpha=alpha)
 
         # check multimodality
-        self.clusters = []
-        for k in range(1, n_clusters):
-            m = MoVM()
-            m.fit(np.repeat(alpha, w), n_clusters=k, unit="radian", random_seed=0)
-            self.clusters.append(m)
-        self.clusters_BIC = [c.BIC()[0] for c in self.clusters]
-        if not np.isnan(self.clusters_BIC).all():
-            self.clusters_opt = self.clusters[np.nanargmin(self.clusters_BIC)]
+        self.mixtures = []
+        for k in range(1, n_clusters_max + 1):
+            m = MoVM(n_clusters=k, n_intervals=n_intervals, unit=unit, random_seed=0)
+            m.fit(np.repeat(data, w))
+            self.mixtures.append(m)
+        self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
+        if not np.isnan(self.mixtures_BIC).all():
+            self.mixture_opt = self.mixtures[np.nanargmin(self.mixtures_BIC)]
         else:
-            self.clusters_opt = None
+            self.mixture_opt = None
 
     def __repr__(self):
 
@@ -182,11 +211,11 @@ class Circular:
         docs += "Summary\n"
         docs += "-------\n"
         docs += f"  Grouped?: Yes\n" if self.grouped else f"  Grouped?: No\n"
-        if self.clusters_opt is not None:
+        if self.mixture_opt is not None:
             docs += (
                 f"  Unimodal?: Yes \n"
-                if len(self.clusters_opt.m) == 1
-                else f"  Unimodal?: No (n_clusters={len(self.clusters_opt.m)}) \n"
+                if len(self.mixture_opt.m) == 1
+                else f"  Unimodal?: No (n_clusters={len(self.mixture_opt.m)}) \n"
             )
 
         docs += f"  Unit: {unit}\n"
@@ -197,7 +226,7 @@ class Circular:
         else:
             docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ( p={self.mean_pval:.04f} {significance_code(self.mean_pval)} ) \n"
 
-        if hasattr(self, "mean_lb"):
+        if hasattr(self, "mean_lb") and not np.isnan(self.mean_lb):
             docs += f"  Angular mean CI: {rad2data(self.mean_lb, k=k):.02f} - {rad2data(self.mean_ub, k=k):.02f}\n"
 
         docs += f"  Angular median: {rad2data(self.median, k=k):.02f} \n"
@@ -207,6 +236,7 @@ class Circular:
         docs += f"  Angular deviation (s): {rad2data(self.s, k=k):.02f} \n"
         docs += f"  Circular standard deviation (s0): {rad2data(self.s0, k=k):.02f} \n"
         docs += f"  Concentration (r): {self.r:0.2f}\n"
+        docs += f"  Concentration (kappa): {self.kappa:0.2f}\n"
 
         docs += f"\n"
 
