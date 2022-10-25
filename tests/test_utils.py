@@ -1,6 +1,6 @@
 import numpy as np
 
-from pycircstat2.utils import angrange, data2rad, rad2data, time2float
+from pycircstat2.utils import angrange, angular_distance, data2rad, rad2data, time2float
 
 
 def test_data2rad():
@@ -38,3 +38,16 @@ def test_angrange():
 def test_time2float():
 
     np.testing.assert_almost_equal(time2float("6:15"), 6.25)
+
+
+def test_angular_distance():
+
+    np.testing.assert_almost_equal(
+        np.rad2deg(angular_distance(np.deg2rad(95), np.deg2rad(120))).round(3), 25
+    )
+    np.testing.assert_almost_equal(
+        np.rad2deg(angular_distance(np.deg2rad(340), np.deg2rad(30))).round(3), 50
+    )
+    np.testing.assert_almost_equal(
+        np.rad2deg(angular_distance(np.deg2rad(190), np.deg2rad(5))).round(3), 175
+    )

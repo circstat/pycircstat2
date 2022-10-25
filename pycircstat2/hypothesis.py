@@ -6,6 +6,10 @@ from scipy.stats import f, norm, wilcoxon
 from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median
 from .utils import angrange
 
+#####################
+## One-Sample Test ##
+#####################
+
 
 def rayleigh_test(
     alpha: Union[np.ndarray, None] = None,
@@ -17,11 +21,11 @@ def rayleigh_test(
     """
     Rayleigh's Test for Circular Uniformity.
 
-    For method is for ungrouped data. For testing uniformity with
-    grouped data, use scipy.stats.chisquare().
-
     H0: The data in the population are distributed uniformly around the circle.
     H1: THe data in the population are not disbutrited uniformly around the circle.
+
+    For method is for ungrouped data. For testing uniformity with
+    grouped data, use scipy.stats.chisquare().
 
     Parameters
     ----------
@@ -45,6 +49,10 @@ def rayleigh_test(
 
     p: float
         P value from Rayleigh's Test.
+
+    Reference
+    ---------
+    P625, Section 27.1, Example 27.1 of Zar, 2010
     """
 
     if r is None:
@@ -70,10 +78,10 @@ def chisquare_test(w: np.ndarray):
 
     """Chi-Square Goodness of Fit for Circular data.
 
-    For method is for grouped data.
-
     H0: The data in the population are distributed uniformly around the circle.
     H1: THe data in the population are not disbutrited uniformly around the circle.
+
+    For method is for grouped data.
 
     Parameter
     ---------
@@ -90,6 +98,10 @@ def chisquare_test(w: np.ndarray):
     Note
     ----
     It's a wrapper of scipy.stats.chisquare()
+
+    Reference
+    ---------
+    P662-663, Section 27.17, Example 27.23 of Zar, 2010
     """
     from scipy.stats import chisquare
 
@@ -107,16 +119,19 @@ def V_test(
     mean: float = None,
     r: float = None,
     n: int = None,
-    unit: str = "degree",
 ) -> tuple:
 
     """
     Modified Rayleigh Test for Uniformity versus a Specified Angle.
 
+    H0: The population is uniformly distributed around the circle (i.e., H0: ρ=0)
+    H1: The population is not uniformly distributed around the circle (i.e., H1: ρ!=0),
+        but has a mean of 90 degree.
+
     Parameters
     ----------
     angle: float or int
-        Angle (in radian or degree) to be compared with mean angle.
+        Angle in radian to be compared with mean angle.
 
     alpha: np.array or None
         Angles in radian.
@@ -133,10 +148,6 @@ def V_test(
     n: int or None
         Sample size. Needed if `alpha` is None.
 
-    unit: str
-        Radian or degree. Default is degree,
-        which will be converted to radian.
-
     Returns
     -------
 
@@ -146,6 +157,10 @@ def V_test(
         U value from modified Rayleigh's test.
     p: float
         P value from modified Rayleigh's test.
+
+    Reference
+    ---------
+    P627, Section 27.1, Example 27.2 of Zar, 2010
     """
 
     if mean is None or r is None or n is None:
@@ -156,11 +171,6 @@ def V_test(
             w = np.ones_like(alpha)
         n = np.sum(w)
         mean, r = circ_mean(alpha, w)
-
-    if unit == "radian":
-        angle = angle
-    elif unit == "degree":
-        angle = np.deg2rad(angle)
 
     R = n * r
     V = R * np.cos(mean - angle)  # eq(27.5)
@@ -176,17 +186,20 @@ def one_sample_test(
     w: Union[np.ndarray, None] = None,
     lb: float = None,
     ub: float = None,
-    unit: str = "degree",
 ) -> bool:
 
     """
-    To test wheter the population mean angle is equal to a specified value.
+    To test wheter the population mean angle is equal to a specified value,
+    which is achieved by observing whether the angle lies within the 95% CI.
+
+    H0: The population has a mean of μ
+    H1: The population mean is not μ
 
     Parameters
     ----------
 
     angle: float or int
-        Angle (in radian or degree) to be compared with mean angle.
+        Angle in radian to be compared with mean angle.
 
     alpha: np.array or None
         Angles in radian.
@@ -208,6 +221,10 @@ def one_sample_test(
     ------
     reject: bool
         Reject or not reject the null hypothesis.
+
+    Reference
+    ---------
+    P628, Section 27.1, Example 27.3 of Zar, 2010
     """
 
     if lb is None or ub is None:
@@ -218,11 +235,6 @@ def one_sample_test(
             w = np.ones_like(alpha)
         lb, ub = circ_mean_ci(alpha=alpha, w=w)
 
-    if unit == "radian":
-        angle = angle
-    elif unit == "degree":
-        angle = np.deg2rad(angle)
-
     if lb < angle < ub:
         reject = False  # not able reject null (mean angle == angle)
     else:
@@ -232,12 +244,13 @@ def one_sample_test(
 
 
 def omnibus_test(
-    alpha: np.ndarray, precision: float = 1.0, unit: str = "degree"
+    alpha: np.ndarray,
+    scale: int = 1,
 ) -> float:
 
     """
-    A simple alternative to the Rayleigh test, aka Hodge-Ajne test,
-    which does notassume sampling from a specific distribution. This
+    A simple alternative to the Rayleigh test, aka Hodges-Ajne test,
+    which does not assume sampling from a specific distribution. This
     is called an "omnibus test" because it works well for unimodal,
     bimodal, and multimodal distributions (for ungrouped data).
 
@@ -249,23 +262,20 @@ def omnibus_test(
     alpha: np.array or None
         Angles in radian.
 
-    precision: float
-        lines to be tested in degree.
-
-    degree: str
-        `radian` or `degree`. Default is `degree`
+    scale: int
+        Scale factor for the number of lines to be tested.
 
     Return
     ------
     pval: float
         p-value.
+
+    Reference
+    ---------
+    P629-630, Section 27.2, Example 27.4 of Zar, 2010
     """
 
-    if unit == "radian":
-        lines = np.arange(0, np.pi, precision)
-    elif unit == "degree":
-        lines = np.deg2rad(np.arange(0, 180.0, precision))
-
+    lines = np.linspace(0, np.pi, scale * 360)
     n = len(alpha)
 
     lines_rotated = angrange((lines[:, None] - alpha)).round(5)
@@ -288,14 +298,14 @@ def omnibus_test(
 def batschelet_test(
     angle: float,
     alpha: np.ndarray,
-    unit: str = "degree",
 ) -> float:
 
     """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
     (for ungrouped data).
 
-    A nonparametric test for circular uniformity against a specified angle
-    by Batschelet (1981)
+    H0: The population is uniformly distributed around the circle.
+    H1: The population is not uniformly distributed around the circle, but
+        is concentrated around a specified angle.
 
     Parameters
     ----------
@@ -309,14 +319,15 @@ def batschelet_test(
     ------
     pval: float
         p-value
+
+    Reference
+    ---------
+    P630-631, Section 27.2, Example 27.5 of Zar, 2010
     """
 
     from scipy.stats import binom_test
 
-    if unit == "radian":
-        angle = angle
-    elif unit == "degree":
-        angle = np.deg2rad(angle)
+    angle = angle
 
     n = len(alpha)
     angle_diff = angrange(((angle + 0.5 * np.pi) - alpha)).round(5)
@@ -350,6 +361,10 @@ def symmetry_test(
     ------
     pval: float
         p-value
+
+    Reference
+    ---------
+    P631-632, Section 27.3, Example 27.6 of Zar, 2010
     """
 
     if median is None:
@@ -359,6 +374,11 @@ def symmetry_test(
     pval = wilcoxon(d, alternative="two-sided").pvalue
 
     return pval
+
+
+###########################
+## Two/Multi-Sample Test ##
+###########################
 
 
 def watson_williams_test(circs: list) -> tuple:
@@ -380,6 +400,10 @@ def watson_williams_test(circs: list) -> tuple:
 
     pval: float
         p-value
+
+    Reference
+    ---------
+    P632-636, Section 27.4, Example 27.7/8 of Zar, 2010
     """
 
     k = len(circs)
@@ -402,3 +426,88 @@ def watson_williams_test(circs: list) -> tuple:
     pval = f.sf(F, k - 1, N - k)
 
     return F, pval
+
+
+def watson_u2_test(circs: list) -> tuple:
+
+    """Watson's U2 Test for nonparametric two-sample testing
+    (with or without ties).
+
+    H0: The two samples came from the same population,
+        or from two populations having the same direction.
+    H1: The two samples did not come from the same population,
+        or from two populations having the same directions.
+
+    Use this instead of Watson-Williams two-sample test when at
+    least one of the sampled populations is not unimodal or when
+    there are other considerable departures from the assumptions
+    of the latter test. It may be used on grouped data if the
+    grouping interval is no greater than 5 degree.
+
+    Parameter
+    ---------
+    circs: list
+        A list of Circular objects.
+
+    Returns
+    -------
+    U2: float
+        U2 value
+    pval: float
+        p value
+
+    Reference
+    ---------
+    P637-638, Section 27.5, Example 27.9 of Zar, 2010
+    P639-640, Section 27.5, Example 27.10 of Zar, 2010
+    """
+
+    from scipy.stats import rankdata
+
+    def cumfreq(alpha, circ):
+
+        indices = np.squeeze(
+            [np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)]
+        )
+        indices = np.hstack([0, indices, len(alpha)])
+        freq_cumsum = rankdata(np.repeat(circ.alpha, circ.w), method="max") / circ.n
+        freq_cumsum = np.hstack([0, freq_cumsum])
+
+        tiles = np.diff(indices)
+        cf = np.repeat(freq_cumsum, tiles)
+
+        return cf
+
+    a, t = np.unique(
+        np.hstack([np.repeat(c.alpha, c.w) for c in circs]), return_counts=True
+    )
+    cfs = [cumfreq(a, c) for c in circs]
+    d = np.diff(cfs, axis=0)
+
+    N = np.sum([c.n for c in circs])
+    U2 = (
+        np.prod([c.n for c in circs])
+        / N**2
+        * (np.sum(t * d**2) - np.sum(t * d) ** 2 / N)
+    )
+    pval = 2 * np.exp(-19.74 * U2)
+    # Approximated P-value from Watson (1961)
+    # https://github.com/pierremegevand/watsons_u2/blob/master/watsons_U2_approx_p.m
+
+    return U2, pval
+
+
+def wheeler_watson_test():
+    """The Wheeler and Watson Two/Multi-Sample Test.
+
+    H0: The two samples came from the same population,
+        or from two populations having the same direction.
+    H1: The two samples did not come from the same population,
+        or from two populations having the same directions.
+
+
+    Reference
+    ---------
+    P640-642, Section 27.5, Example 27.11 of Zar, 2010
+    """
+    raise NotImplementedError

@@ -32,6 +32,32 @@ def angrange(rad: Union[np.ndarray, float, int]) -> Union[np.ndarray, float]:
     return ((rad % (2 * np.pi)) + 2 * np.pi) % (2 * np.pi)
 
 
+def angular_distance(a, b):
+
+    """Angular distance between two angles.
+
+    Parameters
+    ----------
+    a, b: floats
+        two angles.
+
+    Return
+    ------
+    e: float
+        angular distance
+
+    Reference
+    ---------
+    P642, Section 27.2, Zar, 2010
+    """
+
+    c = angrange(a - b)
+    d = 2 * np.pi - c
+    e = np.min([c, d])
+
+    return e
+
+
 def significance_code(p: float) -> str:
     if p < 0.001:
         sig = "***"
