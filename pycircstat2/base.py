@@ -92,7 +92,7 @@ class Circular:
         self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop("kwargs_mean_ci", None)
 
         # data
-        self.data = np.array(data) if isinstance(data, list) else data
+        self.data = data = np.array(data) if isinstance(data, list) else data
         self.alpha = alpha = data2rad(data, n_intervals)
 
         # data preprocessing
@@ -211,7 +211,7 @@ class Circular:
         docs += "Summary\n"
         docs += "-------\n"
         docs += f"  Grouped?: Yes\n" if self.grouped else f"  Grouped?: No\n"
-        if self.mixture_opt is not None:
+        if self.n_clusters_max > 1 and self.mixture_opt is not None:
             docs += (
                 f"  Unimodal?: Yes \n"
                 if len(self.mixture_opt.m) == 1

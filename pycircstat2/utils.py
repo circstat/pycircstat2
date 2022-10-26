@@ -32,18 +32,21 @@ def angrange(rad: Union[np.ndarray, float, int]) -> Union[np.ndarray, float]:
     return ((rad % (2 * np.pi)) + 2 * np.pi) % (2 * np.pi)
 
 
-def angular_distance(a, b):
+def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
 
     """Angular distance between two angles.
 
     Parameters
     ----------
-    a, b: floats
-        two angles.
+    a: np.ndarray or float
+        angle(s).
+
+    b: float
+        target angle.
 
     Return
     ------
-    e: float
+    e: np.ndarray
         angular distance
 
     Reference
@@ -51,9 +54,11 @@ def angular_distance(a, b):
     P642, Section 27.2, Zar, 2010
     """
 
+    a = np.array(a) if type(a) is list else a
+
     c = angrange(a - b)
     d = 2 * np.pi - c
-    e = np.min([c, d])
+    e = np.min([c, d], axis=0)
 
     return e
 

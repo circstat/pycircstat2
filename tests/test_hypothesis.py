@@ -8,6 +8,7 @@ from pycircstat2.hypothesis import (
     one_sample_test,
     rayleigh_test,
     symmetry_test,
+    wallraff_test,
     watson_u2_test,
     watson_williams_test,
     wheeler_watson_test,
@@ -167,3 +168,13 @@ def test_wheeler_watson_test():
     W, pval = wheeler_watson_test([c0, c1])
     np.testing.assert_approx_equal(W, 3.678, significant=3)
     assert 0.1 < pval < 0.25
+
+
+def test_wallraff_test():
+
+    d = load_data("D14", source="zar_2010")
+    c0 = Circular(data=d[d["sex"] == "male"]["θ"].values)
+    c1 = Circular(data=d[d["sex"] == "female"]["θ"].values)
+    U, pval = wallraff_test(angle=np.deg2rad(135), circs=[c0, c1])
+    np.testing.assert_approx_equal(U, 18.5, significant=3)
+    assert pval > 0.20

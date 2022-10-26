@@ -1,10 +1,10 @@
 from typing import Union
 
 import numpy as np
-from scipy.stats import f, norm, wilcoxon
+from scipy.stats import f, norm, rankdata, wilcoxon
 
 from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median
-from .utils import angrange
+from .utils import angrange, angular_distance
 
 #####################
 ## One-Sample Test ##
@@ -561,3 +561,31 @@ def wheeler_watson_test(circs):
     pval = chi2.sf(W, df=2 * (k - 1))
 
     return W, pval
+
+
+def wallraff_test(circs: list, angle=float):
+
+    """Wallraff test of angular distances against a specified angle."""
+
+    assert (
+        len(circs) == 2
+    ), "Current implementation only supports two-sample comparision."
+
+    angles = np.ones(len(circs)) * angle if isinstance(angle, float) else angle
+    ns = [c.n for c in circs]
+    ad = [angular_distance(a=c.alpha, b=angles[i]) for (i, c) in enumerate(circs)]
+
+    rs = rankdata(np.hstack(ad))
+
+    N = np.sum(ns)
+
+    # mann-whitney
+    R1 = np.sum(rs[: ns[0]])
+    U1 = np.prod(ns) + ns[0] * (ns[0] + 1) / 2 - R1
+    U2 = np.prod(ns) - U1
+    U = np.min([U1, U2])
+
+    z = (U - np.prod(ns) / 2 + 0.5) / np.sqrt(np.prod(ns) * (N + 1) / 12)
+    pval = 2 * norm.cdf(z)
+
+    return U, pval
