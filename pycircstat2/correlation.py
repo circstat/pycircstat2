@@ -1,7 +1,7 @@
 from typing import Type, Union
 
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import norm, rankdata
 
 from .base import Circular
 from .descriptive import circ_mean
@@ -19,27 +19,34 @@ def aacorr(
 
     elif method == "js":  # Jammalamadaka & SenGupta (2001)
         _corr = _aacorr_js
+    elif method == "nonparametric":
+        _corr = _aacorr_np
 
     r = _corr(a, b)
 
     if test:
-
         if isinstance(a, Circular):
             a = a.alpha
         if isinstance(b, Circular):
             b = b.alpha
         assert len(a) == len(b), "`a` and `b` must be the same length."
 
-        # jackknife test (Fingleton, 1989)
-        n = len(a)
-        raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
-        m_raas = np.mean(raas)
-        s2_raas = np.var(raas, ddof=1)
-        z = norm.ppf(0.975)
-        lb = n * r - (n - 1) * m_raas - z * np.sqrt(s2_raas / n)
-        ub = n * r - (n - 1) * m_raas + z * np.sqrt(s2_raas / n)
+        if method == "nonparametric":
+            # assuming α=0.05, critical values from P661, Zar, 2010
+            n = len(a)
+            reject = (n - 1) * r > 2.99 + 2.16 / n
+        else:
 
-        reject = ~(lb <= 0 <= ub)
+            # jackknife test (Fingleton, 1989)
+            n = len(a)
+            raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
+            m_raas = np.mean(raas)
+            s2_raas = np.var(raas, ddof=1)
+            z = norm.ppf(0.975)
+            lb = n * r - (n - 1) * m_raas - z * np.sqrt(s2_raas / n)
+            ub = n * r - (n - 1) * m_raas + z * np.sqrt(s2_raas / n)
+
+            reject = ~(lb <= 0 <= ub)
 
         return r, reject
     else:
@@ -131,6 +138,36 @@ def _aacorr_js(
 
     raa = num / den
     return raa
+
+
+def _aacorr_np(
+    a: Union[Type[Circular], np.ndarray],
+    b: Union[Type[Circular], np.ndarray],
+) -> float:
+    """Nonparametric angular-angular correlation."""
+
+    if isinstance(a, Circular):
+        a = a.alpha
+    if isinstance(b, Circular):
+        b = b.alpha
+    assert len(a) == len(b), "`a` and `b` must be the same length."
+
+    n = len(a)
+    C = 2 * np.pi / n
+
+    rank_a = rankdata(a)
+    rank_b = rankdata(b)
+    rank_diff = rank_a - rank_b
+    rank_sum = rank_a + rank_b
+
+    r1 = (
+        np.sum(np.cos(C * rank_diff)) ** 2 + np.sum(np.sin(C * rank_diff)) ** 2
+    ) / n**2
+    r2 = (
+        np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2
+    ) / n**2
+
+    return r1 - r2
 
 
 def alcorr(
