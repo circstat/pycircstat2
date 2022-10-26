@@ -1,0 +1,16 @@
+{
+    "Description": "For a population of birds sampled, we wish to correlate the direction toward which they attempt to fly in the morning with that in the evening.",
+    "Examples": "27.22",
+    "Columns": {
+        "evening": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "morning": {
+            "name": "direction",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}
