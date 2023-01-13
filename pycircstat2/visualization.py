@@ -2,8 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import ticker
 
-from pycircstat2.descriptive import (circ_mean, compute_smooth_params,
-                                     nonparametric_density_estimation)
+from pycircstat2.descriptive import (
+    circ_mean,
+    compute_smooth_params,
+    nonparametric_density_estimation,
+)
 
 
 def circ_plot(
@@ -26,8 +29,8 @@ def circ_plot(
     plot_axis = kwargs.pop("plot_axis", True)
 
     plot_density = kwargs.pop("plot_density", True)
-    density_kwargs = kwargs.pop(
-        "density_kwargs",
+    kwargs_density = kwargs.pop(
+        "kwargs_density",
         {
             "method": "nonparametric",
         },
@@ -75,7 +78,7 @@ def circ_plot(
     if circ_data.grouped is not True:
 
         # plot scatter
-        alpha, counts = np.unique(circ_data.alpha, return_counts=True)
+        alpha, counts = np.unique(circ_data.alpha.round(3), return_counts=True)
         alpha = np.repeat(alpha, counts)
 
         if outward:
@@ -98,19 +101,19 @@ def circ_plot(
         # plot density
         if plot_density and not np.isclose(circ_data.r, 0):
 
-            if density_kwargs["method"] == "nonparametric":
-                h0 = density_kwargs.pop(
+            if kwargs_density["method"] == "nonparametric":
+                h0 = kwargs_density.pop(
                     "h0", compute_smooth_params(circ_data.r, circ_data.n)
                 )
                 x, f = nonparametric_density_estimation(circ_data.alpha, h0, 1.05)
 
-            elif density_kwargs["method"] == "MoVM":
+            elif kwargs_density["method"] == "MoVM":
                 x = np.linspace(0, 2 * np.pi, 100)
                 f = circ_data.mixture_opt.predict_density(x=x, unit="radian") + 1.05
 
             else:
                 raise ValueError(
-                    f"`{density_kwargs['method']}` in `density_kwargs` is not supported."
+                    f"`{kwargs_density['method']}` in `kwargs_density` is not supported."
                 )
 
             ax.plot(x, f, color="black", linestyle="-")

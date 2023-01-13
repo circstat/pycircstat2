@@ -4,8 +4,14 @@ import numpy as np
 import pandas as pd
 
 from .clustering import MoVM
-from .descriptive import (circ_kappa, circ_mean, circ_mean_ci, circ_median,
-                          circ_median_ci, circ_std)
+from .descriptive import (
+    circ_kappa,
+    circ_mean,
+    circ_mean_ci,
+    circ_median,
+    circ_median_ci,
+    circ_std,
+)
 from .hypothesis import rayleigh_test
 from .utils import data2rad, rad2data, significance_code
 from .visualization import circ_plot
@@ -84,7 +90,12 @@ class Circular:
 
         # meta
         self.unit = unit
-        self.n_intervals = n_intervals
+        if unit == "degree":
+            self.n_intervals = 360
+        elif unit == "radian":
+            self.n_intervals = 2 * np.pi
+        else:
+            self.n_intervals = n_intervals
         self.n_clusters_max = n_clusters_max
         self.kwargs_median = kwargs_median = kwargs.pop(
             "kwargs_median", {"method": "deviation"}
