@@ -4,6 +4,7 @@ from pycircstat2 import Circular, load_data
 from pycircstat2.hypothesis import (
     V_test,
     batschelet_test,
+    kuiper_test,
     omnibus_test,
     one_sample_test,
     rayleigh_test,
@@ -178,3 +179,11 @@ def test_wallraff_test():
     U, pval = wallraff_test(angle=np.deg2rad(135), circs=[c0, c1])
     np.testing.assert_approx_equal(U, 18.5, significant=3)
     assert pval > 0.20
+
+
+def test_kuiper_test():
+
+    d = load_data("B5", source="fisher_1993")["θ"].values
+    c = Circular(data=d, unit="degree", n_intervals=180)
+    V, p = kuiper_test(c.alpha)
+    np.testing.assert_approx_equal(V, 1.5864, significant=3)

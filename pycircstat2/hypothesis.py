@@ -24,8 +24,8 @@ def rayleigh_test(
     H0: The data in the population are distributed uniformly around the circle.
     H1: THe data in the population are not disbutrited uniformly around the circle.
 
-    For method is for ungrouped data. For testing uniformity with
-    grouped data, use scipy.stats.chisquare().
+    This method is for ungrouped data. For testing uniformity with
+    grouped data, use chisquare_test() or scipy.stats.chisquare().
 
     Parameters
     ----------
@@ -589,3 +589,79 @@ def wallraff_test(circs: list, angle=float):
     pval = 2 * norm.cdf(z)
 
     return U, pval
+
+
+def kuiper_test(alpha: np.ndarray, pvalue:str = "critical") -> tuple:
+
+    """
+    Kuiper's test for Circular Uniformity.
+
+    H0: The data in the population are distributed uniformly around the circle.
+    H1: THe data in the population are not disbutrited uniformly around the circle.
+
+    This method is for ungrouped data.
+
+    Parameters
+    ----------
+
+    alpha: np.array or None
+        Angles in radian.
+
+    pvalue: str
+        Method for computing p-value. Either `critical` or `asymptotic`.
+        Noted that the Vs and p-values of these two methods are slightly different.
+    """
+
+    alpha = np.sort(alpha) / (2 * np.pi)  #
+    n = len(alpha)
+    i = np.arange(0, n)
+
+    if pvalue == "critical":
+
+        # Implementation from R package `Circular`
+        # https://rdrr.io/cran/circular/src/R/kuiper.test.R
+        # see also Birch (2018) An Examination of the Kuiper Test
+        # for potential pitfalls.
+
+        f = np.sqrt(n) + 0.155 + 0.24 / np.sqrt(n)
+        Dplus = np.max(i / n - alpha)
+        Dminus = np.max(alpha - (i - 1) / n)
+        V = f * (Dplus + Dminus)
+
+        if V < 1.537:
+            p = "pval > 0.15"
+        elif V < 1.62:
+            p = "0.10 < P-value < 0.15"
+        elif V < 1.747:
+            p = "0.05 < P-value < 0.10"
+        elif V < 1.862:
+            p = "0.025 < P-value < 0.05"
+        elif V < 2.001:
+            p = "0.01 < P-value < 0.025"
+        else:
+            p = "P-value < 0.01"
+
+    elif pvalue == "asymptotic":
+
+        # Implementation from R package `Directional`
+        # https://rdrr.io/cran/Directional/src/R/kuiper.R
+
+        f = np.sqrt(n)
+        Dplus = np.max(i / n - alpha)
+        Dminus = np.max(alpha - (i - 1) / n)
+        V = f * (Dplus + Dminus)
+
+        # asympototic p-value
+        m = np.arange(1, 50) ** 2
+        a1 = 4 * m * V**2
+        a2 = np.exp(-2 * m * V**2)
+        b1 = 2 * (a1 - 1) * a2
+        b2 = 8 * V / (3 * f) * m * (a1 - 3) * a2
+        p = np.sum(b1 - b2)
+
+    else:
+        raise ValueError(
+            "Argmument `pvalue` should be either `critical` or `asymptotic`."
+        )
+
+    return V, p
