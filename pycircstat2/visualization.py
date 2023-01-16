@@ -19,8 +19,10 @@ def circ_plot(
     outward = kwargs.pop("outward", True)
     figsize = kwargs.pop("figsize", (8, 8))
     projection = kwargs.pop("projection", "polar")
-    marker_color = kwargs.pop("marker_color", "black")
     marker = kwargs.pop("marker", "o")
+    marker_color = kwargs.pop("marker_color", "black")
+    marker_size = kwargs.pop("marker_size", 10)
+    
     bins = kwargs.pop("bins", 12)
 
     plot_rlabel = kwargs.pop("plot_rlabel", False)
@@ -75,7 +77,7 @@ def circ_plot(
         ax = fig.add_subplot(projection=projection)
 
     # plot
-    if circ_data.grouped is not True:
+    if not circ_data.grouped:
 
         # plot scatter
         alpha, counts = np.unique(circ_data.alpha.round(3), return_counts=True)
@@ -91,33 +93,37 @@ def circ_plot(
         else:
             radii = np.hstack(
                 [
-                    rticks[1] + 0.05 - np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
+                    rticks[1] - 0.05 - np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
                     for f in counts
                 ]
             )
-
-        ax.scatter(alpha, radii, color=marker_color, marker=marker)
+        ax.scatter(alpha, radii, color=marker_color, marker=marker, s=marker_size)
 
         # plot density
-        if plot_density and not np.isclose(circ_data.r, 0):
+        if plot_density:  # and not np.isclose(circ_data.r, 0):
 
             if kwargs_density["method"] == "nonparametric":
                 h0 = kwargs_density.pop(
                     "h0", compute_smooth_params(circ_data.r, circ_data.n)
                 )
-                x, f = nonparametric_density_estimation(circ_data.alpha, h0, 1.05)
+                x, f = nonparametric_density_estimation(circ_data.alpha, h0)
 
             elif kwargs_density["method"] == "MoVM":
+
                 x = np.linspace(0, 2 * np.pi, 100)
-                f = circ_data.mixture_opt.predict_density(x=x, unit="radian") + 1.05
+                f = circ_data.mixture_opt.predict_density(x=x, unit="radian")
 
             else:
                 raise ValueError(
                     f"`{kwargs_density['method']}` in `kwargs_density` is not supported."
                 )
 
-            ax.plot(x, f, color="black", linestyle="-")
-            ax.set_ylim(0, f.max())
+            # save density to circ_data
+            circ_data.density_x = x
+            circ_data.density_f = f
+            f_ = f + 1.05 # add the radius of the plotted circle
+            ax.plot(x, f_, color="black", linestyle="-")
+            ax.set_ylim(0, f_.max())
         else:
             ax.set_ylim(0, radii.max() + 0.025)
 
@@ -175,8 +181,8 @@ def circ_plot(
             zorder=5,
         )
 
-    if plot_mean_ci is True:
-
+    if plot_mean and plot_mean_ci:
+        
         if circ_data.mean_lb < circ_data.mean_ub:
             x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub, num=50)
         else:
@@ -205,7 +211,7 @@ def circ_plot(
             zorder=5,
         )
 
-    if plot_median_ci is True:
+    if plot_median and plot_median_ci:
         if circ_data.median_lb < circ_data.median_ub:
             x1 = np.linspace(circ_data.median_lb, circ_data.median_ub, num=50)
         else:
@@ -235,7 +241,7 @@ def circ_plot(
     if circ_data.unit == "hour":
         position_major = np.arange(0, 2 * np.pi, 2 * np.pi / 8)
         position_minor = np.arange(0, 2 * np.pi, 2 * np.pi / 24)
-        labels = [f"{i}:00" for i in np.arange(0, circ_data.k, 3)]
+        labels = [f"{i}:00" for i in np.arange(0, circ_data.n_intervals, 3)]
         ax.xaxis.set_major_locator(ticker.FixedLocator(position_major))
         ax.xaxis.set_minor_locator(ticker.FixedLocator(position_minor))
         ax.xaxis.set_major_formatter(ticker.FixedFormatter(labels))

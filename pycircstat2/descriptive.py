@@ -545,6 +545,7 @@ def _circ_mean_ci_dispersion(
         raise ValueError(
             f"n={n} is too small (< 25) for computing CI with circular dispersion."
         )
+    # TODO: sometime return nan because x is larger than 1.
     d = np.arcsin(
         np.sqrt(circ_dispersion(alpha=alpha, w=w, mean=mean) / n)
         * norm.ppf(1 - 0.5 * (1 - ci))
@@ -856,14 +857,15 @@ def nonparametric_density_estimation(
 
     # vectorized version of step 3
     a = alpha
+    n = len(a)
     x = np.linspace(0, 2 * np.pi, 100)
     d = np.abs(x[:, None] - a)
     e = np.minimum(d, 2 * np.pi - d)
     e = np.minimum(e, h)
     sum = np.sum((1 - e**2 / h**2) ** 2, 1)
-    f = 0.9375 * sum / len(a) / h
+    f = 0.9375 * sum / n / h
 
-    f = radius * np.sqrt(1 + np.pi * f)
+    f = radius * np.sqrt(1 + np.pi * f) - radius
 
     return x, f
 

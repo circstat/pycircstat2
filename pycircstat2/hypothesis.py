@@ -591,7 +591,7 @@ def wallraff_test(circs: list, angle=float):
     return U, pval
 
 
-def kuiper_test(alpha: np.ndarray, pvalue:str = "critical") -> tuple:
+def kuiper_test(alpha: np.ndarray, pvalue: str = "critical") -> tuple:
 
     """
     Kuiper's test for Circular Uniformity.
@@ -614,7 +614,7 @@ def kuiper_test(alpha: np.ndarray, pvalue:str = "critical") -> tuple:
 
     alpha = np.sort(alpha) / (2 * np.pi)  #
     n = len(alpha)
-    i = np.arange(0, n)
+    i = np.arange(1, n + 1)
 
     if pvalue == "critical":
 
@@ -623,10 +623,10 @@ def kuiper_test(alpha: np.ndarray, pvalue:str = "critical") -> tuple:
         # see also Birch (2018) An Examination of the Kuiper Test
         # for potential pitfalls.
 
+        D_plus = np.max(i / n - alpha)
+        D_minus = np.max(alpha - (i - 1) / n)
         f = np.sqrt(n) + 0.155 + 0.24 / np.sqrt(n)
-        Dplus = np.max(i / n - alpha)
-        Dminus = np.max(alpha - (i - 1) / n)
-        V = f * (Dplus + Dminus)
+        V = f * (D_plus + D_minus)
 
         if V < 1.537:
             p = "pval > 0.15"
@@ -646,10 +646,10 @@ def kuiper_test(alpha: np.ndarray, pvalue:str = "critical") -> tuple:
         # Implementation from R package `Directional`
         # https://rdrr.io/cran/Directional/src/R/kuiper.R
 
+        D_plus = np.max(i / n - alpha)
+        D_minus = np.max(alpha - (i - 1) / n)
         f = np.sqrt(n)
-        Dplus = np.max(i / n - alpha)
-        Dminus = np.max(alpha - (i - 1) / n)
-        V = f * (Dplus + Dminus)
+        V = f * (D_plus + D_minus)
 
         # asympototic p-value
         m = np.arange(1, 50) ** 2

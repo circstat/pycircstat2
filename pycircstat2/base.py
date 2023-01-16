@@ -83,19 +83,29 @@ class Circular:
         w: Union[np.ndarray, list, None] = None,  # frequency
         bins: Union[int, np.array, None] = None,
         unit: str = "degree",
-        n_intervals: Union[int, float] = 360,  # number of intervals in the full cycle
+        n_intervals: Union[
+            int, float, None
+        ] = None,  # number of intervals in the full cycle
         n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
         **kwargs,
     ):
 
         # meta
         self.unit = unit
-        if unit == "degree":
-            self.n_intervals = 360
-        elif unit == "radian":
-            self.n_intervals = 2 * np.pi
+        if n_intervals is None:
+            if unit == "degree":
+                self.n_intervals = n_intervals = 360
+            elif unit == "radian":
+                self.n_intervals = n_intervals = 2 * np.pi
+            elif unit == "hour":
+                self.n_intervals = n_intervals = 24
+            else:
+                raise ValueError(
+                    "You need to provide a value for `n_intervals` if it is not `degree`, `radian` or hour."
+                )
         else:
             self.n_intervals = n_intervals
+
         self.n_clusters_max = n_clusters_max
         self.kwargs_median = kwargs_median = kwargs.pop(
             "kwargs_median", {"method": "deviation"}
@@ -268,3 +278,41 @@ class Circular:
     def plot(self, ax=None, kind=None, **kwargs):
 
         ax = circ_plot(self, ax=ax, **kwargs)
+
+
+class Axial(Circular):
+    def __init__(
+        self,
+        data: Union[np.ndarray, list],  # angle
+        w: Union[np.ndarray, list, None] = None,  # frequency
+        bins: Union[int, np.array, None] = None,
+        unit: str = "degree",
+        n_intervals: Union[
+            int, float, None
+        ] = None,  # number of intervals in the full cycle
+        n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
+        **kwargs,
+    ):
+        # doubling original data and reducing them modulo 360 degrees
+        if unit == "degree":
+            data = 2 * data % 360
+        elif unit == "radian":
+            data = 2 * data % (2 * np.pi)
+        elif unit == "hour":
+            data = 2 * data % 24
+        else:
+            data = 2 * data % n_intervals
+
+        super().__init__(
+            data=data,
+            w=w,
+            bins=bins,
+            unit=unit,
+            n_intervals=n_intervals,
+            n_clusters_max=n_clusters_max,
+            **kwargs,
+        )
+
+        self.mean /= 2
+        self.mean_lb /= 2
+        self.mean_ub /= 2
