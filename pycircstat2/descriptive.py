@@ -503,16 +503,22 @@ def circ_mean_ci(
 
     # TODO
 
+    #  n > 8, according to Ch 26.7 (Zar, 2010)
     if method == "approximate":
         (lb, ub) = _circ_mean_ci_approximate(
             alpha=alpha, w=w, mean=mean, r=r, n=n, ci=ci
         )
-    elif method == "dispersion":
-        (lb, ub) = _circ_mean_ci_dispersion(alpha=alpha, w=w, mean=mean, ci=ci)
+
+    # n < 25, according to 4.4.4a (Fisher, 1993)
     elif method == "bootstrap":
         (lb, ub) = _circ_mean_ci_bootstrap(
             alpha=alpha, B=B, ci=ci, return_samples=return_samples
         )
+
+    # n >= 25, according to 4.4.4b (Fisher, 1993)
+    elif method == "dispersion":
+        (lb, ub) = _circ_mean_ci_dispersion(alpha=alpha, w=w, mean=mean, ci=ci)
+
     else:
         raise ValueError(
             f"Method `{method}` for `circ_mean_ci` is not supported.\nTry `dispersion`, `approximate` or `bootstrap`"
@@ -545,7 +551,7 @@ def _circ_mean_ci_dispersion(
         raise ValueError(
             f"n={n} is too small (< 25) for computing CI with circular dispersion."
         )
-    # TODO: sometime return nan because x is larger than 1.
+    # TODO: sometime return nan because x in arcsin(x) is larger than 1.
     d = np.arcsin(
         np.sqrt(circ_dispersion(alpha=alpha, w=w, mean=mean) / n)
         * norm.ppf(1 - 0.5 * (1 - ci))
@@ -725,7 +731,6 @@ def circ_median_ci(
             "`alpha` is needed for computing the confidence interval for circular median."
         )
 
-    # alpha, counts = np.unique(alpha)
     n = len(alpha)
     alpha = np.sort(alpha)
 
@@ -748,6 +753,49 @@ def circ_median_ci(
 
         lower, upper = alpha[int(idx_lb)], alpha[int(idx_ub)]
 
+    # selected confidence intervals for the median direction for n < 15
+    # from A6, Fisher, 1993.
+    # We only return the narrowest CI if there are more than one in the table.
+
+    elif n == 3:
+        lower, upper = alpha[0], alpha[2]
+        ci = 0.75
+    elif n == 4:
+        lower, upper = alpha[0], alpha[3]
+        ci = 0.875
+    elif n == 5:
+        lower, upper = alpha[0], alpha[4]
+        ci = 0.937
+    elif n == 6:
+        lower, upper = alpha[0], alpha[5]
+        ci = 0.97
+    elif n == 7:
+        lower, upper = alpha[1], alpha[5]
+        ci = 0.875
+    elif n == 8:
+        lower, upper = alpha[1], alpha[6]
+        ci = 0.93
+    elif n == 9:
+        lower, upper = alpha[1], alpha[7]
+        ci = 0.961
+    elif n == 10:
+        lower, upper = alpha[2], alpha[7]
+        ci = 0.893
+    elif n == 11:
+        lower, upper = alpha[2], alpha[8]
+        ci = 0.934
+    elif n == 12:
+        lower, upper = alpha[3], alpha[8]
+        ci = 0.854
+    elif n == 13:
+        lower, upper = alpha[3], alpha[9]
+        ci = 0.928
+    elif n == 14:
+        lower, upper = alpha[3], alpha[10]
+        ci = 0.937
+    elif n == 15:
+        lower, upper = alpha[2], alpha[12]
+        ci = 0.965
     else:
         lower, upper = np.nan, np.nan
 

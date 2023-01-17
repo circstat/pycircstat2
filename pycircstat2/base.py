@@ -162,26 +162,26 @@ class Circular:
         self.kappa = kappa = circ_kappa(r=r, n=n)
 
         # confidence interval for angular mean
-        # in practice, the equations for mean ci for 8 <= n <= 12 can still yield nan
+        # in practice, the equations for approximating mean ci for 8 <= n <= 12 in zar 2010 
+        # can still yield nan
         if self.kwargs_mean_ci is None:
-            if not np.isclose(self.r, 0) and (8 <= self.n < 25):
-                # Approximate ci for mean of a von Mises distribution (Upton, 1986)
+            if mean_pval < 0.05 and (8 <= self.n < 25):
                 self.method_mean_ci = method_mean_ci = "bootstrap"
                 ci = 0.95
-            elif not np.isclose(self.r, 0) and self.n >= 25:
+            elif mean_pval < 0.05 and self.n >= 25:
                 # Eq 4.22 (Fisher, 1995)
                 self.method_mean_ci = method_mean_ci = "dispersion"
                 ci = 0.95
-            else:
+            else:  # mean_pval > 0.05
                 self.method_mean_ci = method_mean_ci = None
-                ci = 0.95
+                ci = np.nan
         else:
             self.method_mean_ci = method_mean_ci = kwargs_mean_ci.pop(
                 "method", "bootstrap"
             )
             ci = 0.95
 
-        if method_mean_ci is not None:
+        if method_mean_ci is not None and mean_pval < 0.05:
             self.mean_lb, self.mean_ub = mean_lb, mean_ub = circ_mean_ci(
                 alpha=self.alpha,
                 w=self.w,
@@ -191,6 +191,8 @@ class Circular:
                 ci=ci,
                 method=method_mean_ci,
             )
+        else:
+            self.mean_lb, self.mean_ub = mean_lb, mean_ub = np.nan, np.nan
 
         # angular deviation, circular standard deviation, adjusted resultant vector length (if needed)
         self.s, self.s0, self.rc = s, s0, rc = circ_std(r=r, bin_size=bin_size)
@@ -268,6 +270,7 @@ class Circular:
         docs += "Method\n"
         docs += "------\n"
         docs += f"  Angular median: {self.kwargs_median['method']}\n"
+        docs += f"  Angular mean CI: {self.method_mean_ci}\n"
 
         return docs
 
