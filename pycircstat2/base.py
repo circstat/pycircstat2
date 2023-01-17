@@ -162,7 +162,7 @@ class Circular:
         self.kappa = kappa = circ_kappa(r=r, n=n)
 
         # confidence interval for angular mean
-        # in practice, the equations for approximating mean ci for 8 <= n <= 12 in zar 2010 
+        # in practice, the equations for approximating mean ci for 8 <= n <= 12 in zar 2010
         # can still yield nan
         if self.kwargs_mean_ci is None:
             if mean_pval < 0.05 and (8 <= self.n < 25):
@@ -298,16 +298,16 @@ class Axial(Circular):
     ):
         # doubling original data and reducing them modulo 360 degrees
         if unit == "degree":
-            data = 2 * data % 360
+            data_double = 2 * data % 360
         elif unit == "radian":
-            data = 2 * data % (2 * np.pi)
+            data_double = 2 * data % (2 * np.pi)
         elif unit == "hour":
-            data = 2 * data % 24
+            data_double = 2 * data % 24
         else:
-            data = 2 * data % n_intervals
+            data_double = 2 * data % n_intervals
 
         super().__init__(
-            data=data,
+            data=data_double,
             w=w,
             bins=bins,
             unit=unit,
@@ -316,6 +316,10 @@ class Axial(Circular):
             **kwargs,
         )
 
+        self.data_double = data_double
+        self.data = data
+        self.alpha_double = self.alpha
+        self.alpha = data2rad(data, k=self.n_intervals)
         self.mean /= 2
         self.mean_lb /= 2
         self.mean_ub /= 2

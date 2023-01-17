@@ -1,7 +1,7 @@
 from typing import Type, Union
 
 import numpy as np
-from scipy.stats import norm, rankdata
+from scipy.stats import chi2, norm, rankdata
 
 from .base import Circular
 from .descriptive import circ_mean
@@ -14,9 +14,32 @@ def aacorr(
     test: bool = False,
 ) -> tuple:
 
+    """
+    Angular-Angular Correlation.
+
+    Parameters
+    ----------
+    a: Circular or np.ndarray
+        Angles in radian
+    b: Circular or np.ndarray
+        Angles in radian
+    method: str
+        - 'fl' (Fisher & Lee)
+        - 'js' (Jammalamadaka & SenGupta)
+        - 'nonparametric'
+    test: bool
+        Return significant test results.
+
+    Return
+    ------
+    r: float
+        Correlation coefficient.
+    reject: bool
+        Return significant test if `test` is set to True.
+    """
+
     if method == "fl":  # Fisher & Lee (1983)
         _corr = _aacorr_fl
-
     elif method == "js":  # Jammalamadaka & SenGupta (2001)
         _corr = _aacorr_js
     elif method == "nonparametric":
@@ -36,7 +59,6 @@ def aacorr(
             n = len(a)
             reject = (n - 1) * r > 2.99 + 2.16 / n
         else:
-
             # jackknife test (Fingleton, 1989)
             n = len(a)
             raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
@@ -188,6 +210,7 @@ def alcorr(
     ------
     ral: float
         correlation coefficient.
+    pval: float
 
     Reference
     ----
@@ -208,4 +231,6 @@ def alcorr(
     den = 1 - rcs**2
     ral = np.sqrt(num / den)
 
-    return ral
+    pval = 1 - chi2(df=2).cdf(n * ral**2)
+
+    return ral, pval

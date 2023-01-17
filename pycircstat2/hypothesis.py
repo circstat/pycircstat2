@@ -327,8 +327,6 @@ def batschelet_test(
 
     from scipy.stats import binom_test
 
-    angle = angle
-
     n = len(alpha)
     angle_diff = angrange(((angle + 0.5 * np.pi) - alpha)).round(5)
     m = np.logical_and(angle_diff > 0.0, angle_diff < np.round(np.pi, 5)).sum()
@@ -665,3 +663,13 @@ def kuiper_test(alpha: np.ndarray, pvalue: str = "critical") -> tuple:
         )
 
     return V, p
+
+
+def watson_one_sample_u2_test(alpha: np.ndarray) -> tuple:
+
+    """
+    Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
+
+
+    """
+    raise NotImplementedError

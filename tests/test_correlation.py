@@ -31,5 +31,5 @@ def test_alcorr():
     a = Circular(data=d_ex21_ch27["θ"].values).alpha
     x = d_ex21_ch27["X"].values
 
-    raa = alcorr(a, x)
-    np.testing.assert_approx_equal(raa, 0.9854, significant=4)
+    ral = alcorr(a, x)
+    np.testing.assert_approx_equal(ral, 0.9854, significant=4)
