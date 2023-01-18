@@ -155,38 +155,9 @@ class lm:
         XtXinv = Vt.T @ np.diag(1 / S) @ U.T
         return XtXinv
 
-    def compute_bhat(self, X, y, W, method="qr", return_ss=True):
+    def compute_bhat(self, X, y, W, return_ss=True):
 
-        match method:
-            case "qr":
-                bhat, XtX, Xty = _qr(X, y, W)
-            case "lu":
-                bhat, XtX, Xty = _lu(X, y, W)
-            case "chol":
-                bhat, XtX, Xty = _chol(X, y)
-            case "svd":
-                bhat, XtX, Xty = _svd(X, y)
-            case "nq":
-                bhat, XtX, Xty = _nq(X, y)
-            case "sse":
-                bhat, loss = _sse(X, y)
-                if return_ss:
-                    XtX = X.T @ X
-                    Xty = X.T @ y
-                    return bhat, XtX, Xty, loss
-                else:
-                    return bhat
-            case "nll":
-                bhat, sigma, loss = _nll(X, y)
-
-                if return_ss:
-                    XtX = X.T @ X
-                    Xty = X.T @ y
-                    return bhat, sigma, XtX, Xty, loss
-                else:
-                    return bhat
-            case _:
-                raise ValueError("Please enter a valid method.")
+        bhat, XtX, Xty = _qr(X, y, W)
 
         if return_ss:
             return bhat, XtX, Xty
@@ -249,23 +220,22 @@ class lm:
         yhat = X @ bhat
         yhat = pd.DataFrame(yhat, columns=["Fitted"])
 
-        match interval:
-            case None:
-                return yhat
-            case True:
-                ci_yhat = self.compute_ci_yhat(yhat, Xnew, alpha)
-                pi_yhat = self.compute_pi_yhat(yhat, Xnew, alpha)
-                return pd.concat([yhat, ci_yhat, pi_yhat], axis=1)
-            case "prediction":
-                pi_yhat = self.compute_pi_yhat(yhat, Xnew, alpha)
-                return pd.concat([yhat, pi_yhat], axis=1)
-            case "confidence":
-                ci_yhat = self.compute_ci_yhat(yhat, Xnew, alpha)
-                return pd.concat([yhat, ci_yhat], axis=1)
-            case _:
-                raise ValueError(
-                    "Please enter a valid value: [None, True, 'prediction', 'confidence']"
-                )
+        if interval is None:
+            return yhat
+        elif interval is True:
+            ci_yhat = self.compute_ci_yhat(yhat, Xnew, alpha)
+            pi_yhat = self.compute_pi_yhat(yhat, Xnew, alpha)
+            return pd.concat([yhat, ci_yhat, pi_yhat], axis=1)
+        elif interval == "prediction":
+            pi_yhat = self.compute_pi_yhat(yhat, Xnew, alpha)
+            return pd.concat([yhat, pi_yhat], axis=1)
+        elif interval == "confidence":
+            ci_yhat = self.compute_ci_yhat(yhat, Xnew, alpha)
+            return pd.concat([yhat, ci_yhat], axis=1)
+        else:
+            raise ValueError(
+                "Please enter a valid value: [None, True, 'prediction', 'confidence']"
+            )
 
     def compute_ci_yhat(self, yhat, Xnew=None, alpha=0.05):
 
