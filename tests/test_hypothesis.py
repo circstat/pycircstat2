@@ -7,9 +7,11 @@ from pycircstat2.hypothesis import (
     kuiper_test,
     omnibus_test,
     one_sample_test,
+    rao_spacing_test,
     rayleigh_test,
     symmetry_test,
     wallraff_test,
+    watson_test,
     watson_u2_test,
     watson_williams_test,
     wheeler_watson_test,
@@ -185,5 +187,23 @@ def test_kuiper_test():
 
     d = load_data("B5", source="fisher_1993")["θ"].values
     c = Circular(data=d, unit="degree", n_intervals=180)
-    V, p = kuiper_test(c.alpha)
+    V, pval = kuiper_test(c.alpha)
     np.testing.assert_approx_equal(V, 1.5864, significant=3)
+    assert pval > 0.05
+
+
+def test_watson_test():
+
+    pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
+    c_pigeon = Circular(pigeon)
+    U2, pval = watson_test(c_pigeon.alpha, n_simulation=9999)
+    np.testing.assert_approx_equal(U2, 0.137, significant=3)
+    assert pval > 0.10
+
+
+def test_rao_spacing_test():
+    pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
+    c_pigeon = Circular(pigeon)
+    U, pval = rao_spacing_test(c_pigeon.alpha, n_simulation=9999)
+    np.testing.assert_approx_equal(U, 161.92308, significant=3)
+    assert 0.05 < pval < 0.10

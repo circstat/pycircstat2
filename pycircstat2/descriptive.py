@@ -710,8 +710,6 @@ def circ_median_ci(
     -------
     lower, upper, ci: tuple
         confidence intervals and alpha-level
-        Exception: for n = 7 ~ 13, two levels with
-        difference alpha-levels will be returned.
 
     Note
     ----

@@ -22,9 +22,10 @@ def circ_plot(
     marker = kwargs.pop("marker", "o")
     marker_color = kwargs.pop("marker_color", "black")
     marker_size = kwargs.pop("marker_size", 10)
-    
+
     bins = kwargs.pop("bins", 12)
 
+    plot_counts = kwargs.pop("plot_counts", False)
     plot_rlabel = kwargs.pop("plot_rlabel", False)
     plot_grid = kwargs.pop("plot_grid", True)
     plot_spine = kwargs.pop("plot_spine", False)
@@ -43,7 +44,7 @@ def circ_plot(
     plot_mean = kwargs.pop("plot_mean", True)
     if np.isclose(circ_data.r, 0):
         plot_mean = False
-        print("Mean is not plotted because `r` is close to 0")
+        # print("Mean is not plotted because `r` is close to 0")
     mean_kwargs = kwargs.pop(
         "mean_kwargs", {"color": "black", "linestyle": "-", "kind": "arrow"}
     )
@@ -51,12 +52,12 @@ def circ_plot(
     plot_mean_ci = kwargs.pop("plot_mean_ci", True)
     if not hasattr(circ_data, "mean_ub") or np.isnan(circ_data.mean_ub):
         plot_mean_ci = False
-        print("Mean CI is not plotted because it is not computed")
+        # print("Mean CI is not plotted because it is not computed")
 
     plot_median = kwargs.pop("plot_median", True)
-    if np.isnan(circ_data.median):
+    if plot_median and np.isnan(circ_data.median):
         plot_median = False
-        print("Median is not plotted because `median` is nan")
+        # print("Median is not plotted because `median` is nan")
 
     median_kwargs = kwargs.pop(
         "median_kwargs", {"color": "black", "linestyle": "dotted"}
@@ -65,7 +66,7 @@ def circ_plot(
     plot_median_ci = kwargs.pop("plot_median_ci", True)
     if not hasattr(circ_data, "median_ub") or np.isnan(circ_data.median_ub):
         plot_median_ci = False
-        print("Median CI is not plotted because it is not computed.")
+        # print("Median CI is not plotted because it is not computed.")
 
     zero_location = kwargs.pop("zero_location", "N")
     clockwise = kwargs.pop("clockwise", -1)
@@ -121,7 +122,7 @@ def circ_plot(
             # save density to circ_data
             circ_data.density_x = x
             circ_data.density_f = f
-            f_ = f + 1.05 # add the radius of the plotted circle
+            f_ = f + 1.05  # add the radius of the plotted circle
             ax.plot(x, f_, color="black", linestyle="-")
             ax.set_ylim(0, f_.max())
         else:
@@ -155,9 +156,15 @@ def circ_plot(
             bottom=0,
             zorder=2,
         )
-        for i, v in enumerate(w):
-            if v != 0:
-                ax.text(beta[i], w_norm[i] - 0.1, str(v), color="black")
+        if plot_counts:
+            for i, v in enumerate(w):
+                if v != 0:
+                    ax.text(
+                        beta[i].round(3),
+                        (w_norm[i] - 0.05).round(3),
+                        str(v),
+                        color="black",
+                    )
 
         if circ_data.grouped and plot_density:
             x = np.linspace(0, 2 * np.pi, 100)
@@ -182,7 +189,7 @@ def circ_plot(
         )
 
     if plot_mean and plot_mean_ci:
-        
+
         if circ_data.mean_lb < circ_data.mean_ub:
             x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub, num=50)
         else:

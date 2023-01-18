@@ -167,19 +167,19 @@ class Circular:
         if self.kwargs_mean_ci is None:
             if mean_pval < 0.05 and (8 <= self.n < 25):
                 self.method_mean_ci = method_mean_ci = "bootstrap"
-                ci = 0.95
+                self.mean_ci_level = mean_ci_level = 0.95
             elif mean_pval < 0.05 and self.n >= 25:
                 # Eq 4.22 (Fisher, 1995)
                 self.method_mean_ci = method_mean_ci = "dispersion"
-                ci = 0.95
+                self.mean_ci_level = mean_ci_level = 0.95
             else:  # mean_pval > 0.05
                 self.method_mean_ci = method_mean_ci = None
-                ci = np.nan
+                self.mean_ci_level = mean_ci_level = np.nan
         else:
             self.method_mean_ci = method_mean_ci = kwargs_mean_ci.pop(
                 "method", "bootstrap"
             )
-            ci = 0.95
+            self.mean_ci_level = mean_ci_level = 0.95
 
         if method_mean_ci is not None and mean_pval < 0.05:
             self.mean_lb, self.mean_ub = mean_lb, mean_ub = circ_mean_ci(
@@ -188,7 +188,7 @@ class Circular:
                 mean=self.mean,
                 r=self.r,
                 n=self.n,
-                ci=ci,
+                ci=mean_ci_level,
                 method=method_mean_ci,
             )
         else:
@@ -205,17 +205,17 @@ class Circular:
         # confidence inerval for angular median (only for ungrouped data)
         # it's unclear how to do it for grouped data.
         if not grouped and not np.isnan(median):
-            self.median_lb, self.median_ub, self.ci = (
+            self.median_lb, self.median_ub, self.median_ci_level = (
                 median_lb,
                 median_ub,
-                ci,
+                median_ci_level,
             ) = circ_median_ci(median=median, alpha=alpha)
 
         # check multimodality
         self.mixtures = []
         for k in range(1, n_clusters_max + 1):
-            m = MoVM(n_clusters=k, n_intervals=n_intervals, unit=unit, random_seed=0)
-            m.fit(np.repeat(data, w))
+            m = MoVM(n_clusters=k, n_intervals=n_intervals, unit='radian', random_seed=0)
+            m.fit(np.repeat(alpha, w))
             self.mixtures.append(m)
         self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
         if not np.isnan(self.mixtures_BIC).all():
@@ -250,11 +250,11 @@ class Circular:
             docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ( p={self.mean_pval:.04f} {significance_code(self.mean_pval)} ) \n"
 
         if hasattr(self, "mean_lb") and not np.isnan(self.mean_lb):
-            docs += f"  Angular mean CI: {rad2data(self.mean_lb, k=k):.02f} - {rad2data(self.mean_ub, k=k):.02f}\n"
+            docs += f"  Angular mean CI ({self.mean_ci_level:.2f}): {rad2data(self.mean_lb, k=k):.02f} - {rad2data(self.mean_ub, k=k):.02f}\n"
 
         docs += f"  Angular median: {rad2data(self.median, k=k):.02f} \n"
         if hasattr(self, "median_lb") and not np.isnan(self.median_lb):
-            docs += f"  Angular median CI: {rad2data(self.median_lb, k=k):.02f} - {rad2data(self.median_ub, k=k):.02f}\n"
+            docs += f"  Angular median CI ({self.median_ci_level:.2f}): {rad2data(self.median_lb, k=k):.02f} - {rad2data(self.median_ub, k=k):.02f}\n"
 
         docs += f"  Angular deviation (s): {rad2data(self.s, k=k):.02f} \n"
         docs += f"  Circular standard deviation (s0): {rad2data(self.s0, k=k):.02f} \n"

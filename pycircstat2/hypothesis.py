@@ -1,7 +1,7 @@
 from typing import Union
 
 import numpy as np
-from scipy.stats import f, norm, rankdata, wilcoxon
+from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
 from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median
 from .utils import angrange, angular_distance
@@ -563,7 +563,24 @@ def wheeler_watson_test(circs):
 
 def wallraff_test(circs: list, angle=float):
 
-    """Wallraff test of angular distances against a specified angle."""
+    """Wallraff test of angular distances against a specified angle.
+
+    Parameters
+    ----------
+    circs: list
+        A list of circular object
+
+    angle: float
+        A specified angle in radian.
+
+    Returns
+    -------
+    U: float
+        Test Statistics
+
+    pval: float
+        P-value.
+    """
 
     assert (
         len(circs) == 2
@@ -589,7 +606,12 @@ def wallraff_test(circs: list, angle=float):
     return U, pval
 
 
-def kuiper_test(alpha: np.ndarray, pvalue: str = "critical") -> tuple:
+#####################
+## Goodness-of-Fit ##
+#####################
+
+
+def kuiper_test(alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046) -> tuple:
 
     """
     Kuiper's test for Circular Uniformity.
@@ -599,77 +621,224 @@ def kuiper_test(alpha: np.ndarray, pvalue: str = "critical") -> tuple:
 
     This method is for ungrouped data.
 
-    Parameters
-    ----------
+    Parameter
+    ---------
 
-    alpha: np.array or None
+    alpha: np.array
         Angles in radian.
 
-    pvalue: str
-        Method for computing p-value. Either `critical` or `asymptotic`.
-        Noted that the Vs and p-values of these two methods are slightly different.
+    n_simulation: int
+        Number of simulation for the p-value.
+        If n_simulation=1, the p-value is asymptotically approximated.
+        If n_simulation>1, the p-value is simulated.
+        Default is 9999.
+
+    seed: int
+        Random seed.
+
+    Returns
+    -------
+    V: float
+        Test Statistics
+    pval: flaot
+        Asymptotic p-value
+
+    Note
+    ----
+    Implementation from R package `Directional`
+    https://rdrr.io/cran/Directional/src/R/kuiper.R
     """
 
-    alpha = np.sort(alpha) / (2 * np.pi)  #
-    n = len(alpha)
-    i = np.arange(1, n + 1)
-
-    if pvalue == "critical":
-
-        # Implementation from R package `Circular`
-        # https://rdrr.io/cran/circular/src/R/kuiper.test.R
-        # see also Birch (2018) An Examination of the Kuiper Test
-        # for potential pitfalls.
+    def compute_V(alpha):
+        alpha = np.sort(alpha) / (2 * np.pi)  #
+        n = len(alpha)
+        i = np.arange(1, n + 1)
 
         D_plus = np.max(i / n - alpha)
         D_minus = np.max(alpha - (i - 1) / n)
         f = np.sqrt(n) + 0.155 + 0.24 / np.sqrt(n)
         V = f * (D_plus + D_minus)
+        return V, f
 
-        if V < 1.537:
-            p = "pval > 0.15"
-        elif V < 1.62:
-            p = "0.10 < P-value < 0.15"
-        elif V < 1.747:
-            p = "0.05 < P-value < 0.10"
-        elif V < 1.862:
-            p = "0.025 < P-value < 0.05"
-        elif V < 2.001:
-            p = "0.01 < P-value < 0.025"
-        else:
-            p = "P-value < 0.01"
+    n = n = len(alpha)
+    Vo, f = compute_V(alpha)
 
-    elif pvalue == "asymptotic":
-
-        # Implementation from R package `Directional`
-        # https://rdrr.io/cran/Directional/src/R/kuiper.R
-
-        D_plus = np.max(i / n - alpha)
-        D_minus = np.max(alpha - (i - 1) / n)
-        f = np.sqrt(n)
-        V = f * (D_plus + D_minus)
-
-        # asympototic p-value
+    if n_simulation == 1:
+        # asymptotic p-value
         m = np.arange(1, 50) ** 2
-        a1 = 4 * m * V**2
-        a2 = np.exp(-2 * m * V**2)
+        a1 = 4 * m * Vo**2
+        a2 = np.exp(-2 * m * Vo**2)
         b1 = 2 * (a1 - 1) * a2
-        b2 = 8 * V / (3 * f) * m * (a1 - 3) * a2
-        p = np.sum(b1 - b2)
-
+        b2 = 8 * Vo / (3 * f) * m * (a1 - 3) * a2
+        pval = np.sum(b1 - b2)
     else:
-        raise ValueError(
-            "Argmument `pvalue` should be either `critical` or `asymptotic`."
-        )
+        np.random.seed(seed)
+        x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
+        Vs = np.array(([compute_V(x[:, i])[0] for i in range(n_simulation)]))
+        pval = (np.sum(Vs > Vo) + 1) / (n_simulation + 1)
 
-    return V, p
+    return Vo, pval
 
 
-def watson_one_sample_u2_test(alpha: np.ndarray) -> tuple:
+def watson_test(alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046) -> tuple:
 
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
 
+    H0: The sample data come from a population distributed uniformly around the circle.
+    H1: The sample data do not come from a population distributed uniformly around the circle.
 
+    This method is for ungrouped data.
+
+    Parameter
+    ---------
+
+    alpha: np.array
+        Angles in radian.
+
+    n_simulation: int
+        Number of simulation for the p-value.
+        If n_simulation=1, the p-value is asymptotically approximated.
+        If n_simulation>1, the p-value is simulated.
+
+    seed: int
+        Random seed.
+
+    Returns
+    -------
+    U2o: float
+        Test Statistics
+    pval: flaot
+        Asymptotic p-value
+
+    Note
+    ----
+    Implementation from R package `Directional`
+    https://rdrr.io/cran/Directional/src/R/watson.R
+
+    The code for simulated p-value in Directional (v5.7) seems to be just copied from
+    kuiper(), thus yield in wrong results.
+
+    See Also
+    --------
+    kuiper_test(); rao_spacing_test()
     """
-    raise NotImplementedError
+
+    def compute_U2(alpha):
+        alpha = np.sort(alpha)
+        n = len(alpha)
+        i = np.arange(1, n + 1)
+
+        u = alpha / 2 / np.pi
+        u2 = u**2
+        iu = i * u
+
+        U2 = np.sum(((u - (i - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (12 * n)
+        return U2
+
+    n = len(alpha)
+    U2o = compute_U2(alpha)
+
+    if n_simulation == 1:
+        m = np.arange(1, 51)
+        pval = 2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o))
+    else:
+        np.random.seed(seed)
+        x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
+        U2s = np.array(([compute_U2(x[:, i]) for i in range(n_simulation)]))
+        pval = (np.sum(U2s > U2o) + 1) / (n_simulation + 1)
+
+    return U2o, pval
+
+
+def rao_spacing_test(
+    alpha: np.ndarray,
+    w: Union[np.ndarray, None] = None,
+    kappa: float = 1000.0,
+    n_simulation: int = 9999,
+    seed: int = 2046,
+) -> tuple:
+    """Simulation based Rao's spacing test.
+
+    H0: The sample data come from a population distributed uniformly around the circle.
+    H1: The sample data do not come from a population distributed uniformly around the circle.
+
+    This method is for both grouped and ungrouped data.
+
+    Parameters
+    ----------
+    alpha: np.ndarray
+        Angles in radian.
+
+    w: np.ndarray or None
+        Frequencies
+
+    kappa: float
+        Concentration parameter. Only use for grouped data.
+
+    num_sims: int
+        Number of simulations.
+
+    seed: int
+        Random seed.
+
+    Returns
+    -------
+    Uo: float
+        Test statistics
+
+    pval: float
+        Simulation-based p-value
+
+    Reference
+    ---------
+    Landler et al. (2019)
+    https://movementecologyjournal.biomedcentral.com/articles/10.1186/s40462-019-0160-x
+    """
+
+    def compute_U(alpha):
+        n = len(alpha)
+        f = np.sort(alpha)
+        T = np.hstack([f[1:] - f[:-1], 2 * np.pi - f[-1] + f[0]])
+        U = 0.5 * np.sum(np.abs(T - (2 * np.pi / n)))
+        return U
+
+    if w is not None:
+        n = np.sum(w)
+        m = len(alpha)
+        alpha = np.repeat(alpha, w)
+    else:
+        n = len(alpha)
+
+    # p-value
+    np.random.seed(seed)
+    Uo = compute_U(alpha)
+    if w is not None:  # noncontinous / grouped data
+        Us = np.array(
+            [
+                compute_U(
+                    angrange(
+                        np.floor(np.random.uniform(low=0, high=2 * np.pi, size=n))
+                        * m
+                        / (2 * np.pi)
+                        * 2
+                        * np.pi
+                        / m
+                        + vonmises(kappa=kappa).rvs(n)
+                    )
+                )
+                for i in range(n_simulation)
+            ]
+        )
+    else:  # continous / ungrouped data
+        Us = np.array(
+            [
+                compute_U(np.random.uniform(low=0, high=2 * np.pi, size=n))
+                for i in range(n_simulation)
+            ]
+        )
+
+    counter = np.sum(Us > Uo)
+    pval = counter / (n_simulation + 1)
+
+    return np.rad2deg(Uo), pval
