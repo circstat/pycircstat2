@@ -7,7 +7,7 @@ from pycircstat2.correlation import aacorr, alcorr
 def test_aacorr():
 
     # Example 27.20 (Zar, 2010)
-    d_ex20_ch27 = load_data("D20", source="zar_2010")
+    d_ex20_ch27 = load_data("D20", source="zar")
     a = Circular(data=d_ex20_ch27["Insect"].values)
     b = Circular(data=d_ex20_ch27["Light"].values)
 
@@ -17,7 +17,7 @@ def test_aacorr():
     np.testing.assert_approx_equal(raa, 0.8945, significant=4)
 
     # Example 27.22 (Zar, 2010)
-    d_ex22_ch27 = load_data("D22", source="zar_2010")
+    d_ex22_ch27 = load_data("D22", source="zar")
     a = Circular(data=d_ex22_ch27["evening"].values)
     b = Circular(data=d_ex22_ch27["morning"].values)
     raa, reject = aacorr(a, b, test=True, method="nonparametric")
@@ -27,7 +27,7 @@ def test_aacorr():
 def test_alcorr():
 
     # Example 27.21 (Zar, 2010)
-    d_ex21_ch27 = load_data("D21", source="zar_2010")
+    d_ex21_ch27 = load_data("D21", source="zar")
     a = Circular(data=d_ex21_ch27["θ"].values).alpha
     x = d_ex21_ch27["X"].values
 

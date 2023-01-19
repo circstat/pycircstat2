@@ -22,7 +22,7 @@ def test_rayleigh_test():
 
     # Ch27 Example 1 (Zar, 2010, P667)
     # Using data from Ch26 Example 2.
-    data_zar_ex2_ch26 = load_data("D1", source="zar_2010")
+    data_zar_ex2_ch26 = load_data("D1", source="zar")
     circ_zar_ex1_ch27 = Circular(data_zar_ex2_ch26["θ"].values)
 
     # computed directly from r and n
@@ -39,7 +39,7 @@ def test_rayleigh_test():
 def test_V_test():
 
     # Ch27 Example 2 (Zar, 2010, P669)
-    data_zar_ex2_ch27 = load_data("D7", source="zar_2010")
+    data_zar_ex2_ch27 = load_data("D7", source="zar")
     circ_zar_ex2_ch27 = Circular(data_zar_ex2_ch27["θ"].values)
 
     # computed directly from r and n
@@ -69,7 +69,7 @@ def test_one_sample_test():
 
     # Ch27 Example 3 (Zar, 2010, P669)
     # Using data from Ch27 Example 2
-    data_zar_ex2_ch27 = load_data("D7", source="zar_2010")
+    data_zar_ex2_ch27 = load_data("D7", source="zar")
     circ_zar_ex3_ch27 = Circular(data=data_zar_ex2_ch27["θ"].values, unit="degree")
 
     # # computed directly from lb and ub
@@ -90,7 +90,7 @@ def test_one_sample_test():
 
 def test_omnibus_test():
 
-    data_zar_ex4_ch27 = load_data("D8", source="zar_2010")
+    data_zar_ex4_ch27 = load_data("D8", source="zar")
     circ_zar_ex4_ch27 = Circular(data_zar_ex4_ch27["θ"].values, unit="degree")
 
     pval = omnibus_test(alpha=circ_zar_ex4_ch27.alpha, scale=1)
@@ -100,7 +100,7 @@ def test_omnibus_test():
 
 def test_batschelet_test():
 
-    data_zar_ex5_ch27 = load_data("D8", source="zar_2010")
+    data_zar_ex5_ch27 = load_data("D8", source="zar")
     circ_zar_ex5_ch27 = Circular(data_zar_ex5_ch27["θ"].values, unit="degree")
 
     pval = batschelet_test(
@@ -112,7 +112,7 @@ def test_batschelet_test():
 
 def test_symmetry_test():
 
-    data_zar_ex6_ch27 = load_data("D9", source="zar_2010")
+    data_zar_ex6_ch27 = load_data("D9", source="zar")
     circ_zar_ex6_ch27 = Circular(data_zar_ex6_ch27["θ"].values, unit="degree")
 
     p = symmetry_test(median=circ_zar_ex6_ch27.median, alpha=circ_zar_ex6_ch27.alpha)
@@ -121,7 +121,7 @@ def test_symmetry_test():
 
 def test_watson_williams_test():
 
-    data = load_data("D10", source="zar_2010")
+    data = load_data("D10", source="zar")
     s1 = Circular(data[data["sample"] == 1]["θ"].values)
     s2 = Circular(data[data["sample"] == 2]["θ"].values)
     F, pval = watson_williams_test([s1, s2])
@@ -129,7 +129,7 @@ def test_watson_williams_test():
     np.testing.assert_approx_equal(F, 1.61, significant=3)
     np.testing.assert_approx_equal(pval, 0.22, significant=2)
 
-    data = load_data("D11", source="zar_2010")
+    data = load_data("D11", source="zar")
     s1 = Circular(data[data["sample"] == 1]["θ"].values)
     s2 = Circular(data[data["sample"] == 2]["θ"].values)
     s3 = Circular(data[data["sample"] == 3]["θ"].values)
@@ -142,7 +142,7 @@ def test_watson_williams_test():
 
 def test_watson_u2_test():
 
-    d = load_data("D12", source="zar_2010")
+    d = load_data("D12", source="zar")
     c0 = Circular(data=d[d["sample"] == 1]["θ"].values)
     c1 = Circular(data=d[d["sample"] == 2]["θ"].values)
     U2, pval = watson_u2_test([c0, c1])
@@ -150,7 +150,7 @@ def test_watson_u2_test():
     np.testing.assert_approx_equal(U2, 0.1458, significant=3)
     assert 0.1 < pval < 0.2
 
-    d = load_data("D13", source="zar_2010")
+    d = load_data("D13", source="zar")
     c0 = Circular(
         data=d[d["sample"] == 1]["θ"].values, w=d[d["sample"] == 1]["w"].values
     )
@@ -164,7 +164,7 @@ def test_watson_u2_test():
 
 
 def test_wheeler_watson_test():
-    d = load_data("D12", source="zar_2010")
+    d = load_data("D12", source="zar")
     c0 = Circular(data=d[d["sample"] == 1]["θ"].values)
     c1 = Circular(data=d[d["sample"] == 2]["θ"].values)
 
@@ -175,7 +175,7 @@ def test_wheeler_watson_test():
 
 def test_wallraff_test():
 
-    d = load_data("D14", source="zar_2010")
+    d = load_data("D14", source="zar")
     c0 = Circular(data=d[d["sex"] == "male"]["θ"].values)
     c1 = Circular(data=d[d["sex"] == "female"]["θ"].values)
     U, pval = wallraff_test(angle=np.deg2rad(135), circs=[c0, c1])
@@ -185,7 +185,7 @@ def test_wallraff_test():
 
 def test_kuiper_test():
 
-    d = load_data("B5", source="fisher_1993")["θ"].values
+    d = load_data("B5", source="fisher")["θ"].values
     c = Circular(data=d, unit="degree", n_intervals=180)
     V, pval = kuiper_test(c.alpha)
     np.testing.assert_approx_equal(V, 1.5864, significant=3)

@@ -1,15 +1,20 @@
 import numpy as np
 
 from pycircstat2 import Circular, load_data
-from pycircstat2.descriptive import (circ_mean, circ_mean_ci,
-                                     circ_mean_of_means, circ_median,
-                                     circ_median_ci, circ_std)
+from pycircstat2.descriptive import (
+    circ_mean,
+    circ_mean_ci,
+    circ_mean_of_means,
+    circ_median,
+    circ_median_ci,
+    circ_std,
+)
 
 
 def test_circ_mean():
 
     # Example 26.4 (Zar, 2010)
-    data_zar_ex4_ch26 = load_data("D1", source="zar_2010")
+    data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
     m, r = circ_mean(circ_zar_ex4_ch26.alpha, circ_zar_ex4_ch26.w)[:2]
 
@@ -17,7 +22,7 @@ def test_circ_mean():
     np.testing.assert_approx_equal(r, 0.82522, significant=5)
 
     # ch26 Example 5 (Zar, 2010)
-    data_zar_ex5_ch26 = load_data("D2", source="zar_2010")
+    data_zar_ex5_ch26 = load_data("D2", source="zar")
     circ_zar_ex5_ch26 = Circular(
         data=data_zar_ex5_ch26["θ"].values, w=data_zar_ex5_ch26["w"].values
     )
@@ -29,7 +34,7 @@ def test_circ_mean():
 
 def test_circ_std():
 
-    data_zar_ex4_ch26 = load_data("D1", source="zar_2010")
+    data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
 
     # Angular dispersion from Ch26.5 (Zar, 2010)
@@ -45,7 +50,7 @@ def test_circ_std():
     np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1.0)
     np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1.0)
 
-    data_zar_ex5_ch26 = load_data("D2", source="zar_2010")
+    data_zar_ex5_ch26 = load_data("D2", source="zar")
     circ_zar_ex5_ch26 = Circular(
         data=data_zar_ex5_ch26["θ"].values, w=data_zar_ex5_ch26["w"].values
     )
@@ -64,7 +69,7 @@ def test_circ_std():
 def test_circ_median():
 
     # Ch26.6 P657 (Zar, 2010)
-    data_zar_ex2_ch26 = load_data("D1", source="zar_2010")
+    data_zar_ex2_ch26 = load_data("D1", source="zar")
     circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].values)
     median = circ_median(
         circ_zar_ex2_ch26.alpha, circ_zar_ex2_ch26.w, circ_zar_ex2_ch26.grouped
@@ -83,7 +88,7 @@ def test_circ_median():
     np.testing.assert_approx_equal(np.rad2deg(median), 110.0, significant=1)
 
     # mallard data (mardia, 1972)
-    data_mallard = load_data("mallard", source="mardia_1972")
+    data_mallard = load_data("mallard", source="mardia")
     circ_mallard = Circular(data=data_mallard["θ"].values, w=data_mallard["w"].values)
     median = circ_median(circ_mallard.alpha_ub, circ_mallard.w, circ_mallard.grouped)
 
@@ -97,7 +102,7 @@ def test_circ_mean_deviation():
 def test_circ_mean_ci():
 
     # method: approximate (from P619, Zar, 2010)
-    data_zar_ex4_ch26 = load_data("D1", source="zar_2010")
+    data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
 
     ## computed directly from r and n
@@ -119,7 +124,7 @@ def test_circ_mean_ci():
     np.testing.assert_approx_equal(np.rad2deg(ub), 130, significant=1)
 
     # method: dispersion (from P78, Fisher, 1993)
-    d_ex3 = load_data("B6", "fisher_1993")
+    d_ex3 = load_data("B6", "fisher")
     c_ex3_s2 = Circular(np.sort(d_ex3[d_ex3.set == 2]["θ"].values))
     lb, ub = circ_mean_ci(method="dispersion", alpha=c_ex3_s2.alpha)
     np.testing.assert_approx_equal(np.rad2deg(lb), 232.7, significant=4)
@@ -131,7 +136,7 @@ def test_circ_mean_ci():
 
 def test_circ_median_ci():
 
-    d_ex3 = load_data("B6", "fisher_1993")
+    d_ex3 = load_data("B6", "fisher")
     c_ex3_s0 = Circular(
         np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:10]),
         kwargs_median={"method": "count"},
@@ -158,7 +163,7 @@ def test_circ_median_ci():
 
 def test_circ_mean_of_means():
 
-    data = load_data("D4", source="zar_2010")
+    data = load_data("D4", source="zar")
     ms = np.deg2rad(data.values[:, 0])
     rs = data.values[:, 1]
 
