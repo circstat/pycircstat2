@@ -24,10 +24,12 @@ def rad2data(
 
 def time2float(x: Union[np.ndarray, list, str], sep: str = ":") -> np.ndarray:
     """Convert an array of strings in time (hh:mm) to an array of floats."""
-    def _t2f(x:str, sep:str):
+
+    def _t2f(x: str, sep: str):
         """Convert string of time to float. E.g. 12:45 -> 12.75"""
         hr, min = x.split(sep)
         return float(hr) + float(min) / 60
+
     t2f = np.vectorize(_t2f)
     return t2f(x, sep)
 
@@ -88,7 +90,7 @@ def load_data(
     return_meta=False,
 ):
 
-    __source__ = ["fisher_1993", "zar_2010", "mardia_1972"]
+    __source__ = ["fisher", "zar", "mardia", "pewsey"]
 
     # check source
     if source not in __source__:

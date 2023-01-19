@@ -1,0 +1,13 @@
+{
+    "Description": "In a place named 'Col de la Roa' in the Italian Alps there is a meteorological station that records via data-logger several parameters. Measures are made every 15 minutes, in this dataset we report the wind direction recorded every day from January 29, 2001 to March 31, 2001 from 3.00am to 4.00am included. Which means 5 observations every day for a total of 310 measures.",
+    "Source": "Agostinelli, 2007",
+    "Examples": "Pewsey et al. (2014) Ch2.2",
+    "Columns": {
+        "x": {
+            "name": "x",
+            "type": "vectors",
+            "unit": "radian",
+            "description": "wind direction"
+        }
+    }
+}
