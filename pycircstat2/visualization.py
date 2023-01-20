@@ -32,15 +32,6 @@ def circ_plot(
     plot_axis = kwargs.pop("plot_axis", True)
 
     plot_density = kwargs.pop("plot_density", True)
-    kwargs_density = kwargs.pop(
-        "kwargs_density",
-        {
-            "method": "nonparametric",
-            "color": "black",
-            "linestyle": "-",
-        },
-    )
-
     plot_rose = kwargs.pop("plot_rose", True)
 
     plot_mean = kwargs.pop("plot_mean", True)
@@ -106,14 +97,19 @@ def circ_plot(
 
         # plot density
         if plot_density:  # and not np.isclose(circ_data.r, 0):
+            
+            kwargs_density = kwargs.pop("kwargs_density", {})
+            density_method = kwargs_density.pop("method", "nonparametric")
+            density_color = kwargs_density.pop("color", "black")
+            density_linestyle = kwargs_density.pop("linestyle", "-")
 
-            if kwargs_density["method"] == "nonparametric":
+            if density_method == "nonparametric":
                 h0 = kwargs_density.pop(
                     "h0", compute_smooth_params(circ_data.r, circ_data.n)
                 )
                 x, f = nonparametric_density_estimation(circ_data.alpha, h0)
 
-            elif kwargs_density["method"] == "MoVM":
+            elif density_method == "MoVM":
 
                 x = np.linspace(0, 2 * np.pi, 100)
                 f = circ_data.mixture_opt.predict_density(x=x, unit="radian")
@@ -130,8 +126,8 @@ def circ_plot(
             ax.plot(
                 x,
                 f_,
-                color=kwargs_density["color"],
-                linestyle=kwargs_density["linestyle"],
+                color=density_color,
+                linestyle=density_linestyle,
             )
             if rlim_max is None:
                 ax.set_ylim(0, f_.max())
@@ -186,7 +182,7 @@ def circ_plot(
                         x=angle,
                         y=bars[i].get_height() - 0.075,
                         s=str(v),
-                        ha='center',
+                        ha="center",
                         va="center",
                         rotation=rotation,
                         rotation_mode="anchor",
