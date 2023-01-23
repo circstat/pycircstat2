@@ -9,6 +9,32 @@ from scipy.stats import rv_continuous, vonmises
 ###########################
 
 
+class circularuniform_gen(rv_continuous):
+
+    """Continuous Circular Uniform Distribution
+
+    Methods
+    -------
+    pdf(x)
+        Probability density function.
+
+    cdf(x)
+        Cumulative distribution function.
+
+    ppf(q)
+        Percent point function (inverse of `cdf`) at q.
+    """
+
+    def _pdf(self, x):
+        return 1 / np.pi
+
+    def _cdf(self, x):
+        return x / (2 * np.pi)
+
+
+circularuniform = circularuniform_gen(name="circularuniform")
+
+
 class cardioid_gen(rv_continuous):
     """Cardioid Distribution
 
