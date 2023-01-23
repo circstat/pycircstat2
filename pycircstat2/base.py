@@ -6,10 +6,12 @@ import pandas as pd
 from .clustering import MoVM
 from .descriptive import (
     circ_kappa,
+    circ_kurtosis,
     circ_mean,
     circ_mean_ci,
     circ_median,
     circ_median_ci,
+    circ_skewness,
     circ_std,
 )
 from .hypothesis import rayleigh_test
@@ -211,10 +213,15 @@ class Circular:
                 median_ci_level,
             ) = circ_median_ci(median=median, alpha=alpha)
 
+        self.skewness = circ_skewness(alpha=alpha, w=w)
+        self.kurtosis = circ_kurtosis(alpha=alpha, w=w)
+
         # check multimodality
         self.mixtures = []
         for k in range(1, n_clusters_max + 1):
-            m = MoVM(n_clusters=k, n_intervals=n_intervals, unit='radian', random_seed=0)
+            m = MoVM(
+                n_clusters=k, n_intervals=n_intervals, unit="radian", random_seed=0
+            )
             m.fit(np.repeat(alpha, w))
             self.mixtures.append(m)
         self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
@@ -260,6 +267,8 @@ class Circular:
         docs += f"  Circular standard deviation (s0): {rad2data(self.s0, k=k):.02f} \n"
         docs += f"  Concentration (r): {self.r:0.2f}\n"
         docs += f"  Concentration (kappa): {self.kappa:0.2f}\n"
+        docs += f"  Skewness: {self.skewness:0.3f}\n"
+        docs += f"  Kurtosis: {self.kurtosis:0.3f}\n"
 
         docs += f"\n"
 
@@ -275,6 +284,14 @@ class Circular:
         return docs
 
     def __str__(self):
+
+        return self.__repr__()
+
+    def summary(self):
+
+        """
+        Summary of basis statistcs.
+        """
 
         return self.__repr__()
 

@@ -267,6 +267,9 @@ def omnibus_test(
 
     Return
     ------
+    A: float
+        Test statistics
+
     pval: float
         p-value.
 
@@ -291,8 +294,9 @@ def omnibus_test(
         / (np.math.factorial(m) * np.math.factorial(n - m))
         / 2 ** (n - 1)
     )
+    A = np.pi * np.sqrt(n) / (2 * (n - 2 * m))
 
-    return pval
+    return A, pval
 
 
 def batschelet_test(

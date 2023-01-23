@@ -93,7 +93,7 @@ def test_omnibus_test():
     data_zar_ex4_ch27 = load_data("D8", source="zar")
     circ_zar_ex4_ch27 = Circular(data_zar_ex4_ch27["θ"].values, unit="degree")
 
-    pval = omnibus_test(alpha=circ_zar_ex4_ch27.alpha, scale=1)
+    A, pval = omnibus_test(alpha=circ_zar_ex4_ch27.alpha, scale=1)
 
     np.testing.assert_approx_equal(pval, 0.0043, significant=2)
 

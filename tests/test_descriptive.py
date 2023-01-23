@@ -2,12 +2,17 @@ import numpy as np
 
 from pycircstat2 import Circular, load_data
 from pycircstat2.descriptive import (
+    circ_dispersion,
+    circ_kurtosis,
     circ_mean,
     circ_mean_ci,
     circ_mean_of_means,
     circ_median,
     circ_median_ci,
+    circ_moment,
+    circ_skewness,
     circ_std,
+    compute_smooth_params,
 )
 
 
@@ -170,3 +175,57 @@ def test_circ_mean_of_means():
     m, r = circ_mean_of_means(ms=ms, rs=rs)
     np.testing.assert_approx_equal(np.rad2deg(m), 152.0, significant=3)
     np.testing.assert_approx_equal(r, 0.59634, significant=5)
+
+
+def test_circ_skewness():
+
+    b11 = load_data("B11", source="fisher")["θ"].values
+    c11 = Circular(data=b11)
+    skewness = circ_skewness(alpha=c11.alpha)
+    np.testing.assert_approx_equal(skewness, -0.92, significant=2)
+
+
+def test_circ_kurtosis():
+
+    b11 = load_data("B11", source="fisher")["θ"].values
+    c11 = Circular(data=b11)
+    kurtosis = circ_kurtosis(alpha=c11.alpha)
+    np.testing.assert_approx_equal(kurtosis, 6.53, significant=3)
+
+    # The test value from Pewsey et al., 2014 is 6.64
+    # which can be abtained by not centering the r2
+    u1, r1 = circ_mean(alpha=c11.alpha)
+    u2, r2 = circ_moment(
+        alpha=c11.alpha, w=np.ones_like(c11.alpha), p=2, mean=None, centered=False
+    )[1:3]
+    kurtosis = (np.cos(u2 - 2 * u1) * r2 - r1**4) / (1 - r1) ** 2
+    np.testing.assert_approx_equal(kurtosis, 6.64, significant=3)
+
+
+def test_circ_dispersion():
+
+    b11 = load_data("B11", source="fisher")["θ"].values
+    c11 = Circular(data=b11)
+    dispersion = circ_dispersion(alpha=c11.alpha)
+    np.testing.assert_approx_equal(dispersion, 0.24, significant=2)
+
+
+def test_circ_moment():
+
+    b11 = load_data("B11", source="fisher")["θ"].values
+    c11 = Circular(data=b11)
+
+    r2, Cbar, Sbar = circ_moment(alpha=c11.alpha, p=2, centered=True)[2:]
+    np.testing.assert_approx_equal(r2, 0.67, significant=2)
+    np.testing.assert_approx_equal(Cbar.round(3), 0.67, significant=2)
+    np.testing.assert_approx_equal(Sbar.round(3), -0.0649, significant=3)
+
+
+def test_compute_smooth_params():
+
+    from pycircstat2.utils import time2float
+
+    d_fisher_b1 = load_data("B1", source="fisher")["time"].values
+    c_fisher_b1 = Circular(time2float(d_fisher_b1), unit="hour")
+    h0 = compute_smooth_params(c_fisher_b1.r, c_fisher_b1.n)
+    np.testing.assert_approx_equal(h0, 1.06, significant=2)

@@ -108,6 +108,8 @@ def circ_moment(
         mp,
         angrange(np.angle(mp)),
         mp.real,
+        Cbar,
+        Sbar,
     )
 
 
