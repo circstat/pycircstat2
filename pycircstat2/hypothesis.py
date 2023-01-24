@@ -329,14 +329,14 @@ def batschelet_test(
     P630-631, Section 27.2, Example 27.5 of Zar, 2010
     """
 
-    from scipy.stats import binom_test
+    from scipy.stats import binomtest
 
     n = len(alpha)
     angle_diff = angrange(((angle + 0.5 * np.pi) - alpha)).round(5)
     m = np.logical_and(angle_diff > 0.0, angle_diff < np.round(np.pi, 5)).sum()
     C = n - m
 
-    return binom_test(C, n=n, p=0.5)
+    return binomtest(C, n=n, p=0.5).pvalue
 
 
 def symmetry_test(
