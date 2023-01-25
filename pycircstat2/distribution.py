@@ -70,10 +70,10 @@ class cartwright_gen(rv_continuous):
 
     Method
     ------
-    pdf(x, zeta, mu=0, scale=1)
+    pdf(x, zeta, mu, scale=1)
         Probability density function.
 
-    cdf(x, zeta, mu=0, scale=1)
+    cdf(x, zeta, mu, scale=1)
         Cumulative distribution function.
 
     Note
@@ -299,6 +299,14 @@ class vonmises_ext_gen(rv_continuous):
 
     """Flat-topped von Mises Distribution
 
+    Methods
+    -------
+    pdf(x, kappa, nu, mu, scale=1)
+        Probability density function.
+
+    cdf(x, kappa, nu, mu, scale=1)
+        Cumulative distribution function.
+
     Note
     ----
     Implementation from 4.3.10 of Pewsey et al. (2014)
@@ -343,6 +351,15 @@ def _c_vmext(kappa, nu, mu):
 class jonespewsey_sineskewed_gen(rv_continuous):
 
     """Sine-Skewed Jones-Pewsey Distribution
+
+    Methods
+    -------
+    pdf(x, kappa, psi, lmbd, xi, scale=1)
+        Probability density function.
+
+    cdf(x, kappa, psi, lmbd, xi, scale=1)
+        Cumulative distribution function.
+
 
     Note
     ----
@@ -397,6 +414,15 @@ class jonespewsey_asymext_gen(rv_continuous):
 
     """Asymmetric Extended Jones-Pewsey Distribution
 
+    Methods
+    -------
+    pdf(x, kappa, psi, nu, xi, scale=1)
+        Probability density function.
+
+    cdf(x, kappa, psi, nu, xi, scale=1)
+        Cumulative distribution function.
+
+
     Note
     ----
     Implementation from 4.3.12 of Pewsey et al. (2014)
@@ -438,14 +464,23 @@ def _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi):
 def _c_jonespewsey_asymext(kappa, psi, nu, xi):
 
     c = quad_vec(
-            _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(kappa, psi, nu, xi)
-        )[0]
+        _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(kappa, psi, nu, xi)
+    )[0]
     return c
 
 
 class inverse_batschelet_gen(rv_continuous):
 
     """Inverse Batschelet distribution.
+
+    Methods
+    -------
+    pdf(x, kappa, psi, nu, lmbd, xi, scale=1)
+        Probability density function.
+
+    cdf(x, kappa, psi, nu, lmbd, xi, scale=1)
+        Cumulative distribution function.
+
 
     Note
     ----
@@ -474,7 +509,6 @@ class inverse_batschelet_gen(rv_continuous):
         if np.isclose(lmbd, -1).all():
             return self.c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
-
             return self.c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
 
     def _cdf(self, x, kappa, nu, lmbd, xi):
