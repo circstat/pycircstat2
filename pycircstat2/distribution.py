@@ -228,9 +228,13 @@ class jonespewsey_gen(rv_continuous):
     ----
     Implementation from 4.3.9 of Pewsey et al. (2014)
     """
-
     def _argcheck(self, kappa, psi, mu):
-        return (kappa >= 0) and (-np.inf <= psi <= np.inf) and (0 <= mu <= np.pi * 2)
+        self._c = _c_jonespewsey(kappa, psi, mu)
+        return (
+            (kappa >= 0) and 
+            (-np.inf <= psi <= np.inf) and 
+            (0 <= mu <= np.pi * 2)
+            )
 
     def _pdf(self, x, kappa, psi, mu):
 
@@ -240,29 +244,25 @@ class jonespewsey_gen(rv_continuous):
             if np.isclose(np.abs(psi), 0).all():
                 return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
             else:
-                c = _c_jonespewsey(kappa, psi, mu)
-                return _kernel_jonespewsey(x, kappa, psi, mu) / c
+                return _kernel_jonespewsey(x, kappa, psi, mu) / self._c
 
     def _cdf(self, x, kappa, psi, mu):
+        
         def vonmises_pdf(x, kappa, psi, mu, c):
             return c * np.exp(kappa * np.cos(x - mu))
-
+        
         if np.isclose(np.abs(psi), 0).all():
-            c = _c_jonespewsey(kappa, psi, mu)
-
+            c = self._c
             @np.vectorize
             def _cdf_single(x, kappa, psi, mu, c):
                 return quad(vonmises_pdf, a=0, b=x, args=(kappa, psi, mu, c))
-
             return _cdf_single(x, kappa, psi, mu, c)
         else:
-
             @np.vectorize
             def _cdf_single(x, kappa, psi, mu):
                 return quad(self._pdf, a=0, b=x, args=(kappa, psi, mu))
-
             return _cdf_single(x, kappa, psi, mu)
-
+           
 
 jonespewsey = jonespewsey_gen(name="jonespewsey")
 
@@ -272,15 +272,19 @@ jonespewsey = jonespewsey_gen(name="jonespewsey")
 
 
 def _kernel_jonespewsey(x, kappa, psi, mu):
-    return (np.cosh(kappa * psi) + np.sinh(kappa * psi) * np.cos(x - mu)) ** (
-        1 / psi
-    ) / (2 * np.pi * np.cosh(kappa * np.pi))
-
+    return (
+        np.cosh(kappa * psi) + np.sinh(kappa * psi) * np.cos(x - mu)
+    ) ** (1 / psi) / (2 * np.pi * np.cosh(kappa * np.pi))
 
 def _c_jonespewsey(kappa, psi, mu):
-    c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(kappa, psi, mu))[0]
+    if np.all(kappa < 0.001):
+        return np.ones_like(kappa) * 1 / 2 / np.pi
+    else:
+        if np.isclose(np.abs(psi), 0).all():
+            return 1 / (2 * np.pi * i0(kappa))
+        else:  
+            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(kappa, psi, mu))[0]      
     return c
-
 
 #########################
 ## Symmetric Extention ##
