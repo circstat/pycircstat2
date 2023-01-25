@@ -228,13 +228,10 @@ class jonespewsey_gen(rv_continuous):
     ----
     Implementation from 4.3.9 of Pewsey et al. (2014)
     """
+
     def _argcheck(self, kappa, psi, mu):
         self._c = _c_jonespewsey(kappa, psi, mu)
-        return (
-            (kappa >= 0) and 
-            (-np.inf <= psi <= np.inf) and 
-            (0 <= mu <= np.pi * 2)
-            )
+        return (kappa >= 0) and (-np.inf <= psi <= np.inf) and (0 <= mu <= np.pi * 2)
 
     def _pdf(self, x, kappa, psi, mu):
 
@@ -247,22 +244,25 @@ class jonespewsey_gen(rv_continuous):
                 return _kernel_jonespewsey(x, kappa, psi, mu) / self._c
 
     def _cdf(self, x, kappa, psi, mu):
-        
         def vonmises_pdf(x, kappa, psi, mu, c):
             return c * np.exp(kappa * np.cos(x - mu))
-        
+
         if np.isclose(np.abs(psi), 0).all():
             c = self._c
+
             @np.vectorize
             def _cdf_single(x, kappa, psi, mu, c):
                 return quad(vonmises_pdf, a=0, b=x, args=(kappa, psi, mu, c))
+
             return _cdf_single(x, kappa, psi, mu, c)
         else:
+
             @np.vectorize
             def _cdf_single(x, kappa, psi, mu):
                 return quad(self._pdf, a=0, b=x, args=(kappa, psi, mu))
+
             return _cdf_single(x, kappa, psi, mu)
-           
+
 
 jonespewsey = jonespewsey_gen(name="jonespewsey")
 
@@ -272,9 +272,10 @@ jonespewsey = jonespewsey_gen(name="jonespewsey")
 
 
 def _kernel_jonespewsey(x, kappa, psi, mu):
-    return (
-        np.cosh(kappa * psi) + np.sinh(kappa * psi) * np.cos(x - mu)
-    ) ** (1 / psi) / (2 * np.pi * np.cosh(kappa * np.pi))
+    return (np.cosh(kappa * psi) + np.sinh(kappa * psi) * np.cos(x - mu)) ** (
+        1 / psi
+    ) / (2 * np.pi * np.cosh(kappa * np.pi))
+
 
 def _c_jonespewsey(kappa, psi, mu):
     if np.all(kappa < 0.001):
@@ -282,9 +283,12 @@ def _c_jonespewsey(kappa, psi, mu):
     else:
         if np.isclose(np.abs(psi), 0).all():
             return 1 / (2 * np.pi * i0(kappa))
-        else:  
-            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(kappa, psi, mu))[0]      
+        else:
+            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(kappa, psi, mu))[
+                0
+            ]
     return c
+
 
 #########################
 ## Symmetric Extention ##
@@ -301,11 +305,11 @@ class vonmises_ext_gen(rv_continuous):
     """
 
     def _argcheck(self, kappa, nu, mu):
+        self.c = _c_vmext(kappa, nu, mu)
         return (kappa >= 0) and (-1 <= nu <= 1) and (0 <= mu <= np.pi * 2)
 
     def _pdf(self, x, kappa, nu, mu):
-        c = _c_vmext(kappa, nu, mu)
-        return c * _kernel_vmext(x, kappa, nu, mu)
+        return self.c * _kernel_vmext(x, kappa, nu, mu)
 
     def _cdf(self, x, kappa, nu, mu):
         @np.vectorize
@@ -346,6 +350,8 @@ class jonespewsey_sineskewed_gen(rv_continuous):
     """
 
     def _argcheck(self, kappa, psi, lmbd, xi):
+        # reuse helpers from jonespewsey()
+        self.c = _c_jonespewsey(kappa, psi, xi)
         return (
             (kappa >= 0)
             and (-np.inf <= psi <= np.inf)
@@ -366,13 +372,10 @@ class jonespewsey_sineskewed_gen(rv_continuous):
                     * (1 + lmbd * np.sin(x - xi))
                 )
             else:
-                # reuse helpers from jonespewsey()
-                c = _c_jonespewsey(kappa, psi, xi)
-
                 return (
                     (1 + lmbd * np.sin(x - xi))
                     * _kernel_jonespewsey(x, kappa, psi, xi)
-                    / c
+                    / self.c
                 )
 
     def _cdf(self, x, kappa, psi, lmbd, xi):
@@ -400,6 +403,7 @@ class jonespewsey_asymext_gen(rv_continuous):
     """
 
     def _argcheck(self, kappa, psi, nu, xi):
+        self.c = _c_jonespewsey_asymext(kappa, psi, nu, xi)
         return (
             (kappa >= 0)
             and (-np.inf <= psi <= np.inf)
@@ -408,19 +412,7 @@ class jonespewsey_asymext_gen(rv_continuous):
         )
 
     def _pdf(self, x, kappa, psi, nu, xi):
-
-        if np.isclose(np.abs(psi), 0).all():
-
-            def kernel(x):
-                return np.exp(kappa * np.cos(x - xi + nu * np.cos(x - xi)))
-
-            c = quad_vec(kernel, a=-np.pi, b=np.pi)[0]
-            return kernel(x) / c
-        else:
-
-            c = _c_jonespewsey_asymext(kappa, psi, nu, xi)
-
-            return _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi) / c
+        return _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi) / self.c
 
     def _cdf(self, x, kappa, psi, nu, xi):
         @np.vectorize
@@ -434,16 +426,20 @@ jonespewsey_asymext = jonespewsey_asymext_gen(name="jonespewsey_asymext")
 
 
 def _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi):
-    return (
-        np.cosh(kappa * psi)
-        + np.sinh(kappa * psi) * np.cos(x - xi + nu * np.cos(x - xi))
-    ) ** (1 / psi)
+    if np.isclose(np.abs(psi), 0).all():
+        return np.exp(kappa * np.cos(x - xi + nu * np.cos(x - xi)))
+    else:
+        return (
+            np.cosh(kappa * psi)
+            + np.sinh(kappa * psi) * np.cos(x - xi + nu * np.cos(x - xi))
+        ) ** (1 / psi)
 
 
 def _c_jonespewsey_asymext(kappa, psi, nu, xi):
+
     c = quad_vec(
-        _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(kappa, psi, nu, xi)
-    )[0]
+            _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(kappa, psi, nu, xi)
+        )[0]
     return c
 
 
@@ -457,6 +453,12 @@ class inverse_batschelet_gen(rv_continuous):
     """
 
     def _argcheck(self, kappa, nu, lmbd, xi):
+        self.c = _c_invbatschelet(kappa, lmbd)
+        if np.isclose(lmbd, -1).all():
+            self.con1, self.con2 = 0, 0
+        else:
+            self.con1 = (1 - lmbd) / (1 + lmbd)
+            self.con2 = (2 * lmbd) / (1 + lmbd)
         return (
             (kappa >= 0)
             and (-1 <= nu <= 1)
@@ -468,13 +470,12 @@ class inverse_batschelet_gen(rv_continuous):
 
         arg1 = _tnu(x, nu, xi)
         arg2 = _slmbdinv(arg1, lmbd)
-        c = _c_invbatschelet(kappa, lmbd)
+
         if np.isclose(lmbd, -1).all():
-            return c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
+            return self.c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
-            con1 = (1 - lmbd) / (1 + lmbd)
-            con2 = (2 * lmbd) / (1 + lmbd)
-            return c * np.exp(kappa * np.cos(con1 * arg1 + con2 * arg2))
+
+            return self.c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
 
     def _cdf(self, x, kappa, nu, lmbd, xi):
         @np.vectorize
