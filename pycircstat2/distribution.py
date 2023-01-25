@@ -234,7 +234,7 @@ class jonespewsey_gen(rv_continuous):
 
     def _pdf(self, x, kappa, psi, mu):
 
-        if kappa < 0.001:
+        if np.all(kappa < 0.001):
             return 1 / (2 * np.pi)
         else:
             if np.isclose(np.abs(psi), 0).all():
