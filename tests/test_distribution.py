@@ -4,7 +4,10 @@ from pycircstat2.distribution import (
     cardioid,
     cartwright,
     circularuniform,
+    inverse_batschelet,
     jonespewsey,
+    jonespewsey_asymext,
+    jonespewsey_sineskewed,
     vonmises,
     vonmises_ext,
     wrapcauchy,
@@ -91,12 +94,13 @@ def test_jonespewsey():
         0.4401445,
         significant=7,
     )
-    # too slow to run, enable at the end
-    # np.testing.assert_approx_equal(
-    #     jonespewsey.ppf(q=0.4401445, kappa=2, psi=-1.5, mu=np.pi / 2),
-    #     np.pi / 2,
-    #     significant=7,
-    # )
+    # take a long time to run jonespewsey.ppf()
+    # might need to implement the method explicitly
+    np.testing.assert_approx_equal(
+        jonespewsey.ppf(q=0.4401445, kappa=2, psi=-1.5, mu=np.pi / 2),
+        np.pi / 2,
+        significant=7,
+    )
 
 
 def test_vonmises_ext():
@@ -111,3 +115,54 @@ def test_vonmises_ext():
         1.7301,
         significant=4,
     )
+
+
+def test_jonespewsey_sineskewed():
+
+    np.testing.assert_approx_equal(
+        jonespewsey_sineskewed.cdf(
+            x=3 * np.pi / 2, kappa=2, psi=1, lmbd=0.5, xi=np.pi / 2
+        ).round(4),
+        0.9446,
+        significant=4,
+    )
+    np.testing.assert_approx_equal(
+        jonespewsey_sineskewed.ppf(q=0.5, kappa=2, psi=1, lmbd=0.5, xi=np.pi / 2).round(
+            4
+        ),
+        2.1879,
+        significant=4,
+    )
+
+
+def test_jonespewsey_asymext():
+
+    np.testing.assert_approx_equal(
+        jonespewsey_asymext.cdf(
+            x=np.pi / 2, kappa=2, psi=-1, nu=0.75, xi=np.pi / 2
+        ).round(4),
+        0.7535,
+        significant=4,
+    )
+    np.testing.assert_approx_equal(
+        jonespewsey_asymext.ppf(q=0.5, kappa=2, psi=-1, nu=0.75, xi=np.pi / 2).round(4),
+        1.0499,
+        significant=4,
+    )
+
+
+def test_inverse_batschelet():
+
+    np.testing.assert_approx_equal(
+        inverse_batschelet.cdf(
+            x=np.pi / 2, kappa=2, nu=-0.5, lmbd=0.7, xi=np.pi / 2
+        ).round(4),
+        0.1180,
+        significant=4,
+    )
+    np.testing.assert_approx_equal(
+        inverse_batschelet.ppf(q=0.5, kappa=2, nu=-0.5, lmbd=0.7, xi=np.pi / 2).round(4),
+        2.5138,
+        significant=4,
+    )
+   
