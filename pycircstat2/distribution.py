@@ -230,6 +230,8 @@ class jonespewsey_gen(rv_continuous):
     """
 
     def _argcheck(self, kappa, psi, mu):
+        # we can save a lot of computation if c is automatically computed before others
+        # but tbh this is a hack, and I don't have a better way to do it atm.
         self._c = _c_jonespewsey(kappa, psi, mu)
         return (kappa >= 0) and (-np.inf <= psi <= np.inf) and (0 <= mu <= np.pi * 2)
 
