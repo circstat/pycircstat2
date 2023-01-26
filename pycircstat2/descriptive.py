@@ -187,7 +187,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     u1, r1 = circ_mean(alpha=alpha, w=w)
 
     u2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[1]  # eq(2.27)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=u1, centered=True)[2]
+    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[2]
 
     skewness = (r2 * np.sin(u2 - 2 * u1)) / (1 - r1) ** 1.5
 
@@ -225,7 +225,7 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     u1, r1 = circ_mean(alpha=alpha, w=w)
 
     u2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[1]  # eq(2.27)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=u1, centered=True)[2]
+    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[2]
 
     kurtosis = (r2 * np.cos(u2 - 2 * u1) - r1**4) / (1 - r1) ** 2
 
@@ -314,6 +314,9 @@ def circ_median(
         Frequencies or weights
     grouped: bool
         Grouped data or not.
+    method: str
+        - deviation
+        - count
 
     Return
     ------

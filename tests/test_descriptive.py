@@ -190,15 +190,6 @@ def test_circ_kurtosis():
     b11 = load_data("B11", source="fisher")["θ"].values
     c11 = Circular(data=b11)
     kurtosis = circ_kurtosis(alpha=c11.alpha)
-    np.testing.assert_approx_equal(kurtosis, 6.53, significant=3)
-
-    # The test value from Pewsey et al., 2014 is 6.64
-    # which can be abtained by not centering the r2
-    u1, r1 = circ_mean(alpha=c11.alpha)
-    u2, r2 = circ_moment(
-        alpha=c11.alpha, w=np.ones_like(c11.alpha), p=2, mean=None, centered=False
-    )[1:3]
-    kurtosis = (np.cos(u2 - 2 * u1) * r2 - r1**4) / (1 - r1) ** 2
     np.testing.assert_approx_equal(kurtosis, 6.64, significant=3)
 
 
