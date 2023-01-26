@@ -178,7 +178,8 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
     Note
     ----
-    Implementation of Equation 2.29 (Fisher, 1993)
+    Unlike the implementation of Equation 2.29 (Fisher, 1993),
+    here we followed Pewsey et al. (2014) by NOT centering the second moment.
     """
 
     if w is None:
@@ -186,8 +187,9 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
     u1, r1 = circ_mean(alpha=alpha, w=w)
 
-    u2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[1]  # eq(2.27)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[2]
+    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[
+        1:3
+    ]  # eq(2.27)
 
     skewness = (r2 * np.sin(u2 - 2 * u1)) / (1 - r1) ** 1.5
 
@@ -216,7 +218,8 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
     Note
     ----
-    Implementation of Equation 2.30 (Fisher, 1993)
+    Unlike the implementation of Equation 2.30 (Fisher, 1993),
+    here we followed Pewsey et al. (2014) by NOT centering the second moment.
     """
 
     if w is None:
@@ -224,8 +227,9 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
     u1, r1 = circ_mean(alpha=alpha, w=w)
 
-    u2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[1]  # eq(2.27)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[2]
+    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[
+        1:3
+    ]  # eq(2.27)
 
     kurtosis = (r2 * np.cos(u2 - 2 * u1) - r1**4) / (1 - r1) ** 2
 

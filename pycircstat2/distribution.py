@@ -57,8 +57,6 @@ class cardioid_gen(rv_continuous):
         return (1 + 2 * rho * np.cos(x - mu)) / 2.0 / np.pi
 
     def _cdf(self, x, rho, mu):
-        # return (rho * np.sin(x) + x) / (2 * np.pi)
-
         return (x + 2 * rho * (np.sin(x - mu) + np.sin(mu))) / (2 * np.pi)
 
 
