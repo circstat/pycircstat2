@@ -762,7 +762,7 @@ def circ_median_ci(
 
     # selected confidence intervals for the median direction for n < 15
     # from A6, Fisher, 1993.
-    # We only return the narrowest CI if there are more than one in the table.
+    # We only return the widest CI if there are more than one in the table.
 
     elif n == 3:
         lower, upper = alpha[0], alpha[2]
@@ -777,26 +777,26 @@ def circ_median_ci(
         lower, upper = alpha[0], alpha[5]
         ci = 0.97
     elif n == 7:
-        lower, upper = alpha[1], alpha[5]
-        ci = 0.875
+        lower, upper = alpha[0], alpha[6]
+        ci = 0.992
     elif n == 8:
         lower, upper = alpha[1], alpha[6]
         ci = 0.93
     elif n == 9:
-        lower, upper = alpha[1], alpha[7]
-        ci = 0.961
+        lower, upper = alpha[0], alpha[8]
+        ci = 0.996
     elif n == 10:
-        lower, upper = alpha[2], alpha[7]
-        ci = 0.893
+        lower, upper = alpha[1], alpha[8]
+        ci = 0.978
     elif n == 11:
-        lower, upper = alpha[2], alpha[8]
-        ci = 0.934
+        lower, upper = alpha[1], alpha[9]
+        ci = 0.99
     elif n == 12:
-        lower, upper = alpha[3], alpha[8]
-        ci = 0.854
+        lower, upper = alpha[2], alpha[9]
+        ci = 0.962
     elif n == 13:
-        lower, upper = alpha[3], alpha[9]
-        ci = 0.928
+        lower, upper = alpha[2], alpha[10]
+        ci = 0.978
     elif n == 14:
         lower, upper = alpha[3], alpha[10]
         ci = 0.937

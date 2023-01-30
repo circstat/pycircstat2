@@ -21,7 +21,7 @@ def test_circ_mean():
     # Example 26.4 (Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
-    m, r = circ_mean(circ_zar_ex4_ch26.alpha, circ_zar_ex4_ch26.w)[:2]
+    m, r = circ_mean(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 99, significant=1)
     np.testing.assert_approx_equal(r, 0.82522, significant=5)
@@ -31,7 +31,7 @@ def test_circ_mean():
     circ_zar_ex5_ch26 = Circular(
         data=data_zar_ex5_ch26["θ"].values, w=data_zar_ex5_ch26["w"].values
     )
-    m, r = circ_mean(circ_zar_ex5_ch26.alpha, circ_zar_ex5_ch26.w)[:2]
+    m, r = circ_mean(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 162, significant=1)
     np.testing.assert_approx_equal(r, 0.55064, significant=4)
@@ -77,7 +77,10 @@ def test_circ_median():
     data_zar_ex2_ch26 = load_data("D1", source="zar")
     circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].values)
     median = circ_median(
-        circ_zar_ex2_ch26.alpha, circ_zar_ex2_ch26.w, circ_zar_ex2_ch26.grouped
+        alpha=circ_zar_ex2_ch26.alpha,
+        w=circ_zar_ex2_ch26.w,
+        grouped=False,
+        method="deviation",
     )
 
     np.testing.assert_approx_equal(np.rad2deg(median), 103.0, significant=1)
@@ -85,9 +88,10 @@ def test_circ_median():
     # Ch26.6 P657 (Zar, 2010) droped the first point
     circ_zar_ex2_ch26_odd = Circular(data=data_zar_ex2_ch26["θ"].values[1:])
     median = circ_median(
-        circ_zar_ex2_ch26_odd.alpha,
-        circ_zar_ex2_ch26_odd.w,
-        circ_zar_ex2_ch26_odd.grouped,
+        alpha=circ_zar_ex2_ch26_odd.alpha,
+        w=circ_zar_ex2_ch26_odd.w,
+        grouped=False,
+        method="deviation",
     )
 
     np.testing.assert_approx_equal(np.rad2deg(median), 110.0, significant=1)
@@ -95,7 +99,11 @@ def test_circ_median():
     # mallard data (mardia, 1972)
     data_mallard = load_data("mallard", source="mardia")
     circ_mallard = Circular(data=data_mallard["θ"].values, w=data_mallard["w"].values)
-    median = circ_median(circ_mallard.alpha_ub, circ_mallard.w, circ_mallard.grouped)
+    median = circ_median(
+        alpha=circ_mallard.alpha_ub,
+        w=circ_mallard.w,
+        grouped=True,
+    )
 
     np.testing.assert_approx_equal(np.rad2deg(median), 313.8, significant=2)
 
@@ -143,19 +151,19 @@ def test_circ_median_ci():
 
     d_ex3 = load_data("B6", "fisher")
     c_ex3_s0 = Circular(
-        np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:10]),
+        data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:10]),
         kwargs_median={"method": "count"},
     )
     c_ex3_s1 = Circular(
-        np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:20]),
+        data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:20]),
         kwargs_median={"method": "deviation"},
     )
-    c_ex3_s2 = Circular(np.sort(d_ex3[d_ex3.set == 2]["θ"].values))
+    c_ex3_s2 = Circular(data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values))
 
     # n is too small for proper estimation of median ci
-    # lb, ub, ci = circ_median_ci(median=c_ex3_s0.median, alpha=c_ex3_s0.alpha)
-    # np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 245.0, significant=3)
-    # np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 315.0, significant=3)
+    lb, ub, ci = circ_median_ci(median=c_ex3_s0.median, alpha=c_ex3_s0.alpha)
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 245.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 315.0, significant=3)
 
     lb, ub, ci = circ_median_ci(median=c_ex3_s1.median, alpha=c_ex3_s1.alpha)
     np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
