@@ -780,7 +780,7 @@ def circ_median_ci(
         lower, upper = alpha[0], alpha[6]
         ci = 0.992
     elif n == 8:
-        lower, upper = alpha[1], alpha[6]
+        lower, upper = alpha[0], alpha[7]
         ci = 0.93
     elif n == 9:
         lower, upper = alpha[0], alpha[8]
