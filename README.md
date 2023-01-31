@@ -27,4 +27,7 @@ pip install -e pycircstat2
 
 ### Topics
 
-TODO.
+- [Utils](https://nbviewer.org/github/circstat/pycircstat2/blob/main/examples/T0-utils.ipynb)
+- [Descriptive Statistics](https://nbviewer.org/github/circstat/pycircstat2/blob/main/examples/T1-descriptive-statistics.ipynb)
+- Hypothesis Testing (TODO)
+- Circular Models (TODO)

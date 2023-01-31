@@ -61,6 +61,7 @@ def circ_moment(
     p: int = 1,
     mean=None,
     centered=False,
+    return_intermediates=False,
 ) -> tuple:
     """
     Circular moment. When p=1, it's the same as circular mean.
@@ -77,6 +78,8 @@ def circ_moment(
         Precomputed circular mean.
     centered: bool
         If centered is True, substract mean from the alpha.
+    return_intermediates: bool
+        If return_intermediate is True, return Cbar and Sbar
 
     Returns
     -------
@@ -104,19 +107,25 @@ def circ_moment(
 
     mp = Cbar + 1j * Sbar
 
-    return (
-        mp,
-        angrange(np.angle(mp)),
-        mp.real,
-        Cbar,
-        Sbar,
-    )
+    if return_intermediates:
+        return (
+            angrange(np.angle(mp)),
+            np.abs(mp),
+            Cbar,
+            Sbar,
+        )
+    else:
+        return (
+            angrange(np.angle(mp)),
+            np.abs(mp),
+        )
 
 
 def circ_dispersion(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     mean=None,
+    centered=False,
 ) -> float:
 
     r"""
@@ -148,8 +157,8 @@ def circ_dispersion(
     if w is None:
         w = np.ones_like(alpha)
 
-    r1 = circ_moment(alpha=alpha, w=w, p=1, mean=mean, centered=True)[2]  # eq(2.26)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=mean, centered=True)[2]  # eq(2.27)
+    r1 = circ_moment(alpha=alpha, w=w, p=1, mean=mean, centered=centered)[1]  # eq(2.26)
+    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=mean, centered=centered)[1]  # eq(2.27)
 
     dispersion = (1 - r2) / (2 * r1**2)  # eq(2.28)
 
@@ -187,9 +196,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
     u1, r1 = circ_mean(alpha=alpha, w=w)
 
-    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[
-        1:3
-    ]  # eq(2.27)
+    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
 
     skewness = (r2 * np.sin(u2 - 2 * u1)) / (1 - r1) ** 1.5
 
@@ -227,9 +234,7 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
     u1, r1 = circ_mean(alpha=alpha, w=w)
 
-    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)[
-        1:3
-    ]  # eq(2.27)
+    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
 
     kurtosis = (r2 * np.cos(u2 - 2 * u1) - r1**4) / (1 - r1) ** 2
 
@@ -473,6 +478,7 @@ def _circ_median_mean_deviation(alpha: np.array) -> float:
 
     return median
 
+
 def circ_mean_deviation(
     alpha: Union[np.ndarray, float, int, list],
     beta: Union[np.ndarray, float, int, list],
@@ -571,10 +577,11 @@ def _circ_mean_ci_dispersion(
         raise ValueError(
             f"n={n} is too small (< 25) for computing CI with circular dispersion."
         )
+
     # TODO: sometime return nan because x in arcsin(x) is larger than 1.
+    # Should we centered the data here? No.
     d = np.arcsin(
-        np.sqrt(circ_dispersion(alpha=alpha, w=w, mean=mean) / n)
-        * norm.ppf(1 - 0.5 * (1 - ci))
+        np.sqrt(circ_dispersion(alpha=alpha, w=w) / n) * norm.ppf(1 - 0.5 * (1 - ci))
     )
     lb = mean - d
     ub = mean + d

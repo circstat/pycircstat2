@@ -108,7 +108,10 @@ def test_circ_median():
 
     np.testing.assert_approx_equal(np.rad2deg(median), 313.8, significant=2)
 
+
 test_circ_median()
+
+
 def test_circ_mean_deviation():
     pass
 
@@ -212,13 +215,26 @@ def test_circ_dispersion():
 
 def test_circ_moment():
 
+    # Section 3.2, Pewsey (2014) P24
+
     b11 = load_data("B11", source="fisher")["θ"].values
     c11 = Circular(data=b11)
 
-    r2, Cbar, Sbar = circ_moment(alpha=c11.alpha, p=2, centered=True)[2:]
-    np.testing.assert_approx_equal(r2, 0.67, significant=2)
-    np.testing.assert_approx_equal(Cbar.round(3), 0.67, significant=2)
-    np.testing.assert_approx_equal(Sbar.round(3), -0.0649, significant=3)
+    # first moment == mean
+
+    u1, r1, Cbar, Sbar = circ_moment(alpha=c11.alpha, p=1, centered=False, return_intermediates=True)
+    np.testing.assert_approx_equal(np.rad2deg(u1).round(2), 3.10, significant=2)
+    np.testing.assert_approx_equal(r1.round(2), 0.83, significant=2)
+    np.testing.assert_approx_equal(Cbar.round(2), 0.83, significant=2)
+    np.testing.assert_approx_equal(Sbar.round(2), 0.04, significant=2)
+
+    # second moment
+
+    u2, r2, Cbar, Sbar = circ_moment(alpha=c11.alpha, p=2, centered=False, return_intermediates=True)
+    np.testing.assert_approx_equal(np.rad2deg(u2).round(2), 0.64, significant=2)
+    np.testing.assert_approx_equal(r2.round(2), 0.67, significant=2)
+    np.testing.assert_approx_equal(Cbar.round(2), 0.67, significant=2)
+    np.testing.assert_approx_equal(Sbar.round(2), 0.01, significant=2)
 
 
 def test_compute_smooth_params():
