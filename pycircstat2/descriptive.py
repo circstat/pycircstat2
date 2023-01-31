@@ -305,6 +305,7 @@ def circ_median(
     w: Union[np.array, None] = None,
     grouped: bool = False,
     method: str = "deviation",
+    return_average: bool = True,
 ) -> float:
 
     """
@@ -319,8 +320,10 @@ def circ_median(
     grouped: bool
         Grouped data or not.
     method: str
-        - deviation
-        - count
+        For ungrouped data, there are two ways
+        to compute the medians:
+            - deviation
+            - count
 
     Return
     ------
@@ -340,7 +343,10 @@ def circ_median(
             median = _circ_median_count(alpha)
         # find the angle that has the minimal mean deviation
         elif method == "deviation":
-            median = _circ_median_mean_deviation(alpha, w)
+            median = _circ_median_mean_deviation(alpha)
+
+    if return_average:
+        median = circ_mean(alpha=median)[0]
 
     return angrange(median)
 
@@ -399,8 +405,7 @@ def _circ_median_groupped(
         if np.isclose(upper - lower, np.pi):
             lower = lower - bin_size
             upper = upper + bin_size
-        beta = np.array([lower, upper])
-        median = circ_mean(alpha=beta)[0]
+        median = np.array([lower, upper])
 
     return median
 
@@ -435,15 +440,18 @@ def _circ_median_count(alpha: np.ndarray) -> float:
     # if there are more than one potential median, do we need to
     # distinguish odd or even? or just calculate the circular mean?
     else:
-        median = circ_mean(alpha[idx_candidates])[0]
+        median = alpha[idx_candidates]
 
     return median
 
 
-def _circ_median_mean_deviation(
-    alpha: np.array,
-    w: Union[np.array, None] = None,
-) -> float:
+def _circ_median_mean_deviation(alpha: np.array) -> float:
+
+    """
+    Note
+    ----
+    Implementation of Section 2.3.2
+    """
 
     # get pairwise circular mean deviation
     angdist = circ_mean_deviation(alpha, alpha)
@@ -461,10 +469,9 @@ def _circ_median_mean_deviation(
     # if there are more than one potential median, do we need to
     # distinguish odd or even? or just calculate the circular mean?
     else:
-        median = circ_mean(alpha[idx_candidates], w[idx_candidates])[0]
+        median = alpha[idx_candidates]
 
     return median
-
 
 def circ_mean_deviation(
     alpha: Union[np.ndarray, float, int, list],
@@ -488,6 +495,10 @@ def circ_mean_deviation(
     Return
     ------
     circular mean deviation: np.array
+
+    Note
+    ----
+    eq 2.32, Section 2.3.2, Fisher (1993)
     """
     if not isinstance(alpha, np.ndarray):
         alpha = np.array([alpha])

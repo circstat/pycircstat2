@@ -78,9 +78,9 @@ def test_circ_median():
     circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].values)
     median = circ_median(
         alpha=circ_zar_ex2_ch26.alpha,
-        w=circ_zar_ex2_ch26.w,
         grouped=False,
         method="deviation",
+        return_average=True,
     )
 
     np.testing.assert_approx_equal(np.rad2deg(median), 103.0, significant=1)
@@ -89,9 +89,9 @@ def test_circ_median():
     circ_zar_ex2_ch26_odd = Circular(data=data_zar_ex2_ch26["θ"].values[1:])
     median = circ_median(
         alpha=circ_zar_ex2_ch26_odd.alpha,
-        w=circ_zar_ex2_ch26_odd.w,
         grouped=False,
         method="deviation",
+        return_average=True,
     )
 
     np.testing.assert_approx_equal(np.rad2deg(median), 110.0, significant=1)
@@ -103,11 +103,12 @@ def test_circ_median():
         alpha=circ_mallard.alpha_ub,
         w=circ_mallard.w,
         grouped=True,
+        return_average=True,
     )
 
     np.testing.assert_approx_equal(np.rad2deg(median), 313.8, significant=2)
 
-
+test_circ_median()
 def test_circ_mean_deviation():
     pass
 
