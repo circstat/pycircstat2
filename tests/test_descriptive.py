@@ -50,8 +50,8 @@ def test_circ_std():
     np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1.0)
     np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1.0)
 
-    # compute from alpha and w
-    s, s0, rc = circ_std(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
+    # compute from alpha
+    s, s0, rc = circ_std(alpha=circ_zar_ex4_ch26.alpha)
     np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1.0)
     np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1.0)
 
@@ -222,7 +222,9 @@ def test_circ_moment():
 
     # first moment == mean
 
-    u1, r1, Cbar, Sbar = circ_moment(alpha=c11.alpha, p=1, centered=False, return_intermediates=True)
+    u1, r1, Cbar, Sbar = circ_moment(
+        alpha=c11.alpha, p=1, centered=False, return_intermediates=True
+    )
     np.testing.assert_approx_equal(np.rad2deg(u1).round(2), 3.10, significant=2)
     np.testing.assert_approx_equal(r1.round(2), 0.83, significant=2)
     np.testing.assert_approx_equal(Cbar.round(2), 0.83, significant=2)
@@ -230,7 +232,9 @@ def test_circ_moment():
 
     # second moment
 
-    u2, r2, Cbar, Sbar = circ_moment(alpha=c11.alpha, p=2, centered=False, return_intermediates=True)
+    u2, r2, Cbar, Sbar = circ_moment(
+        alpha=c11.alpha, p=2, centered=False, return_intermediates=True
+    )
     np.testing.assert_approx_equal(np.rad2deg(u2).round(2), 0.64, significant=2)
     np.testing.assert_approx_equal(r2.round(2), 0.67, significant=2)
     np.testing.assert_approx_equal(Cbar.round(2), 0.67, significant=2)

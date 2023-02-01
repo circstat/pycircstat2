@@ -275,6 +275,9 @@ def circ_std(
     Implementation of Equation 26.15-16/20-21 (Zar, 2010)
     """
 
+    if w is None:
+        w = np.ones_like(alpha)
+
     if r is None:
         assert isinstance(alpha, np.ndarray) and isinstance(
             w, np.ndarray
@@ -659,7 +662,7 @@ def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95, return_samples=False):
         ci,
         len(beta) - 1,
         loc=circ_mean(alpha=beta)[0],
-        scale=circ_std(alpha=beta, w=np.ones_like(beta))[0],
+        scale=circ_std(alpha=beta, w=np.ones_like(beta))[1],
     )
 
     if return_samples:
