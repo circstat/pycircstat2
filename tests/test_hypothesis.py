@@ -4,6 +4,7 @@ from pycircstat2 import Circular, load_data
 from pycircstat2.hypothesis import (
     V_test,
     batschelet_test,
+    chisquare_test,
     kuiper_test,
     omnibus_test,
     one_sample_test,
@@ -102,11 +103,22 @@ def test_batschelet_test():
     data_zar_ex5_ch27 = load_data("D8", source="zar")
     circ_zar_ex5_ch27 = Circular(data=data_zar_ex5_ch27["θ"].values, unit="degree")
 
-    pval = batschelet_test(
+    C, pval = batschelet_test(
         angle=np.deg2rad(45),
         alpha=circ_zar_ex5_ch27.alpha,
     )
+    np.testing.assert_equal(C, 5)
     np.testing.assert_approx_equal(pval, 0.00661, significant=3)
+
+
+def test_chisquare_test():
+
+    d2 = load_data("D2", source="zar")
+    c2 = Circular(data=d2["θ"].values, w=d2["w"].values)
+
+    χ2, pval = chisquare_test(c2.w)
+    np.testing.assert_approx_equal(χ2, 66.543, significant=3)
+    assert pval < 0.001
 
 
 def test_symmetry_test():
@@ -114,7 +126,7 @@ def test_symmetry_test():
     data_zar_ex6_ch27 = load_data("D9", source="zar")
     circ_zar_ex6_ch27 = Circular(data=data_zar_ex6_ch27["θ"].values, unit="degree")
 
-    p = symmetry_test(median=circ_zar_ex6_ch27.median, alpha=circ_zar_ex6_ch27.alpha)
+    d, p = symmetry_test(median=circ_zar_ex6_ch27.median, alpha=circ_zar_ex6_ch27.alpha)
     assert p > 0.5
 
 
@@ -180,6 +192,14 @@ def test_wallraff_test():
     U, pval = wallraff_test(angle=np.deg2rad(135), circs=[c0, c1])
     np.testing.assert_approx_equal(U, 18.5, significant=3)
     assert pval > 0.20
+
+    from pycircstat2.utils import time2float
+    d = load_data("D15", source="zar")
+    c0 = Circular(data=time2float(d[d["sex"] == "male"]["time"].values))
+    c1 = Circular(data=time2float(d[d["sex"] == "female"]["time"].values))
+    U, pval = wallraff_test(angle=np.deg2rad(time2float(['7:55', '8:15'])), circs=[c0, c1], verbose=True)
+    np.testing.assert_equal(U, 13)
+    assert pval > 0.05
 
 
 def test_kuiper_test():

@@ -4,7 +4,7 @@ import numpy as np
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
 from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median
-from .utils import angrange, angular_distance
+from .utils import angrange, angular_distance, significance_code
 
 #####################
 ## One-Sample Test ##
@@ -16,6 +16,7 @@ def rayleigh_test(
     w: Union[np.ndarray, None] = None,
     r: Union[float, None] = None,
     n: Union[int, None] = None,
+    verbose: bool = False,
 ) -> tuple:
 
     """
@@ -34,21 +35,24 @@ def rayleigh_test(
         Angles in radian.
 
     w: np.array or None.
-        Frequencies of angles
+        Frequencies of angles.
 
     r: float or None
         Resultant vector length from `descriptive.circ_mean()`.
 
     n: int or None
-        Sample size
+        Sample size.
+
+    verbose: bool
+        Print formatted results.
 
     Returns
     -------
     z: float
-        Z-score of Rayleigh's Test. Or Rayleigh's Z.
+        Test Statistics (Rayleigh's Z).
 
     p: float
-        P value from Rayleigh's Test.
+        P-value.
 
     Reference
     ---------
@@ -69,12 +73,21 @@ def rayleigh_test(
 
     R = n * r
     z = R**2 / n  # eq(27.2)
-    p = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
+    pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
 
-    return z, p
+    if verbose:
+        print("Rayleigh's Test of Uniformity")
+        print("-----------------------------")
+        print("H0: ρ = 0")
+        print("HA: ρ ≠ 0")
+        print("")
+        print(f"Test Statistics: {z:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
+    return z, pval
 
 
-def chisquare_test(w: np.ndarray):
+def chisquare_test(w: np.ndarray, verbose=False):
 
     """Chi-Square Goodness of Fit for Circular data.
 
@@ -87,6 +100,9 @@ def chisquare_test(w: np.ndarray):
     ---------
     w: np.ndarray
         Frequencies of angles
+
+    verbose: bool
+        Print formatted results.
 
     Returns
     -------
@@ -109,6 +125,15 @@ def chisquare_test(w: np.ndarray):
     chi2 = res.statistic
     pval = res.pvalue
 
+    if verbose:
+        print("Chi-Square Test of Uniformity")
+        print("-----------------------------")
+        print("H0: uniform")
+        print("HA: not uniform")
+        print("")
+        print(f"Test Statistics: {chi2:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
     return chi2, pval
 
 
@@ -119,6 +144,7 @@ def V_test(
     mean: float = None,
     r: float = None,
     n: int = None,
+    verbose: bool = False,
 ) -> tuple:
 
     """
@@ -137,7 +163,7 @@ def V_test(
         Angles in radian.
 
     w: np.array or None.
-        Frequencies of angles
+        Frequencies of angles.
 
     mean: float or None
         Circular mean from `descriptive.circ_mean()`. Needed if `alpha` is None.
@@ -148,15 +174,18 @@ def V_test(
     n: int or None
         Sample size. Needed if `alpha` is None.
 
+    verbose: bool
+        Print formatted results.
+
     Returns
     -------
 
     V: float
-        V value from modified Rayleigh's test.
+        Test Statistics.
     u: float
-        U value from modified Rayleigh's test.
+        circular mean.
     p: float
-        P value from modified Rayleigh's test.
+        P-value.
 
     Reference
     ---------
@@ -175,9 +204,18 @@ def V_test(
     R = n * r
     V = R * np.cos(mean - angle)  # eq(27.5)
     u = V * np.sqrt(2 / n)  # eq(27.6)
-    p = 1 - norm().cdf(u)
+    pval = 1 - norm().cdf(u)
 
-    return V, u, p
+    if verbose:
+        print("Modified Rayleigh's Test of Uniformity")
+        print("--------------------------------------")
+        print(f"H0: ρ = 0")
+        print(f"HA: ρ ≠ 0 and μ = {angle:.5f} rad")
+        print("")
+        print(f"Test Statistics: {V:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
+    return V, u, pval
 
 
 def one_sample_test(
@@ -186,6 +224,7 @@ def one_sample_test(
     w: Union[np.ndarray, None] = None,
     lb: float = None,
     ub: float = None,
+    verbose: bool = False,
 ) -> bool:
 
     """
@@ -213,9 +252,8 @@ def one_sample_test(
     ub: float
         Upper bound of circular mean from `descriptive.circ_mean_ci()`.
 
-    unit: str
-        Radian or degree. Default is degree,
-        which will be converted to radian.
+    verbose: bool
+        Print formatted results.
 
     Return
     ------
@@ -240,12 +278,28 @@ def one_sample_test(
     else:
         reject = True  # reject null (mean angle == angle)
 
+    if verbose:
+        print("One-Sample Test for the Mean Angle")
+        print("----------------------------------")
+        print(f"H0: μ = μ0")
+        print(f"HA: μ ≠ μ0 and μ0 = {angle:.5f} rad")
+        print("")
+        if reject:
+            print(
+                f"Reject H0:\nμ0 = {angle:.5f} lies outside the 95% CI of μ ({np.array([lb, ub]).round(5)})"
+            )
+        else:
+            print(
+                f"Failed to reject H0:\nμ0 = {angle:.5f} lies within the 95% CI of μ ({np.array([lb, ub]).round(5)})"
+            )
+
     return reject
 
 
 def omnibus_test(
     alpha: np.ndarray,
     scale: int = 1,
+    verbose: bool = False,
 ) -> float:
 
     """
@@ -264,6 +318,9 @@ def omnibus_test(
 
     scale: int
         Scale factor for the number of lines to be tested.
+
+    verbose: bool
+        Print formatted results.
 
     Return
     ------
@@ -296,12 +353,21 @@ def omnibus_test(
     )
     A = np.pi * np.sqrt(n) / (2 * (n - 2 * m))
 
+    if verbose:
+        print('Hodges-Ajne ("omnibus") Test for Uniformity')
+        print("-------------------------------------------")
+        print(f"H0: uniform")
+        print(f"HA: not unifrom")
+        print("")
+        print(f"Test Statistics: {A:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
     return A, pval
 
 
 def batschelet_test(
     angle: float,
     alpha: np.ndarray,
+    verbose: bool = False,
 ) -> float:
 
     """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
@@ -319,6 +385,9 @@ def batschelet_test(
     alpha: np.array or None
         Angles in radian.
 
+    verbose: bool
+        Print formatted results.
+
     Return
     ------
     pval: float
@@ -335,13 +404,24 @@ def batschelet_test(
     angle_diff = angrange(((angle + 0.5 * np.pi) - alpha)).round(5)
     m = np.logical_and(angle_diff > 0.0, angle_diff < np.round(np.pi, 5)).sum()
     C = n - m
+    pval = binomtest(C, n=n, p=0.5).pvalue
 
-    return binomtest(C, n=n, p=0.5).pvalue
+    if verbose:
+        print("Batschelet Test for Uniformity")
+        print("------------------------------")
+        print(f"H0: uniform")
+        print(f"HA: not unifrom but concentrated around θ = {angle:.5f} rad")
+        print("")
+        print(f"Test Statistics: {C}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
+    return C, pval
 
 
 def symmetry_test(
     alpha: np.ndarray,
     median: Union[int, float, None] = None,
+    verbose: bool = False,
 ) -> float:
 
     """Non-parametric test for symmetry around the median. Works by performing a
@@ -359,6 +439,9 @@ def symmetry_test(
     median: float or None.
         Median computed by `descriptive.median()`.
 
+    verbose: bool
+        Print formatted results.
+
     Return
     ------
     pval: float
@@ -373,9 +456,20 @@ def symmetry_test(
         median = circ_median(alpha=alpha)
 
     d = (alpha - median).round(5)
-    pval = wilcoxon(d, alternative="two-sided").pvalue
+    res = wilcoxon(d, alternative="two-sided")
+    test_statistic = res.statistic
+    pval = res.pvalue
 
-    return pval
+    if verbose:
+        print("Symmetry Test")
+        print("------------------------------")
+        print(f"H0: symmetrical around median")
+        print(f"HA: not symmetrical around median")
+        print("")
+        print(f"Test Statistics: {test_statistic:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
+    return test_statistic, pval
 
 
 ###########################
@@ -383,7 +477,7 @@ def symmetry_test(
 ###########################
 
 
-def watson_williams_test(circs: list) -> tuple:
+def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
 
     """The Watson-Williams Test for multiple samples.
 
@@ -394,6 +488,9 @@ def watson_williams_test(circs: list) -> tuple:
     ---------
     circs: list (k, )
         A list of Circular objects.
+
+    verbose: bool
+        Print formatted results.
 
     Returns
     -------
@@ -425,10 +522,19 @@ def watson_williams_test(circs: list) -> tuple:
     F = K * (N - k) * (np.sum(Rs) - R) / (N - np.sum(Rs)) / (k - 1)
     pval = f.sf(F, k - 1, N - k)
 
+    if verbose:
+        print("The Watson-Williams Test for multiple samples")
+        print("---------------------------------------------")
+        print(f"H0: all samples are from populations with the same angle.")
+        print(f"HA: all samples are not from populations with the same angle.")
+        print("")
+        print(f"Test Statistics: {F:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
     return F, pval
 
 
-def watson_u2_test(circs: list) -> tuple:
+def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
 
     """Watson's U2 Test for nonparametric two-sample testing
     (with or without ties).
@@ -448,6 +554,9 @@ def watson_u2_test(circs: list) -> tuple:
     ---------
     circs: list
         A list of Circular objects.
+
+    verbose: bool
+        Print formatted results.
 
     Returns
     -------
@@ -494,10 +603,19 @@ def watson_u2_test(circs: list) -> tuple:
     # Approximated P-value from Watson (1961)
     # https://github.com/pierremegevand/watsons_u2/blob/master/watsons_U2_approx_p.m
 
+    if verbose:
+        print("Watson's U2 Test for two samples")
+        print("---------------------------------------------")
+        print(f"H0: The two samples are from populations with the same angle.")
+        print(f"HA: The two samples are not from populations with the same angle.")
+        print("")
+        print(f"Test Statistics: {U2:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
     return U2, pval
 
 
-def wheeler_watson_test(circs):
+def wheeler_watson_test(circs: list, verbose: bool = False):
     """The Wheeler and Watson Two/Multi-Sample Test.
 
     H0: The two samples came from the same population,
@@ -509,6 +627,9 @@ def wheeler_watson_test(circs):
     ---------
     circs: list
         A list of Circular objects.
+
+    verbose: bool
+        Print formatted results.
 
     Returns
     -------
@@ -562,12 +683,21 @@ def wheeler_watson_test(circs):
 
     pval = chi2.sf(W, df=2 * (k - 1))
 
+    if verbose:
+        print("The Wheeler and Watson Two/Multi-Sample Test")
+        print("---------------------------------------------")
+        print(f"H0: All samples are from populations with the same angle.")
+        print(f"HA: All samples are not from populations with the same angle.")
+        print("")
+        print(f"Test Statistics: {W:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
     return W, pval
 
 
-def wallraff_test(circs: list, angle=float):
+def wallraff_test(circs: list, angle=float, verbose: bool = False):
 
-    """Wallraff test of angular distances against a specified angle.
+    """Wallraff test of angular distances / dispersion against a specified angle.
 
     Parameters
     ----------
@@ -577,6 +707,9 @@ def wallraff_test(circs: list, angle=float):
     angle: float
         A specified angle in radian.
 
+    verbose: bool
+        Print formatted results.
+
     Returns
     -------
     U: float
@@ -584,6 +717,10 @@ def wallraff_test(circs: list, angle=float):
 
     pval: float
         P-value.
+
+    Reference
+    ---------
+    P637-638, Section 27.8, Example 27.13 of Zar, 2010
     """
 
     assert (
@@ -607,6 +744,13 @@ def wallraff_test(circs: list, angle=float):
     z = (U - np.prod(ns) / 2 + 0.5) / np.sqrt(np.prod(ns) * (N + 1) / 12)
     pval = 2 * norm.cdf(z)
 
+    if verbose:
+        print("Wallraff test of angular distances / dispersion")
+        print("-----------------------------------------------")
+        print("")
+        print(f"Test Statistics: {U:.5f}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+
     return U, pval
 
 
@@ -615,7 +759,9 @@ def wallraff_test(circs: list, angle=float):
 #####################
 
 
-def kuiper_test(alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046) -> tuple:
+def kuiper_test(
+    alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046, verbose: bool = False
+) -> tuple:
 
     """
     Kuiper's test for Circular Uniformity.
@@ -681,10 +827,19 @@ def kuiper_test(alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046) -
         Vs = np.array(([compute_V(x[:, i])[0] for i in range(n_simulation)]))
         pval = (np.sum(Vs > Vo) + 1) / (n_simulation + 1)
 
+    if verbose:
+        print("Kuiper's Test of Circular Uniformity")
+        print("------------------------------------")
+        print("")
+        print(f"Test Statistic: {Vo:.4f}")
+        print(f"P-value = {pval} {significance_code(pval)}")
+
     return Vo, pval
 
 
-def watson_test(alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046) -> tuple:
+def watson_test(
+    alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046, verbose: bool = False
+) -> tuple:
 
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
@@ -752,6 +907,13 @@ def watson_test(alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046) -
         U2s = np.array(([compute_U2(x[:, i]) for i in range(n_simulation)]))
         pval = (np.sum(U2s > U2o) + 1) / (n_simulation + 1)
 
+    if verbose:
+        print("Watson's One-Sample U2 Test of Circular Uniformity")
+        print("--------------------------------------------------")
+        print("")
+        print(f"Test Statistic: {U2o:.4f}")
+        print(f"P-value = {pval} {significance_code(pval)}")
+
     return U2o, pval
 
 
@@ -761,6 +923,7 @@ def rao_spacing_test(
     kappa: float = 1000.0,
     n_simulation: int = 9999,
     seed: int = 2046,
+    verbose: bool = False,
 ) -> tuple:
     """Simulation based Rao's spacing test.
 
@@ -844,5 +1007,12 @@ def rao_spacing_test(
 
     counter = np.sum(Us > Uo)
     pval = counter / (n_simulation + 1)
+
+    if verbose:
+        print("Rao's Spacing Test of Circular Uniformity")
+        print("-----------------------------------------")
+        print("")
+        print(f"Test Statistic: {Uo:.4f}")
+        print(f"P-value = {pval}\n")
 
     return np.rad2deg(Uo), pval
