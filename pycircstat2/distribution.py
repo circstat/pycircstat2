@@ -206,7 +206,7 @@ class vonmises(rv_continuous):
         return _cdf_single(x, kappa, mu)
 
 
-vonmises = vonmises(name="wrapnorm")
+vonmises = vonmises(name="vonmises")
 
 
 class jonespewsey_gen(rv_continuous):
