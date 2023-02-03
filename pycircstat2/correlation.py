@@ -12,6 +12,7 @@ def aacorr(
     b: Union[Type[Circular], np.ndarray],
     method: str = "fl",
     test: bool = False,
+    strict: bool = True,
 ) -> tuple:
 
     """
@@ -29,6 +30,9 @@ def aacorr(
         - 'nonparametric'
     test: bool
         Return significant test results.
+    strict: bool
+        Strict mode. If True, raise an error when mean direction is
+        not significant. Only for Jammalamadaka & SenGupta (2001)
 
     Return
     ------
@@ -45,7 +49,7 @@ def aacorr(
     elif method == "nonparametric":
         _corr = _aacorr_np
 
-    r = _corr(a, b)
+    r = _corr(a, b, strict)
 
     if test:
         if isinstance(a, Circular):
@@ -61,7 +65,7 @@ def aacorr(
         else:
             # jackknife test (Fingleton, 1989)
             n = len(a)
-            raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
+            raas = [_corr(np.delete(a, i), np.delete(b, i), strict) for i in range(n)]
             m_raas = np.mean(raas)
             s2_raas = np.var(raas, ddof=1)
             z = norm.ppf(0.975)
@@ -78,6 +82,7 @@ def aacorr(
 def _aacorr_fl(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
+    stric: bool,
 ) -> float:
 
     """Angular-Angular Correlation based on Fisher & Lee (1983)
@@ -117,6 +122,7 @@ def _aacorr_fl(
 def _aacorr_js(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
+    strict: bool,
 ) -> float:
 
     """Implementation of Angular-Angular Correlation
@@ -128,6 +134,9 @@ def _aacorr_js(
         Angles in radian
     b: Circular or np.ndarray
         Angles in radian
+    strict: bool
+        if True, raise an error when mean direction is
+        not significant.
 
     Return
     ------
@@ -140,14 +149,16 @@ def _aacorr_js(
     """
 
     if isinstance(a, Circular):
-        assert a.mean_pval < 0.01, "Data `a` is uniformly distributed."
+        if strict:
+            assert a.mean_pval < 0.05, "Data `a` is uniformly distributed."
         a_mean = a.mean
         a = a.alpha
     else:
         a_mean = circ_mean(a)[0]
 
     if isinstance(b, Circular):
-        assert b.mean_pval < 0.01, "Data `b` is uniformly distributed."
+        if strict:
+            assert b.mean_pval < 0.05, "Data `b` is uniformly distributed."
         b_mean = b.mean
         b = b.alpha
     else:
@@ -165,6 +176,7 @@ def _aacorr_js(
 def _aacorr_np(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
+    strict: bool,
 ) -> float:
     """Nonparametric angular-angular correlation."""
 

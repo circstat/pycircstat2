@@ -30,4 +30,4 @@ pip install -e pycircstat2
 - [Utils](https://nbviewer.org/github/circstat/pycircstat2/blob/main/examples/T0-utils.ipynb)
 - [Descriptive Statistics](https://nbviewer.org/github/circstat/pycircstat2/blob/main/examples/T1-descriptive-statistics.ipynb)
 - [Hypothesis Testing](https://nbviewer.org/github/circstat/pycircstat2/blob/main/examples/T2-hypothesis-testing.ipynb)
-- Circular Models (TODO)
+- [Circular Models](https://nbviewer.org/github/circstat/pycircstat2/blob/main/examples/T3-circular-models.ipynb)
