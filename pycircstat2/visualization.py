@@ -17,7 +17,7 @@ def circ_plot(
 
     # process kwargs and assign defaults
     outward = kwargs.pop("outward", True)
-    figsize = kwargs.pop("figsize", (8, 8))
+    figsize = kwargs.pop("figsize", (5, 5))
     projection = kwargs.pop("projection", "polar")
     marker = kwargs.pop("marker", "o")
     marker_color = kwargs.pop("marker_color", "black")
@@ -69,8 +69,9 @@ def circ_plot(
 
     # check axes
     if ax is None:
-        fig = plt.figure(figsize=figsize)
-        ax = fig.add_subplot(projection=projection)
+        fig, ax = plt.subplots(
+            figsize=figsize, subplot_kw={"projection": projection}, layout="constrained"
+        )
 
     # plot
     if not circ_data.grouped:
@@ -97,7 +98,7 @@ def circ_plot(
 
         # plot density
         if plot_density:  # and not np.isclose(circ_data.r, 0):
-            
+
             kwargs_density = kwargs.pop("kwargs_density", {})
             density_method = kwargs_density.pop("method", "nonparametric")
             density_color = kwargs_density.pop("color", "black")

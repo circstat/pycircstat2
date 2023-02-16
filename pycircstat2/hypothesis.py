@@ -444,6 +444,8 @@ def symmetry_test(
 
     Return
     ------
+    test_statistic: float
+        Test statistic
     pval: float
         p-value
 
