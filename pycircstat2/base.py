@@ -91,7 +91,6 @@ class Circular:
         n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
         **kwargs,
     ):
-
         # meta
         self.unit = unit
         if n_intervals is None:
@@ -152,7 +151,7 @@ class Circular:
         self.n = n = np.sum(w).astype(int)
 
         # angular mean and resultant vector length
-        self.mean, self.r = (mean, r) = circ_mean(alpha=alpha, w=w)
+        self.mean, self.r = (mean, r) = circ_mean(alpha=alpha, w=w, return_r=True)
 
         # z-score and p-value from rayleigh test for angular mean
         self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(n=n, r=r)
@@ -231,7 +230,6 @@ class Circular:
             self.mixture_opt = None
 
     def __repr__(self):
-
         unit = self.unit
         k = self.n_intervals
 
@@ -284,11 +282,9 @@ class Circular:
         return docs
 
     def __str__(self):
-
         return self.__repr__()
 
     def summary(self):
-
         """
         Summary of basis statistcs.
         """
@@ -296,7 +292,6 @@ class Circular:
         return self.__repr__()
 
     def plot(self, ax=None, kind=None, **kwargs):
-
         ax = circ_plot(self, ax=ax, **kwargs)
 
 
@@ -305,7 +300,7 @@ class Axial(Circular):
         self,
         data: Union[np.ndarray, list],  # angle
         w: Union[np.ndarray, list, None] = None,  # frequency
-        bins: Union[int, np.array, None] = None,
+        bins: Union[int, np.ndarray, None] = None,
         unit: str = "degree",
         n_intervals: Union[
             int, float, None

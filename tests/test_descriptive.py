@@ -17,11 +17,12 @@ from pycircstat2.descriptive import (
 
 
 def test_circ_mean():
-
     # Example 26.4 (Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
-    m, r = circ_mean(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
+    m, r = circ_mean(
+        alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w, return_r=True
+    )
 
     np.testing.assert_approx_equal(np.rad2deg(m), 99, significant=1)
     np.testing.assert_approx_equal(r, 0.82522, significant=5)
@@ -31,14 +32,15 @@ def test_circ_mean():
     circ_zar_ex5_ch26 = Circular(
         data=data_zar_ex5_ch26["θ"].values, w=data_zar_ex5_ch26["w"].values
     )
-    m, r = circ_mean(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
+    m, r = circ_mean(
+        alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w, return_r=True
+    )
 
     np.testing.assert_approx_equal(np.rad2deg(m), 162, significant=1)
     np.testing.assert_approx_equal(r, 0.55064, significant=4)
 
 
 def test_circ_std():
-
     data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
 
@@ -47,13 +49,13 @@ def test_circ_std():
 
     # compute directly from r
     s, s0, rc = circ_std(r=circ_zar_ex4_ch26.r, bin_size=circ_zar_ex4_ch26.bin_size)
-    np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1.0)
-    np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1.0)
+    np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1)
+    np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1)
 
     # compute from alpha
     s, s0, rc = circ_std(alpha=circ_zar_ex4_ch26.alpha)
-    np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1.0)
-    np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1.0)
+    np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1)
+    np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1)
 
     data_zar_ex5_ch26 = load_data("D2", source="zar")
     circ_zar_ex5_ch26 = Circular(
@@ -62,17 +64,16 @@ def test_circ_std():
 
     # compute directly from r
     s, s0, rc = circ_std(r=circ_zar_ex5_ch26.r, bin_size=circ_zar_ex5_ch26.bin_size)
-    np.testing.assert_approx_equal(np.rad2deg(s), 54.0, significant=1.0)
-    np.testing.assert_approx_equal(np.rad2deg(s0), 63.0, significant=1.0)
+    np.testing.assert_approx_equal(np.rad2deg(s), 54.0, significant=1)
+    np.testing.assert_approx_equal(np.rad2deg(s0), 63.0, significant=1)
 
     # compute from alpha and w
     s, s0, rc = circ_std(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
-    np.testing.assert_approx_equal(np.rad2deg(s), 54.0, significant=1.0)
-    np.testing.assert_approx_equal(np.rad2deg(s0), 63.0, significant=1.0)
+    np.testing.assert_approx_equal(np.rad2deg(s), 54.0, significant=1)
+    np.testing.assert_approx_equal(np.rad2deg(s0), 63.0, significant=1)
 
 
 def test_circ_median():
-
     # Ch26.6 P657 (Zar, 2010)
     data_zar_ex2_ch26 = load_data("D1", source="zar")
     circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].values)
@@ -109,15 +110,11 @@ def test_circ_median():
     np.testing.assert_approx_equal(np.rad2deg(median), 313.8, significant=2)
 
 
-test_circ_median()
-
-
 def test_circ_mean_deviation():
     pass
 
 
 def test_circ_mean_ci():
-
     # method: approximate (from P619, Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
@@ -152,7 +149,6 @@ def test_circ_mean_ci():
 
 
 def test_circ_median_ci():
-
     d_ex3 = load_data("B6", "fisher")
     c_ex3_s0 = Circular(
         data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:10]),
@@ -179,7 +175,6 @@ def test_circ_median_ci():
 
 
 def test_circ_mean_of_means():
-
     data = load_data("D4", source="zar")
     ms = np.deg2rad(data.values[:, 0])
     rs = data.values[:, 1]
@@ -190,7 +185,6 @@ def test_circ_mean_of_means():
 
 
 def test_circ_skewness():
-
     b11 = load_data("B11", source="fisher")["θ"].values
     c11 = Circular(data=b11)
     skewness = circ_skewness(alpha=c11.alpha)
@@ -198,7 +192,6 @@ def test_circ_skewness():
 
 
 def test_circ_kurtosis():
-
     b11 = load_data("B11", source="fisher")["θ"].values
     c11 = Circular(data=b11)
     kurtosis = circ_kurtosis(alpha=c11.alpha)
@@ -206,7 +199,6 @@ def test_circ_kurtosis():
 
 
 def test_circ_dispersion():
-
     b11 = load_data("B11", source="fisher")["θ"].values
     c11 = Circular(data=b11)
     dispersion = circ_dispersion(alpha=c11.alpha)
@@ -214,7 +206,6 @@ def test_circ_dispersion():
 
 
 def test_circ_moment():
-
     # Section 3.2, Pewsey (2014) P24
 
     b11 = load_data("B11", source="fisher")["θ"].values
@@ -242,7 +233,6 @@ def test_circ_moment():
 
 
 def test_compute_smooth_params():
-
     from pycircstat2.utils import time2float
 
     d_fisher_b1 = load_data("B1", source="fisher")["time"].values

@@ -2,6 +2,7 @@
 .pytest_cache
 .DS_Store
 .coverage
+.vscode
 
 *.egg-info
 */__pycache__

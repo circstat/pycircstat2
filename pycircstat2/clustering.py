@@ -37,12 +37,12 @@ class MoVM:
         x: np.ndarray,
         n_clusters_init: int,
     ):
-
         n = len(x)  # number of samples
         p = np.ones(n_clusters_init) / n_clusters_init  # initial cluster probability
         z = np.random.choice(np.arange(n_clusters_init), size=n)  # initial labels
         m, r = map(
-            np.array, zip(*[circ_mean(x[z == i]) for i in range(n_clusters_init)])
+            np.array,
+            zip(*[circ_mean(x[z == i], return_r=True) for i in range(n_clusters_init)]),
         )  # initial means and resultant vector lengths
         kappa = np.array(
             [circ_kappa(r=r[i]) for i in range(n_clusters_init)]
@@ -51,7 +51,6 @@ class MoVM:
         return m, kappa, p
 
     def fit(self, x: np.ndarray, verbose: Union[bool, int] = 0):
-
         # seed
         np.random.seed(self.random_seed)
 
@@ -70,7 +69,6 @@ class MoVM:
             print(f"Iter".ljust(10) + f"nLL")
         self.nLL = np.ones(self.n_iters) * np.nan
         for i in range(self.n_iters):
-
             # E step
             gamma = self.compute_gamma(x_rad=self.x_rad, p=p, m=m, kappa=kappa)
             gamma_normed = gamma / np.sum(gamma, axis=0)
@@ -81,7 +79,7 @@ class MoVM:
                 np.array,
                 zip(
                     *[
-                        circ_mean(alpha=x_rad, w=gamma_normed[i])
+                        circ_mean(alpha=x_rad, w=gamma_normed[i], return_r=True)
                         for i in range(self.n_clusters)
                     ]
                 ),
@@ -127,7 +125,6 @@ class MoVM:
         m: np.ndarray,
         kappa: np.ndarray,
     ):
-
         gamma = np.vstack(
             [
                 p[i] * vonmises.pdf(x_rad, kappa=kappa[i], loc=m[i])
@@ -141,7 +138,6 @@ class MoVM:
         return nLL
 
     def compute_BIC(self):
-
         nLL = self.compute_nLL(self.gamma)
         nparams = self.n_clusters * 3 - 1  # n_means + n_kappas + (n_ps - 1)
         bic = 2 * nLL + np.log(self.n) * nparams
@@ -154,7 +150,6 @@ class MoVM:
         unit: Union[str, None] = None,
         n_intervals: Union[float, int, None] = None,
     ):
-
         unit = self.unit if unit is None else unit
         n_intervals = self.n_intervals if n_intervals is None else n_intervals
 
@@ -170,7 +165,6 @@ class MoVM:
         return np.sum(d, axis=0)
 
     def predict(self, x: np.ndarray):
-
         x_rad = x if self.unit == "radian" else data2rad(x, self.n_intervals)
 
         gamma = self.compute_gamma(x_rad=x_rad, p=self.p, m=self.m, kappa=self.kappa)

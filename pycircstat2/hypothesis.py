@@ -3,7 +3,7 @@ from typing import Union
 import numpy as np
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
-from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median
+from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median, circ_r
 from .utils import angrange, angular_distance, significance_code
 
 #####################
@@ -18,7 +18,6 @@ def rayleigh_test(
     n: Union[int, None] = None,
     verbose: bool = False,
 ) -> tuple:
-
     """
     Rayleigh's Test for Circular Uniformity.
 
@@ -66,7 +65,7 @@ def rayleigh_test(
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w)
-        _, r = circ_mean(alpha, w)
+        r = circ_r(alpha, w)
 
     if n is None:
         raise ValueError("Sample size `n` is missing.")
@@ -88,7 +87,6 @@ def rayleigh_test(
 
 
 def chisquare_test(w: np.ndarray, verbose=False):
-
     """Chi-Square Goodness of Fit for Circular data.
 
     H0: The data in the population are distributed uniformly around the circle.
@@ -146,7 +144,6 @@ def V_test(
     n: int = None,
     verbose: bool = False,
 ) -> tuple:
-
     """
     Modified Rayleigh Test for Uniformity versus a Specified Angle.
 
@@ -199,7 +196,7 @@ def V_test(
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w)
-        mean, r = circ_mean(alpha, w)
+        mean, r = circ_mean(alpha, w, return_r=True)
 
     R = n * r
     V = R * np.cos(mean - angle)  # eq(27.5)
@@ -226,7 +223,6 @@ def one_sample_test(
     ub: float = None,
     verbose: bool = False,
 ) -> bool:
-
     """
     To test wheter the population mean angle is equal to a specified value,
     which is achieved by observing whether the angle lies within the 95% CI.
@@ -301,7 +297,6 @@ def omnibus_test(
     scale: int = 1,
     verbose: bool = False,
 ) -> float:
-
     """
     A simple alternative to the Rayleigh test, aka Hodges-Ajne test,
     which does not assume sampling from a specific distribution. This
@@ -369,7 +364,6 @@ def batschelet_test(
     alpha: np.ndarray,
     verbose: bool = False,
 ) -> float:
-
     """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
     (for ungrouped data).
 
@@ -423,7 +417,6 @@ def symmetry_test(
     median: Union[int, float, None] = None,
     verbose: bool = False,
 ) -> float:
-
     """Non-parametric test for symmetry around the median. Works by performing a
     Wilcoxon sign rank test on the differences to the median. Also known as
     Wilcoxon paired-sample test.
@@ -480,7 +473,6 @@ def symmetry_test(
 
 
 def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
-
     """The Watson-Williams Test for multiple samples.
 
     H0: All samples are from populations with the same mean angle
@@ -514,12 +506,9 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
     K = 1 + 3 / 8 / circ_kappa(rw)
 
     Rs = [circ.R for circ in circs]
-    R = (
-        N
-        * circ_mean(
-            alpha=np.hstack([circ.alpha for circ in circs]),
-            w=np.hstack([circ.w for circ in circs]),
-        )[1]
+    R = N * circ_r(
+        alpha=np.hstack([circ.alpha for circ in circs]),
+        w=np.hstack([circ.w for circ in circs]),
     )
     F = K * (N - k) * (np.sum(Rs) - R) / (N - np.sum(Rs)) / (k - 1)
     pval = f.sf(F, k - 1, N - k)
@@ -537,7 +526,6 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
 
 
 def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
-
     """Watson's U2 Test for nonparametric two-sample testing
     (with or without ties).
 
@@ -576,7 +564,6 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
     from scipy.stats import rankdata
 
     def cumfreq(alpha, circ):
-
         indices = np.squeeze(
             [np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)]
         )
@@ -652,7 +639,6 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
     from scipy.stats import chi2
 
     def get_circrank(alpha, circ, N):
-
         rank_of_direction = (
             np.squeeze([np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)])
             + 1
@@ -698,7 +684,6 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
 
 
 def wallraff_test(circs: list, angle=float, verbose: bool = False):
-
     """Wallraff test of angular distances / dispersion against a specified angle.
 
     Parameters
@@ -764,7 +749,6 @@ def wallraff_test(circs: list, angle=float, verbose: bool = False):
 def kuiper_test(
     alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046, verbose: bool = False
 ) -> tuple:
-
     """
     Kuiper's test for Circular Uniformity.
 
@@ -842,7 +826,6 @@ def kuiper_test(
 def watson_test(
     alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046, verbose: bool = False
 ) -> tuple:
-
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
 

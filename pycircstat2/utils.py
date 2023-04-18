@@ -39,7 +39,6 @@ def angrange(rad: Union[np.ndarray, float, int]) -> Union[np.ndarray, float]:
 
 
 def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
-
     """Angular distance between two angles.
 
     Parameters
@@ -89,7 +88,6 @@ def load_data(
     print_meta=False,
     return_meta=False,
 ):
-
     __source__ = ["fisher", "zar", "mardia", "pewsey"]
 
     # check source
