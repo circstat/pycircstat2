@@ -10,7 +10,7 @@ def circ_r(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     return_intermediates=False,
-) -> tuple:
+) -> Union[tuple, float]:
     """
     Circular mean resultant vector length (r).
 
@@ -25,8 +25,6 @@ def circ_r(
 
     Returns
     -------
-    m: float or NaN
-        Circular mean
     r: float
         Resultant vector length
     Cbar: float
@@ -59,7 +57,7 @@ def circ_mean(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     return_r: bool = False,
-) -> tuple:
+) -> Union[tuple, float]:
     """
     Circular mean (m) and resultant vector length (r).
 
@@ -172,7 +170,6 @@ def circ_dispersion(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     mean=None,
-    centered=False,
 ) -> float:
     r"""
     Sample Circular Dispersion, defined by Fisher eq(2.28):
@@ -203,8 +200,8 @@ def circ_dispersion(
     if w is None:
         w = np.ones_like(alpha)
 
-    r1 = circ_moment(alpha=alpha, w=w, p=1, mean=mean, centered=centered)[1]  # eq(2.26)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=mean, centered=centered)[1]  # eq(2.27)
+    r1 = circ_moment(alpha=alpha, w=w, p=1, mean=mean, centered=False)[1]  # eq(2.26)
+    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=mean, centered=False)[1]  # eq(2.27)
 
     dispersion = (1 - r2) / (2 * r1**2)  # eq(2.28)
 
@@ -239,8 +236,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     if w is None:
         w = np.ones_like(alpha)
 
-    u1, r1 = circ_mean(alpha=alpha, w=w, return_r=True)
-
+    u1, r1 = circ_moment(alpha=alpha, w=w, p=1, mean=None, centered=False)
     u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
 
     skewness = (r2 * np.sin(u2 - 2 * u1)) / (1 - r1) ** 1.5
@@ -276,8 +272,7 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     if w is None:
         w = np.ones_like(alpha)
 
-    u1, r1 = circ_mean(alpha=alpha, w=w, return_r=True)
-
+    u1, r1 = circ_moment(alpha=alpha, w=w, p=1, mean=None, centered=False)
     u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
 
     kurtosis = (r2 * np.cos(u2 - 2 * u1) - r1**4) / (1 - r1) ** 2

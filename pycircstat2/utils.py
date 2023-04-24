@@ -1,9 +1,9 @@
 import json
+from importlib import resources as importlib_resources
 from typing import Union
 
 import numpy as np
 import pandas as pd
-import pkg_resources
 
 
 def data2rad(
@@ -97,13 +97,11 @@ def load_data(
         )
 
     # load data
-    csv_path = pkg_resources.resource_filename(__name__, f"data/{source}/{name}.csv")
+    data_files = importlib_resources.files("pycircstat2")
+    csv_path = data_files / f"data/{source}/{name}.csv"
     csv_data = pd.read_csv(csv_path, index_col=0)
 
-    # load meta data
-    json_path = pkg_resources.resource_filename(
-        __name__, f"data/{source}/{name}.csv-metadata.json"
-    )
+    json_path = data_files / f"data/{source}/{name}.csv-metadata.json"
     with open(json_path) as f:
         json_data = json.load(f)
 
