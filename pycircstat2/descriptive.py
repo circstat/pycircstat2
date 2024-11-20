@@ -380,7 +380,7 @@ def circ_median(
 
     # grouped data
     if grouped:
-        median = _circ_median_groupped(alpha, w)
+        median = _circ_median_grouped(alpha, w)
     # ungrouped data
     else:
         # find which data point that can divide the dataset into two half
@@ -396,7 +396,7 @@ def circ_median(
     return angrange(median)
 
 
-def _circ_median_groupped(
+def _circ_median_grouped(
     alpha: np.array,
     w: Union[np.array, None] = None,
 ) -> float:
@@ -404,7 +404,7 @@ def _circ_median_groupped(
     n_bins = len(alpha)  # number of intervals
     bin_size = np.diff(alpha).min()
 
-    # median for groupped data operated on upper bound of bins
+    # median for grouped data operated on upper bound of bins
     alpha_ub = alpha + bin_size / 2
     alpha_rotated = angrange(alpha_ub[:, None] - alpha_ub)
     right = np.logical_and(alpha_rotated >= 0.0, alpha_rotated <= np.round(np.pi, 5))
