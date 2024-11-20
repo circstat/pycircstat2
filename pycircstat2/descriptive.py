@@ -1,7 +1,7 @@
 from typing import Tuple, Union
 
 import numpy as np
-from scipy.stats import chi2, norm
+from scipy.stats import chi2, norm, t
 
 from .utils import angrange
 
@@ -347,8 +347,8 @@ def circ_std(
 
 
 def circ_median(
-    alpha: np.array,
-    w: Union[np.array, None] = None,
+    alpha: np.ndarray,
+    w: Union[np.ndarray, None] = None,
     grouped: bool = False,
     method: str = "deviation",
     return_average: bool = True,
@@ -666,10 +666,7 @@ def _circ_mean_ci_approximate(
                 / R
             )
         else:  # eq(26.25)
-            inner = (
-                np.sqrt(n**2 - (n**2 - R**2) * np.exp(chi2.isf(1 - ci, 1) / n))
-                / R
-            )
+            inner = np.sqrt(n**2 - (n**2 - R**2) * np.exp(chi2.isf(1 - ci, 1) / n)) / R
 
         d = np.arccos(inner)
         lb = mean - d
@@ -684,9 +681,31 @@ def _circ_mean_ci_approximate(
 
 
 def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95, return_samples=False):
-    from scipy.stats import t
 
-    beta = np.array([_circ_mean_resample(alpha) for i in range(B)]).flatten()
+    # Precompute z0 and v0 from original data
+    # algo 1
+    X = np.cos(alpha)
+    Y = np.sin(alpha)
+    z1 = np.mean(X)  # eq(8.24)
+    z2 = np.mean(Y)
+    z0 = np.array([z1, z2])
+
+    # algo 2
+    u11 = np.mean((X - z1) ** 2)  # eq(8.25)
+    u22 = np.mean((Y - z2) ** 2)
+    u12 = u21 = np.mean((X - z1) * (Y - z2))  # eq(8.26)
+
+    β = (u11 - u22) / (2 * u12) - np.sqrt(
+        (u11 - u22) ** 2 / (4 * u12**2 + 1)
+    )  # eq(8.27)
+    t1 = np.sqrt(β**2 * u11 + 2 * β * u12 + u22) / np.sqrt(1 + β**2)  # eq(8.28)
+    t2 = np.sqrt(u11 - 2 * β * u12 + β**2 * u22) / np.sqrt(1 + β**2)  # eq(8.29)
+    v11 = (β**2 * t1 + t2) / (1 + β**2)  # eq(8.30)
+    v22 = (t1 + β**2 * t2) / (1 + β**2)
+    v12 = v21 = β * (t1 - t2) / (1 + β**2)  # eq(8.31)
+    v0 = np.array([[v11, v12], [v21, v22]])
+
+    beta = np.array([_circ_mean_resample(alpha, z0, v0) for i in range(B)]).flatten()
 
     lb, ub = t.interval(
         ci,
@@ -701,40 +720,37 @@ def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95, return_samples=False):
         return lb, ub
 
 
-def _circ_mean_resample(alpha):
+def _circ_mean_resample(alpha, z0, v0):
     """
-    Implementation of Section 8.3.5 (Fisher, 1993)
+    Implementation of Section 8.3.5 (Fisher, 1993, P210)
     """
 
     θ = np.random.choice(alpha, len(alpha), replace=True)
     X = np.cos(θ)
     Y = np.sin(θ)
-    z1 = np.mean(X)
+
+    # algo 1
+    z1 = np.mean(X)  # eq(8.24)
     z2 = np.mean(Y)
+    zB = np.array([z1, z2])
 
-    u11 = np.mean((X - z1) ** 2)
+    u11 = np.mean((X - z1) ** 2)  # eq(8.25)
     u22 = np.mean((X - z2) ** 2)
-    u12 = u21 = np.mean((X - z1) * (Y - z2))
+    u12 = u21 = np.mean((X - z1) * (Y - z2))  # eq(8.26)
 
-    β = (u11 - u22) / (2 * u12) - np.sqrt((u11 - u22) ** 2 / (4 * u12**2 + 1))
-    t1 = np.sqrt(β**2 * u11 + 2 * β * u12 + u22) / np.sqrt(1 + β**2)
-    t2 = np.sqrt(u11 - 2 * β * u12 + β**2 * u22) / np.sqrt(1 + β**2)
-    v11 = (β**2 * t1 + t2) / (1 + β**2)
-    v22 = (t1 + β**2 * t2) / (1 + β**2)
-    v12 = v21 = β * (t1 - t2) / (1 + β**2)
+    # algo 3
+    β = (u11 - u22) / (2 * u12) - np.sqrt(
+        (u11 - u22) ** 2 / (4 * u12**2 + 1)
+    )  # eq(8.27)
+    t1 = np.sqrt(1 + β**2) / np.sqrt(β**2 * u11 + 2 * β * u12 + u22)  # eq(8.33)
+    t2 = np.sqrt(1 + β**2) / np.sqrt(u11 - 2 * β * u12 + β**2 * u22)  # eq(8.34)
+    w11 = (β**2 * t1 + t2) / (1 + β**2)  # eq(8.35)
+    w22 = (t1 + β**2 * t2) / (1 + β**2)
+    w12 = w21 = β * (t1 - t2) / (1 + β**2)  # eq(8.36)
 
-    q1 = np.sqrt(1 + β**2) / np.sqrt(β**2 * u11 + 2 * β * u12 + u22)
-    q2 = np.sqrt(1 + β**2) / np.sqrt(u11 - 2 * β * u12 + β**2 * u22)
-    w11 = (β**2 * q1 + q2) / (1 + β**2)
-    w22 = (q1 + β**2 * q2) / (1 + β**2)
-    w12 = w21 = β * (t1 - q2) / (1 + β**2)
+    wB = np.array([[w11, w12], [w21, w22]])
 
-    z0 = np.array([z1, z2])
-    u0 = np.array([[u11, u12], [u21, u22]])
-    v0 = np.array([[v11, v12], [v21, v22]])
-    w0 = np.array([[w11, w12], [w21, w22]])
-
-    Cbar, Sbar = z0 + v0 @ w0 @ (z0 - z0)
+    Cbar, Sbar = z0 + v0 @ wB @ (zB - z0)
     Cbar = np.power(Cbar**2 + Sbar**2, -0.5) * Cbar
     Sbar = np.power(Cbar**2 + Sbar**2, -0.5) * Sbar
 
