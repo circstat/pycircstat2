@@ -84,7 +84,7 @@ def significance_code(p: float) -> str:
 
 def load_data(
     name,
-    source="fisher_1993",
+    source="fisher",
     print_meta=False,
     return_meta=False,
 ):
