@@ -10,7 +10,6 @@ from scipy.stats import rv_continuous
 
 
 class circularuniform_gen(rv_continuous):
-
     """Continuous Circular Uniform Distribution
 
     Methods
@@ -136,10 +135,10 @@ class wrapnorm_gen(rv_continuous):
 
 wrapnorm = wrapnorm_gen(name="wrapped_normal")
 
+
 # scipy.stats.wrapcauchy seems broken
 # thus we reimplemented it.
 class wrapcauchy_gen(rv_continuous):
-
     """Wrapped Cauchy Distribution
 
     Methods
@@ -171,11 +170,11 @@ class wrapcauchy_gen(rv_continuous):
 
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
+
 # probably less efficient than scipy.stats.vonmises
 # but I would like to keep the parameterization of
 # all distribution the same, e.g. pdf(x, *args, mu)
 class vonmises(rv_continuous):
-
     """Von Mises Distribution
 
     Methods
@@ -210,7 +209,6 @@ vonmises = vonmises(name="vonmises")
 
 
 class jonespewsey_gen(rv_continuous):
-
     """Jones-Pewsey Distribution
 
     Methods
@@ -296,7 +294,6 @@ def _c_jonespewsey(kappa, psi, mu):
 
 
 class vonmises_ext_gen(rv_continuous):
-
     """Flat-topped von Mises Distribution
 
     Methods
@@ -349,7 +346,6 @@ def _c_vmext(kappa, nu, mu):
 
 
 class jonespewsey_sineskewed_gen(rv_continuous):
-
     """Sine-Skewed Jones-Pewsey Distribution
 
     Methods
@@ -411,7 +407,6 @@ jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed
 
 
 class jonespewsey_asymext_gen(rv_continuous):
-
     """Asymmetric Extended Jones-Pewsey Distribution
 
     Methods
@@ -470,7 +465,6 @@ def _c_jonespewsey_asymext(kappa, psi, nu, xi):
 
 
 class inverse_batschelet_gen(rv_continuous):
-
     """Inverse Batschelet distribution.
 
     Methods
@@ -535,7 +529,11 @@ def _tnu(x, nu, xi):
 
     y = root(_tnuinv, x0=np.zeros_like(x), args=(nu)).x
     y[y > np.pi] -= 2 * np.pi
-    return y
+
+    if np.isscalar(x):  # Ensure scalar output for scalar input
+        return y.item()  # Extract the scalar value
+    else:
+        return y
 
 
 def _slmbdinv(x, lmbd):
@@ -547,7 +545,11 @@ def _slmbdinv(x, lmbd):
             return z - 0.5 * (1 + lmbd) * np.sin(z) - x
 
         y = root(_slmbd, x0=np.zeros_like(x), args=(lmbd)).x
-        return y
+
+        if np.isscalar(x):  # Ensure scalar output for scalar input
+            return y.item()  # Extract the scalar value
+        else:
+            return y
 
 
 def _A1(kappa):

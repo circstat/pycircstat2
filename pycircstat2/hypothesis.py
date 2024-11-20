@@ -1,3 +1,4 @@
+import math
 from typing import Union
 
 import numpy as np
@@ -339,11 +340,11 @@ def omnibus_test(
     right = n - np.logical_and(
         lines_rotated > 0.0, lines_rotated < np.round(np.pi, 5)
     ).sum(1)
-    m = np.min(right)
+    m = int(np.min(right))
     pval = (
         (n - 2 * m)
-        * np.math.factorial(n)
-        / (np.math.factorial(m) * np.math.factorial(n - m))
+        * math.factorial(n)
+        / (math.factorial(m) * math.factorial(n - m))
         / 2 ** (n - 1)
     )
     A = np.pi * np.sqrt(n) / (2 * (n - 2 * m))

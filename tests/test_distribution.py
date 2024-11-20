@@ -161,8 +161,9 @@ def test_inverse_batschelet():
         significant=4,
     )
     np.testing.assert_approx_equal(
-        inverse_batschelet.ppf(q=0.5, kappa=2, nu=-0.5, lmbd=0.7, xi=np.pi / 2).round(4),
+        inverse_batschelet.ppf(q=0.5, kappa=2, nu=-0.5, lmbd=0.7, xi=np.pi / 2).round(
+            4
+        ),
         2.5138,
         significant=4,
     )
-   
