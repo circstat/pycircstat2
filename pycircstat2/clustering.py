@@ -3,12 +3,11 @@ from typing import Union
 import numpy as np
 from scipy.stats import vonmises
 
-from .descriptive import circ_kappa, circ_mean
+from .descriptive import circ_kappa, circ_mean_and_r
 from .utils import data2rad
 
 
 class MoVM:
-
     """
     Mixture of von Mises Clustering
     """
@@ -42,7 +41,7 @@ class MoVM:
         z = np.random.choice(np.arange(n_clusters_init), size=n)  # initial labels
         m, r = map(
             np.array,
-            zip(*[circ_mean(x[z == i], return_r=True) for i in range(n_clusters_init)]),
+            zip(*[circ_mean_and_r(x[z == i]) for i in range(n_clusters_init)]),
         )  # initial means and resultant vector lengths
         kappa = np.array(
             [circ_kappa(r=r[i]) for i in range(n_clusters_init)]
@@ -79,7 +78,7 @@ class MoVM:
                 np.array,
                 zip(
                     *[
-                        circ_mean(alpha=x_rad, w=gamma_normed[i], return_r=True)
+                        circ_mean_and_r(alpha=x_rad, w=gamma_normed[i])
                         for i in range(self.n_clusters)
                     ]
                 ),

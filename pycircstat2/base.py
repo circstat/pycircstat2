@@ -7,7 +7,7 @@ from .clustering import MoVM
 from .descriptive import (
     circ_kappa,
     circ_kurtosis,
-    circ_mean,
+    circ_mean_and_r,
     circ_mean_ci,
     circ_median,
     circ_median_ci,
@@ -36,7 +36,6 @@ __names__ = ["Circular"]
 
 
 class CircStat:
-
     """
     An automatic pipeline for circular data analysis.
     """
@@ -45,7 +44,6 @@ class CircStat:
 
 
 class Circular:
-
     """
     An Object to hold one set of circular data.
     Simple descriptive statistics and hypothesis testing were
@@ -83,7 +81,7 @@ class Circular:
         self,
         data: Union[np.ndarray, list],  # angle
         w: Union[np.ndarray, list, None] = None,  # frequency
-        bins: Union[int, np.array, None] = None,
+        bins: Union[int, np.ndarray, None] = None,
         unit: str = "degree",
         n_intervals: Union[
             int, float, None
@@ -151,7 +149,7 @@ class Circular:
         self.n = n = np.sum(w).astype(int)
 
         # angular mean and resultant vector length
-        self.mean, self.r = (mean, r) = circ_mean(alpha=alpha, w=w, return_r=True)
+        self.mean, self.r = (mean, r) = circ_mean_and_r(alpha=alpha, w=w)
 
         # z-score and p-value from rayleigh test for angular mean
         self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(n=n, r=r)

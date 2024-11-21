@@ -5,14 +5,16 @@ from pycircstat2.descriptive import (
     circ_dispersion,
     circ_kurtosis,
     circ_mean,
+    circ_mean_and_r,
+    circ_mean_and_r_of_means,
     circ_mean_ci,
-    circ_mean_of_means,
     circ_median,
     circ_median_ci,
     circ_moment,
     circ_skewness,
     circ_std,
     compute_smooth_params,
+    convert_moment,
 )
 
 
@@ -20,9 +22,7 @@ def test_circ_mean():
     # Example 26.4 (Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
-    m, r = circ_mean(
-        alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w, return_r=True
-    )
+    m, r = circ_mean_and_r(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 99, significant=1)
     np.testing.assert_approx_equal(r, 0.82522, significant=5)
@@ -32,9 +32,7 @@ def test_circ_mean():
     circ_zar_ex5_ch26 = Circular(
         data=data_zar_ex5_ch26["θ"].values, w=data_zar_ex5_ch26["w"].values
     )
-    m, r = circ_mean(
-        alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w, return_r=True
-    )
+    m, r = circ_mean_and_r(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 162, significant=1)
     np.testing.assert_approx_equal(r, 0.55064, significant=4)
@@ -174,12 +172,12 @@ def test_circ_median_ci():
     np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 267.0, significant=3)
 
 
-def test_circ_mean_of_means():
+def test_circ_mean_and_r_of_means():
     data = load_data("D4", source="zar")
     ms = np.deg2rad(data.values[:, 0])
     rs = data.values[:, 1]
 
-    m, r = circ_mean_of_means(ms=ms, rs=rs)
+    m, r = circ_mean_and_r_of_means(ms=ms, rs=rs)
     np.testing.assert_approx_equal(np.rad2deg(m), 152.0, significant=3)
     np.testing.assert_approx_equal(r, 0.59634, significant=5)
 
@@ -213,23 +211,21 @@ def test_circ_moment():
 
     # first moment == mean
 
-    u1, r1, Cbar, Sbar = circ_moment(
-        alpha=c11.alpha, p=1, centered=False, return_intermediates=True
-    )
+    mp1 = circ_moment(alpha=c11.alpha, p=1, centered=False)
+    u1, r1 = convert_moment(mp1)
     np.testing.assert_approx_equal(np.rad2deg(u1).round(2), 3.10, significant=2)
     np.testing.assert_approx_equal(r1.round(2), 0.83, significant=2)
-    np.testing.assert_approx_equal(Cbar.round(2), 0.83, significant=2)
-    np.testing.assert_approx_equal(Sbar.round(2), 0.04, significant=2)
+    # np.testing.assert_approx_equal(Cbar.round(2), 0.83, significant=2)
+    # np.testing.assert_approx_equal(Sbar.round(2), 0.04, significant=2)
 
     # second moment
 
-    u2, r2, Cbar, Sbar = circ_moment(
-        alpha=c11.alpha, p=2, centered=False, return_intermediates=True
-    )
+    mp2 = circ_moment(alpha=c11.alpha, p=2, centered=False)
+    u2, r2 = convert_moment(mp2)
     np.testing.assert_approx_equal(np.rad2deg(u2).round(2), 0.64, significant=2)
     np.testing.assert_approx_equal(r2.round(2), 0.67, significant=2)
-    np.testing.assert_approx_equal(Cbar.round(2), 0.67, significant=2)
-    np.testing.assert_approx_equal(Sbar.round(2), 0.01, significant=2)
+    # np.testing.assert_approx_equal(Cbar.round(2), 0.67, significant=2)
+    # np.testing.assert_approx_equal(Sbar.round(2), 0.01, significant=2)
 
 
 def test_compute_smooth_params():

@@ -4,7 +4,7 @@ from typing import Union
 import numpy as np
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
-from .descriptive import circ_kappa, circ_mean, circ_mean_ci, circ_median, circ_r
+from .descriptive import circ_kappa, circ_mean_and_r, circ_mean_ci, circ_median, circ_r
 from .utils import angrange, angular_distance, significance_code
 
 #####################
@@ -197,7 +197,7 @@ def V_test(
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w)
-        mean, r = circ_mean(alpha, w, return_r=True)
+        mean, r = circ_mean_and_r(alpha, w)
 
     R = n * r
     V = R * np.cos(mean - angle)  # eq(27.5)

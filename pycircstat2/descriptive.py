@@ -6,11 +6,46 @@ from scipy.stats import chi2, norm, t
 from .utils import angrange
 
 
-def circ_r(
+def compute_C_and_S(
     alpha: np.ndarray,
+    w: np.ndarray,
+    p: int = 1,
+    mean: float = 0.0,
+) -> Tuple[float, float]:
+    """
+    Compute the intermediate values Cbar and Sbar.
+
+    Parameters
+    ----------
+    alpha: np.ndarray
+        Angles in radian.
+    w: np.ndarray
+        Frequencies or weights.
+    p: int, optional
+        Order of the moment (default is 1, for the first moment).
+    mean: float, optional
+        Mean angle to center the computation (default is 0.0).
+
+    Returns
+    -------
+    Cbar: float
+        Weighted mean cosine for the given moment.
+    Sbar: float
+        Weighted mean sine for the given moment.
+    """
+    n = np.sum(w)
+    Cbar = np.sum(w * np.cos(p * (alpha - mean))) / n
+    Sbar = np.sum(w * np.sin(p * (alpha - mean))) / n
+
+    return Cbar, Sbar
+
+
+def circ_r(
+    alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
-    return_intermediates=False,
-) -> Union[tuple, float]:
+    Cbar: Union[float, None] = None,
+    Sbar: Union[float, None] = None,
+) -> float:
     """
     Circular mean resultant vector length (r).
 
@@ -20,8 +55,8 @@ def circ_r(
         Angles in radian.
     w: np.array (n,)
         Frequencies or weights
-    return_intermediates: bool
-        If return_intermediate is True, return Cbar and Sbar
+    Cbar, Sbar: float
+        Precomputed intermediate values
 
     Returns
     -------
@@ -36,28 +71,67 @@ def circ_r(
     ----
     Implementation of Example 26.5 (Zar, 2010)
     """
+    if alpha is None and (Cbar is None or Sbar is None):
+        raise ValueError("`alpha` is needed for computing the resultant vector length.")
 
     if w is None:
         w = np.ones_like(alpha)
 
-    n = np.sum(w)
-    Cbar = np.sum(w * np.cos(alpha)) / n
-    Sbar = np.sum(w * np.sin(alpha)) / n
+    if Cbar is None or Sbar is None:
+        Cbar, Sbar = compute_C_and_S(alpha, w)
 
     # mean resultant vecotr length
     r = np.sqrt(Cbar**2 + Sbar**2)
 
-    if return_intermediates:
-        return r, Cbar, Sbar
-    else:
-        return r
+    return r
 
 
 def circ_mean(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
-    return_r: bool = False,
-) -> Union[tuple, float]:
+) -> Union[np.ndarray, float]:
+    """
+    Circular mean (m).
+
+    Parameters
+    ----------
+    alpha: np.array (n, )
+        Angles in radian.
+    w: np.array (n,)
+        Frequencies or weights
+
+    Returns
+    -------
+    m: float or NaN
+        Circular mean
+
+    Note
+    ----
+    Implementation of Example 26.5 (Zar, 2010)
+    """
+    if w is None:
+        w = np.ones_like(alpha)
+
+    # mean resultant vecotr length
+    Cbar, Sbar = compute_C_and_S(alpha, w)
+    r = circ_r(alpha, w, Cbar, Sbar)
+
+    # angular mean
+    if np.isclose(r, 0):
+        m = np.nan
+    else:
+        if Cbar != 0 and Sbar != 0:
+            m = np.arctan2(Sbar, Cbar)
+        else:
+            m = np.arccos(Cbar / r)
+
+    return angrange(m)
+
+
+def circ_mean_and_r(
+    alpha: np.ndarray,
+    w: Union[np.ndarray, None] = None,
+) -> tuple:
     """
     Circular mean (m) and resultant vector length (r).
 
@@ -67,8 +141,6 @@ def circ_mean(
         Angles in radian.
     w: np.array (n,)
         Frequencies or weights
-    return_r: bool
-        If return_r is True, return r as well.
 
     Returns
     -------
@@ -81,9 +153,12 @@ def circ_mean(
     ----
     Implementation of Example 26.5 (Zar, 2010)
     """
+    if w is None:
+        w = np.ones_like(alpha)
 
     # mean resultant vecotr length
-    r, Cbar, Sbar = circ_r(alpha, w, return_intermediates=True)
+    Cbar, Sbar = compute_C_and_S(alpha, w)
+    r = circ_r(alpha, w, Cbar, Sbar)
 
     # angular mean
     if np.isclose(r, 0):
@@ -94,76 +169,76 @@ def circ_mean(
         else:
             m = np.arccos(Cbar / r)
 
-    if return_r:
-        return angrange(m), r
-    else:
-        return angrange(m)
+    return angrange(m), r
 
 
 def circ_moment(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     p: int = 1,
-    mean=None,
-    centered=False,
-    return_intermediates=False,
-) -> tuple:
+    mean: Union[float, None] = None,
+    centered: bool = False,
+) -> complex:
     """
-    Circular moment. When p=1, it's the same as circular mean.
+    Compute the p-th circular moment.
 
     Parameters
     ----------
-    alpha: np.array (n, )
+    alpha: np.ndarray
         Angles in radian.
-    w: None or np.array (n,)
-        Frequencies or weights
-    p: int
-        The p-th moment to be computed.
-    mean: float
-        Precomputed circular mean.
-    centered: bool
-        If centered is True, substract mean from the alpha.
-    return_intermediates: bool
-        If return_intermediate is True, return Cbar and Sbar
+    w: np.ndarray, optional
+        Frequencies or weights. If None, equal weights are used.
+    p: int, optional
+        Order of the moment to compute.
+    mean: float, optional
+        Precomputed circular mean. If None, mean is computed internally.
+    centered: bool, optional
+        If True, center alpha by subtracting the mean.
 
     Returns
     -------
     mp: complex
-        Circular moment
+        The p-th circular moment as a complex number.
 
     Note
     ----
-    Implementation of Equation 2.24 (Fisher, 1993)
+    Implementation of Equation 2.24 (Fisher, 1993).
     """
-
     if w is None:
         w = np.ones_like(alpha)
 
-    if centered is True and mean is None:
-        mean = circ_mean(alpha, w)
-    elif centered is False and mean is None:
-        mean = 0.0
-    else:
-        pass
+    if mean is None:
+        mean = circ_mean(alpha, w) if centered else 0.0
 
-    n = np.sum(w)
-    Cbar = np.sum(w * np.cos(p * (alpha - mean))) / n
-    Sbar = np.sum(w * np.sin(p * (alpha - mean))) / n
+    Cbar, Sbar = compute_C_and_S(alpha, w, p, mean)
 
-    mp = Cbar + 1j * Sbar
+    return Cbar + 1j * Sbar
 
-    if return_intermediates:
-        return (
-            angrange(np.angle(mp)),
-            np.abs(mp),
-            Cbar,
-            Sbar,
-        )
-    else:
-        return (
-            angrange(np.angle(mp)),
-            np.abs(mp),
-        )
+
+def convert_moment(
+    mp: complex,
+) -> Tuple[float, float]:
+    """
+    Convert complex moment to polar coordinates.
+
+    Parameters
+    ----------
+    mp: complex
+        Complex moment
+
+    Returns
+    -------
+    u: float
+        Angle in radian
+    r: float
+        Magnitude
+
+    """
+
+    u = angrange(np.angle(mp))
+    r = np.abs(mp)
+
+    return u, r
 
 
 def circ_dispersion(
@@ -200,8 +275,11 @@ def circ_dispersion(
     if w is None:
         w = np.ones_like(alpha)
 
-    r1 = circ_moment(alpha=alpha, w=w, p=1, mean=mean, centered=False)[1]  # eq(2.26)
-    r2 = circ_moment(alpha=alpha, w=w, p=2, mean=mean, centered=False)[1]  # eq(2.27)
+    mp1 = circ_moment(alpha=alpha, w=w, p=1, mean=mean, centered=False)  # eq(2.26)
+    mp2 = circ_moment(alpha=alpha, w=w, p=2, mean=mean, centered=False)  # eq(2.27)
+
+    r1 = np.abs(mp1)
+    r2 = np.abs(mp2)
 
     dispersion = (1 - r2) / (2 * r1**2)  # eq(2.28)
 
@@ -236,8 +314,11 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     if w is None:
         w = np.ones_like(alpha)
 
-    u1, r1 = circ_moment(alpha=alpha, w=w, p=1, mean=None, centered=False)
-    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
+    mp1 = circ_moment(alpha=alpha, w=w, p=1, mean=None, centered=False)
+    mp2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
+
+    u1, r1 = convert_moment(mp1)
+    u2, r2 = convert_moment(mp2)
 
     skewness = (r2 * np.sin(u2 - 2 * u1)) / (1 - r1) ** 1.5
 
@@ -272,8 +353,11 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     if w is None:
         w = np.ones_like(alpha)
 
-    u1, r1 = circ_moment(alpha=alpha, w=w, p=1, mean=None, centered=False)
-    u2, r2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
+    mp1 = circ_moment(alpha=alpha, w=w, p=1, mean=None, centered=False)
+    mp2 = circ_moment(alpha=alpha, w=w, p=2, mean=None, centered=False)  # eq(2.27)
+
+    u1, r1 = convert_moment(mp1)
+    u2, r2 = convert_moment(mp2)
 
     kurtosis = (r2 * np.cos(u2 - 2 * u1) - r1**4) / (1 - r1) ** 2
 
@@ -391,7 +475,7 @@ def circ_median(
             median = _circ_median_mean_deviation(alpha)
 
     if return_average:
-        median = circ_mean(alpha=median)
+        median = circ_mean(alpha=np.unique(median))
 
     return angrange(median)
 
@@ -560,7 +644,6 @@ def circ_mean_ci(
     ci: float = 0.95,
     method: str = "approximate",
     B: int = 2000,  # number of samples for bootstrap
-    return_samples: bool = False,  # bootstrap option
 ) -> tuple:
     # TODO
 
@@ -570,13 +653,11 @@ def circ_mean_ci(
             alpha=alpha, w=w, mean=mean, r=r, n=n, ci=ci
         )
 
-    # n < 25, according to 4.4.4a (Fisher, 1993)
+    # n < 25, according to 4.4.4a (Fisher, 1993, P75)
     elif method == "bootstrap":
-        (lb, ub) = _circ_mean_ci_bootstrap(
-            alpha=alpha, B=B, ci=ci, return_samples=return_samples
-        )
+        (lb, ub) = _circ_mean_ci_bootstrap(alpha=alpha, B=B, ci=ci)
 
-    # n >= 25, according to 4.4.4b (Fisher, 1993)
+    # n >= 25, according to 4.4.4b (Fisher, 1993, P75)
     elif method == "dispersion":
         (lb, ub) = _circ_mean_ci_dispersion(alpha=alpha, w=w, mean=mean, ci=ci)
 
@@ -604,7 +685,7 @@ def _circ_mean_ci_dispersion(
     if w is None:
         w = np.ones_like(alpha)
     if mean is None:
-        mean, r = circ_mean(alpha, w, return_r=True)
+        mean, r = circ_mean_and_r(alpha, w)
 
     n = np.sum(w)
     if n < 25:
@@ -646,7 +727,7 @@ def _circ_mean_ci_approximate(
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w)
-        mean, r = circ_mean(alpha, w, return_r=True)
+        mean, r = circ_mean_and_r(alpha, w)
 
     if n is None:
         raise ValueError("Sample size `n` is missing.")
@@ -680,7 +761,10 @@ def _circ_mean_ci_approximate(
         )
 
 
-def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95, return_samples=False):
+def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95):
+    """
+    Implementation of Section 8.3 (Fisher, 1993, P207)
+    """
 
     # Precompute z0 and v0 from original data
     # algo 1
@@ -707,17 +791,52 @@ def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95, return_samples=False):
 
     beta = np.array([_circ_mean_resample(alpha, z0, v0) for i in range(B)]).flatten()
 
-    lb, ub = t.interval(
-        ci,
-        len(beta) - 1,
-        loc=circ_mean(alpha=beta),
-        scale=circ_std(alpha=beta, w=np.ones_like(beta))[1],
-    )
+    # here we use HDI instead of the percentile method
+    lb, ub = compute_hdi(beta, ci=ci)
 
-    if return_samples:
-        return lb, ub, beta
-    else:
-        return lb, ub
+    return lb, ub
+
+
+def compute_hdi(samples, ci=0.95):
+    """
+    Compute the Highest Density Interval (HDI) for circular data.
+
+    Parameters
+    ----------
+    samples : np.ndarray
+        Bootstrap samples of the circular mean in radians.
+    ci : float, optional
+        Credible interval (default is 0.95 for 95% HDI).
+
+    Returns
+    -------
+    hdi : tuple
+        Lower and upper bounds of the HDI in radians.
+    """
+    # Wrap samples to [0, 2π) for circular consistency
+    wrapped_samples = angrange(samples)
+
+    # Sort the samples
+    sorted_samples = np.sort(wrapped_samples)
+
+    # Number of samples in the HDI
+    n_samples = len(sorted_samples)
+    interval_idx = int(np.floor(ci * n_samples))
+    if interval_idx == 0:
+        raise ValueError("Insufficient data to compute HDI.")
+
+    # Find the shortest interval
+    hdi_width = np.inf
+    hdi_bounds = (None, None)
+    for i in range(n_samples - interval_idx):
+        lower = sorted_samples[i]
+        upper = sorted_samples[i + interval_idx]
+        width = angrange(upper - lower)  # Handle wrapping for circularity
+        if width < hdi_width:
+            hdi_width = width
+            hdi_bounds = (lower, upper)
+
+    return hdi_bounds
 
 
 def _circ_mean_resample(alpha, z0, v0):
@@ -767,6 +886,7 @@ def circ_median_ci(
     median: float = None,
     alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
+    method: str = "deviation",
     grouped: bool = False,
     ci: float = 0.95,
 ) -> tuple:
@@ -797,7 +917,7 @@ def circ_median_ci(
         ), "If `median` is None, then `alpha` (and `w`) is needed."
         if w is None:
             w = np.ones_like(alpha)
-        median = circ_median(alpha=alpha, w=w, grouped=grouped)
+        median = circ_median(alpha=alpha, w=w, grouped=grouped, method=method)
 
     if alpha is None:
         raise ValueError(
@@ -988,11 +1108,11 @@ def nonparametric_density_estimation(
     return x, f
 
 
-def circ_mean_of_means(
+def circ_mean_and_r_of_means(
     circs: Union[list, None] = None,
     ms: Union[np.ndarray, None] = None,
     rs: Union[np.ndarray, None] = None,
-) -> Tuple[float]:
+) -> Tuple[float, float]:
     """The Mean of a set of Mean Angles
 
     Parameters

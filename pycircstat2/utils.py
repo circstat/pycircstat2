@@ -83,11 +83,11 @@ def significance_code(p: float) -> str:
 
 
 def load_data(
-    name,
-    source="fisher",
-    print_meta=False,
-    return_meta=False,
-):
+    name: str,
+    source: str = "fisher",
+    print_meta: bool = False,
+    return_meta: bool = False,
+) -> Union[pd.DataFrame, tuple]:
     __source__ = ["fisher", "zar", "mardia", "pewsey"]
 
     # check source
