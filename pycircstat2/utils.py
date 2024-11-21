@@ -112,3 +112,33 @@ def load_data(
         return csv_data, json_data
     else:
         return csv_data
+
+
+def is_within_circular_range(value, lb, ub):
+    """
+    Check if a value lies within the circular range [lb, ub].
+
+    Parameters
+    ----------
+    value : float
+        The value to check.
+    lb : float
+        The lower bound of the range.
+    ub : float
+        The upper bound of the range.
+
+    Returns
+    -------
+    bool
+        True if the value is within the circular range, False otherwise.
+    """
+    value = np.mod(value, 2 * np.pi)
+    lb = np.mod(lb, 2 * np.pi)
+    ub = np.mod(ub, 2 * np.pi)
+
+    if lb <= ub:
+        # Standard range
+        return lb <= value <= ub
+    else:
+        # Wrapping range
+        return value >= lb or value <= ub

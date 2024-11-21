@@ -3,7 +3,7 @@ from typing import Tuple, Union
 import numpy as np
 from scipy.stats import chi2, norm, t
 
-from .utils import angrange
+from .utils import angrange, is_within_circular_range
 
 
 def compute_C_and_S(
@@ -131,7 +131,7 @@ def circ_mean(
 def circ_mean_and_r(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
-) -> tuple:
+) -> Tuple[float, float]:
     """
     Circular mean (m) and resultant vector length (r).
 
@@ -453,6 +453,8 @@ def circ_median(
         to compute the medians:
             - deviation
             - count
+    return_average: bool
+        Return the average of the median
 
     Return
     ------
@@ -473,9 +475,18 @@ def circ_median(
         # find the angle that has the minimal mean deviation
         elif method == "deviation":
             median = _circ_median_mean_deviation(alpha)
+        else:
+            raise ValueError(
+                f"Method `{method}` for `circ_median` is not supported.\nTry `deviation` or `count`"
+            )
 
     if return_average:
-        median = circ_mean(alpha=np.unique(median))
+        # There are two ways to take the average of the median
+        # 1. circular mean of all medians / `circular` use this way
+        median = circ_mean(alpha=median)
+        # 2. circular mean of unique medians / Fisher 1993 use this way
+        # median = circ_mean(alpha=np.unique(median))
+        # we use the first way here.
 
     return angrange(median)
 
@@ -701,6 +712,9 @@ def _circ_mean_ci_dispersion(
     lb = mean - d
     ub = mean + d
 
+    if not is_within_circular_range(mean, lb, ub):
+        lb, ub = ub, lb
+
     return (lb, ub)
 
 
@@ -753,6 +767,9 @@ def _circ_mean_ci_approximate(
         lb = mean - d
         ub = mean + d
 
+        if not is_within_circular_range(mean, lb, ub):
+            lb, ub = ub, lb
+
         return (lb, ub)
 
     else:
@@ -793,6 +810,10 @@ def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95):
 
     # here we use HDI instead of the percentile method
     lb, ub = compute_hdi(beta, ci=ci)
+
+    mean = circ_mean(beta)
+    if not is_within_circular_range(mean, lb, ub):
+        lb, ub = ub, lb
 
     return lb, ub
 
@@ -945,6 +966,9 @@ def circ_median_ci(
             idx_lb = n + idx_lb
 
         lower, upper = alpha[int(idx_lb)], alpha[int(idx_ub)]
+
+        if not is_within_circular_range(median, lower, upper):
+            lower, upper = upper, lower
 
     # selected confidence intervals for the median direction for n < 15
     # from A6, Fisher, 1993.
