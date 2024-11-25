@@ -204,6 +204,48 @@ class vonmises(rv_continuous):
 
         return _cdf_single(x, kappa, mu)
 
+    def _rvs(self, kappa, mu, size=None, random_state=None):
+        # Use the random_state attribute or a new default random generator
+        rng = self._random_state if random_state is None else random_state
+
+        # Handle size being a tuple
+        if size is None:
+            size = 1
+        num_samples = np.prod(size)  # Total number of samples
+
+        # Best-Fisher algorithm
+        a = 1 + np.sqrt(1 + 4 * kappa**2)
+        b = (a - np.sqrt(2 * a)) / (2 * kappa)
+        r = (1 + b**2) / (2 * b)
+
+        def sample():
+            while True:
+                u1 = rng.uniform()
+                z = np.cos(np.pi * u1)
+                f = (1 + r * z) / (r + z)
+                c = kappa * (r - f)
+                u2 = rng.uniform()
+                if u2 < c * (2 - c) or u2 <= c * np.exp(1 - c):
+                    break
+            u3 = rng.uniform()
+            theta = mu + np.sign(u3 - 0.5) * np.arccos(f)
+            return theta % (2 * np.pi)
+
+        samples = np.array([sample() for _ in range(num_samples)])
+        return samples
+
+    def fit(self, data, *args, **kwargs):
+        """
+        Override fit method to fix loc=0 and scale=1 and return only (kappa, mu).
+        """
+        kwargs["floc"] = 0  # Fix loc to 0
+        kwargs["fscale"] = 1  # Fix scale to 1
+        params = super().fit(
+            data, *args, **kwargs
+        )  # Perform fit with fixed loc and scale
+        kappa, mu = params[:-2]  # Extract kappa and mu (excluding loc and scale)
+        return kappa, mu
+
 
 vonmises = vonmises(name="vonmises")
 
