@@ -174,7 +174,7 @@ wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 # probably less efficient than scipy.stats.vonmises
 # but I would like to keep the parameterization of
 # all distribution the same, e.g. pdf(x, *args, mu)
-class vonmises(rv_continuous):
+class vonmises_gen(rv_continuous):
     """Von Mises Distribution
 
     Methods
@@ -247,7 +247,7 @@ class vonmises(rv_continuous):
         return kappa, mu
 
 
-vonmises = vonmises(name="vonmises")
+vonmises = vonmises_gen(name="vonmises")
 
 
 class jonespewsey_gen(rv_continuous):
