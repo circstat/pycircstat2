@@ -36,10 +36,10 @@ class cardioid_gen(rv_continuous):
 
     Method
     ------
-    pdf(x, rho, mu, scale=1)
+    pdf(x, rho, mu)
         Probability density function.
 
-    cdf(x, rho, mu, scale=1)
+    cdf(x, rho, mu)
         Cumulative distribution function.
 
     Notes
@@ -67,10 +67,10 @@ class cartwright_gen(rv_continuous):
 
     Method
     ------
-    pdf(x, zeta, mu, scale=1)
+    pdf(x, zeta, mu)
         Probability density function.
 
-    cdf(x, zeta, mu, scale=1)
+    cdf(x, zeta, mu)
         Cumulative distribution function.
 
     Note
@@ -104,10 +104,10 @@ class wrapnorm_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, rho, mu, scale=1)
+    pdf(x, rho, mu)
         Probability density function.
 
-    cdf(x, rho, mu, scale=1)
+    cdf(x, rho, mu)
         Cumulative distribution function.
 
     Note
@@ -136,17 +136,15 @@ class wrapnorm_gen(rv_continuous):
 wrapnorm = wrapnorm_gen(name="wrapped_normal")
 
 
-# scipy.stats.wrapcauchy seems broken
-# thus we reimplemented it.
 class wrapcauchy_gen(rv_continuous):
     """Wrapped Cauchy Distribution
 
     Methods
     -------
-    pdf(x, rho, mu, scale=1)
+    pdf(x, rho, mu)
         Probability density function.
 
-    cdf(x, rho, mu, scale=1)
+    cdf(x, rho, mu)
         Cumulative distribution function.
 
     Note
@@ -171,25 +169,51 @@ class wrapcauchy_gen(rv_continuous):
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
 
-# probably less efficient than scipy.stats.vonmises
-# but I would like to keep the parameterization of
-# all distribution the same, e.g. pdf(x, *args, mu)
 class vonmises_gen(rv_continuous):
     """Von Mises Distribution
 
     Methods
     -------
-    pdf(x, kappa, mu, scale=1)
+    pdf(x, kappa, mu)
         Probability density function.
 
-    cdf(x, kappa, mu, scale=1)
+    cdf(x, kappa, mu)
         Cumulative distribution function.
 
+    ppf(q, kappa, mu)
+        Percent-point function (inverse of CDF).
+
+    rvs(kappa, mu, size=None, random_state=None)
+        Random variates.
+
+    fit(data, *args, **kwargs)
+        Fit the distribution to the data and return the parameters (kappa, mu).
 
     Note
     ----
     Implementation from 4.3.8 of Pewsey et al. (2014)
     """
+
+    _freeze_doc = """
+    Freeze the distribution with specific parameters.
+
+    Parameters
+    ----------
+    kappa : float
+        The concentration parameter of the distribution (kappa > 0).
+    mu : float
+        The mean direction of the distribution (0 <= mu <= 2*pi).
+
+    Returns
+    -------
+    rv_frozen : rv_frozen instance
+        The frozen distribution instance with fixed parameters.
+    """
+
+    def __call__(self, *args, **kwds):
+        return self.freeze(*args, **kwds)
+
+    __call__.__doc__ = _freeze_doc
 
     def _argcheck(self, kappa, mu):
         return kappa > 0 and 0 <= mu <= np.pi * 2
@@ -197,12 +221,96 @@ class vonmises_gen(rv_continuous):
     def _pdf(self, x, kappa, mu):
         return np.exp(kappa * np.cos(x - mu)) / (2 * np.pi * i0(kappa))
 
+    def pdf(self, x, *args, **kwargs):
+        """
+        Probability density function of the Von Mises distribution.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
+        mu : float
+            The mean direction of the distribution (0 <= mu <= 2*pi).
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, *args, **kwargs)
+
+    def _logpdf(self, x, kappa, mu):
+        return kappa * np.cos(x - mu) - np.log(2 * np.pi * i0(kappa))
+
+    def logpdf(self, x, *args, **kwargs):
+        """
+        Logarithm of the probability density function of the Von Mises distribution.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the logarithm of the probability density function.
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
+        mu : float
+            The mean direction of the distribution (0 <= mu <= 2*pi).
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, *args, **kwargs)
+
     def _cdf(self, x, kappa, mu):
         @np.vectorize
         def _cdf_single(x, kappa, mu):
-            return quad(self._pdf, a=0, b=x, args=(kappa, mu))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(kappa, mu))
+            return integral
 
         return _cdf_single(x, kappa, mu)
+
+    def cdf(self, x, *args, **kwargs):
+        """
+        Cumulative distribution function of the Von Mises distribution.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
+        mu : float
+            The mean direction of the distribution (0 <= mu <= 2*pi).
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, *args, **kwargs)
+
+    def ppf(self, q, *args, **kwargs):
+        """
+        Percent-point function (inverse of the CDF) of the Von Mises distribution.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate.
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
+        mu : float
+            The mean direction of the distribution (0 <= mu <= 2*pi).
+
+        Returns
+        -------
+        ppf_values : array_like
+            Values at the given quantiles.
+        """
+        return super().ppf(q, *args, **kwargs)
 
     def _rvs(self, kappa, mu, size=None, random_state=None):
         # Use the random_state attribute or a new default random generator
@@ -234,6 +342,37 @@ class vonmises_gen(rv_continuous):
         samples = np.array([sample() for _ in range(num_samples)])
         return samples
 
+    def rvs(self, size=None, random_state=None, *args, **kwargs):
+        """
+        Draw random variates.
+
+        Parameters
+        ----------
+        size : int or tuple, optional
+            Number of samples to generate.
+        random_state : RandomState, optional
+            Random number generator instance.
+
+        Returns
+        -------
+        samples : ndarray
+            Random variates.
+        """
+        # Check if instance-level parameters are set
+        kappa = getattr(self, "kappa", None)
+        mu = getattr(self, "mu", None)
+
+        # Override instance parameters if provided in args/kwargs
+        kappa = kwargs.pop("kappa", kappa)
+        mu = kwargs.pop("mu", mu)
+
+        # Ensure required parameters are provided
+        if kappa is None or mu is None:
+            raise ValueError("Both 'kappa' and 'mu' must be provided.")
+
+        # Call the private _rvs method
+        return self._rvs(kappa, mu, size=size, random_state=random_state)
+
     def fit(self, data, *args, **kwargs):
         """
         Override fit method to fix loc=0 and scale=1 and return only (kappa, mu).
@@ -246,6 +385,70 @@ class vonmises_gen(rv_continuous):
         kappa, mu = params[:-2]  # Extract kappa and mu (excluding loc and scale)
         return kappa, mu
 
+    def support(self, *args, **kwargs):
+        return (0, 2 * np.pi)
+
+    def mean(self, *args, **kwargs):
+        """
+        Circular mean of the Von Mises distribution.
+
+        Returns
+        -------
+        mean : float
+            The circular mean direction (in radians), equal to `mu`.
+        """
+        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        return mu
+
+    def median(self, *args, **kwargs):
+        """
+        Circular median of the Von Mises distribution.
+
+        Returns
+        -------
+        median : float
+            The circular median direction (in radians), equal to `mu`.
+        """
+        return self.mean(*args, **kwargs)
+
+    def var(self, *args, **kwargs):
+        """
+        Circular variance of the Von Mises distribution.
+
+        Returns
+        -------
+        variance : float
+            The circular variance, derived from `kappa`.
+        """
+        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        return 1 - i1(kappa) / i0(kappa)
+
+    def std(self, *args, **kwargs):
+        """
+        Circular standard deviation of the Von Mises distribution.
+
+        Returns
+        -------
+        std : float
+            The circular standard deviation, derived from `kappa`.
+        """
+        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        r = i1(kappa) / i0(kappa)
+
+        return np.sqrt(-2 * np.log(r))
+
+    def entropy(self, *args, **kwargs):
+        """
+        Entropy of the Von Mises distribution.
+
+        Returns
+        -------
+        entropy : float
+            The entropy of the distribution.
+        """
+        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        return -np.log(i0(kappa)) + (kappa * i1(kappa)) / i0(kappa)
+
 
 vonmises = vonmises_gen(name="vonmises")
 
@@ -255,10 +458,10 @@ class jonespewsey_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, mu, scale=1)
+    pdf(x, kappa, psi, mu)
         Probability density function.
 
-    cdf(x, kappa, psi, mu, scale=1)
+    cdf(x, kappa, psi, mu)
         Cumulative distribution function.
 
 
@@ -340,10 +543,10 @@ class vonmises_ext_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, nu, mu, scale=1)
+    pdf(x, kappa, nu, mu)
         Probability density function.
 
-    cdf(x, kappa, nu, mu, scale=1)
+    cdf(x, kappa, nu, mu)
         Cumulative distribution function.
 
     Note
@@ -392,10 +595,10 @@ class jonespewsey_sineskewed_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, lmbd, xi, scale=1)
+    pdf(x, kappa, psi, lmbd, xi)
         Probability density function.
 
-    cdf(x, kappa, psi, lmbd, xi, scale=1)
+    cdf(x, kappa, psi, lmbd, xi)
         Cumulative distribution function.
 
 
@@ -453,10 +656,10 @@ class jonespewsey_asymext_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, nu, xi, scale=1)
+    pdf(x, kappa, psi, nu, xi)
         Probability density function.
 
-    cdf(x, kappa, psi, nu, xi, scale=1)
+    cdf(x, kappa, psi, nu, xi)
         Cumulative distribution function.
 
 
@@ -511,10 +714,10 @@ class inverse_batschelet_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, nu, lmbd, xi, scale=1)
+    pdf(x, kappa, psi, nu, lmbd, xi)
         Probability density function.
 
-    cdf(x, kappa, psi, nu, lmbd, xi, scale=1)
+    cdf(x, kappa, psi, nu, lmbd, xi)
         Cumulative distribution function.
 
 
