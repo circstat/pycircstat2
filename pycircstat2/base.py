@@ -197,6 +197,10 @@ class Circular:
         self.s, self.s0, self.rc = s, s0, rc = circ_std(r=r, bin_size=bin_size)
 
         # angular median
+        if n > 10000 and kwargs_median["method"] is not None:
+            print(
+                "Sample size is large (n>10000), it will take a while to find the median.\nOr set `kwargs_median={'method': None}` to skip."
+            )
         self.median = median = circ_median(
             alpha=alpha, w=w, grouped=grouped, method=kwargs_median["method"]
         )
@@ -215,17 +219,18 @@ class Circular:
 
         # check multimodality
         self.mixtures = []
-        for k in range(1, n_clusters_max + 1):
-            m = MoVM(
-                n_clusters=k, n_intervals=n_intervals, unit="radian", random_seed=0
-            )
-            m.fit(np.repeat(alpha, w))
-            self.mixtures.append(m)
-        self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
-        if not np.isnan(self.mixtures_BIC).all():
-            self.mixture_opt = self.mixtures[np.nanargmin(self.mixtures_BIC)]
-        else:
-            self.mixture_opt = None
+        if n_clusters_max > 1:
+            for k in range(1, n_clusters_max + 1):
+                m = MoVM(
+                    n_clusters=k, n_intervals=n_intervals, unit="radian", random_seed=0
+                )
+                m.fit(np.repeat(alpha, w))
+                self.mixtures.append(m)
+            self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
+            if not np.isnan(self.mixtures_BIC).all():
+                self.mixture_opt = self.mixtures[np.nanargmin(self.mixtures_BIC)]
+            else:
+                self.mixture_opt = None
 
     def __repr__(self):
         unit = self.unit

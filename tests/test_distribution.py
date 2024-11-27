@@ -47,11 +47,14 @@ def test_cartwright():
 
 def test_wrapcauchy():
 
+    # P54, Pewsey, et al. (2014)
     np.testing.assert_approx_equal(
         wrapcauchy.cdf(np.pi / 6, rho=0.75, mu=np.pi / 2).round(3),
         0.0320,
         significant=3,
     )
+
+    # P54, Pewsey, et al. (2014)
     np.testing.assert_approx_equal(
         wrapcauchy.ppf(0.0320, rho=0.75, mu=np.pi / 2),
         np.pi / 6,

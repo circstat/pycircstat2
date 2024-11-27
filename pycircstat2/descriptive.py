@@ -475,6 +475,8 @@ def circ_median(
         # find the angle that has the minimal mean deviation
         elif method == "deviation":
             median = _circ_median_mean_deviation(alpha)
+        elif method == "none" or method is None:
+            median = np.nan
         else:
             raise ValueError(
                 f"Method `{method}` for `circ_median` is not supported.\nTry `deviation` or `count`"
@@ -614,28 +616,24 @@ def _circ_median_mean_deviation(alpha: np.array) -> float:
 def circ_mean_deviation(
     alpha: Union[np.ndarray, float, int, list],
     beta: Union[np.ndarray, float, int, list],
-) -> np.ndarray:
+    chunk_size=1000,
+):
     """
-    Circular mean deviation.
-
-    It is the mean angular distance from one data point to all others.
-    The circular median of a set of data should be the point with minimal
-    circular mean deviation.
+    Optimized circular mean deviation with chunking.
 
     Parameters
-    ---------
-    alpha: np.array, int or float
-        Data in radian.
-    beta: np.array, int or float
-        reference angle in radian.
+    ----------
+    alpha : np.ndarray
+        Data in radians.
+    beta : np.ndarray
+        Reference angles in radians.
+    chunk_size : int
+        Number of rows to process in chunks.
 
-    Return
-    ------
-    circular mean deviation: np.array
-
-    Note
-    ----
-    eq 2.32, Section 2.3.2, Fisher (1993)
+    Returns
+    -------
+    np.ndarray
+        Circular mean deviation.
     """
     if not isinstance(alpha, np.ndarray):
         alpha = np.array([alpha])
@@ -643,7 +641,50 @@ def circ_mean_deviation(
     if not isinstance(beta, np.ndarray):
         beta = np.array([beta])
 
-    return (np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)).round(5)
+    n = len(beta)
+    result = np.zeros(n)
+
+    for i in range(0, n, chunk_size):
+        beta_chunk = beta[i : i + chunk_size]
+        angdist = np.pi - np.abs(np.pi - np.abs(alpha - beta_chunk[:, None]))
+        result[i : i + chunk_size] = np.mean(angdist, axis=1).round(5)
+
+    return result
+
+
+# def circ_mean_deviation(
+#     alpha: Union[np.ndarray, float, int, list],
+#     beta: Union[np.ndarray, float, int, list],
+# ) -> np.ndarray:
+#     """
+#     Circular mean deviation.
+
+#     It is the mean angular distance from one data point to all others.
+#     The circular median of a set of data should be the point with minimal
+#     circular mean deviation.
+
+#     Parameters
+#     ---------
+#     alpha: np.array, int or float
+#         Data in radian.
+#     beta: np.array, int or float
+#         reference angle in radian.
+
+#     Return
+#     ------
+#     circular mean deviation: np.array
+
+#     Note
+#     ----
+#     eq 2.32, Section 2.3.2, Fisher (1993)
+#     """
+#     if not isinstance(alpha, np.ndarray):
+#         alpha = np.array([alpha])
+
+#     if not isinstance(beta, np.ndarray):
+#         beta = np.array([beta])
+
+#     return (np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)).round(5)
 
 
 def circ_mean_ci(

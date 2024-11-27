@@ -156,33 +156,201 @@ wrapnorm = wrapnorm_gen(name="wrapped_normal")
 
 
 class wrapcauchy_gen(rv_continuous):
-    """Wrapped Cauchy Distribution
+    """Wrapped Cauchy Distribution.
 
     Methods
     -------
-    pdf(x, rho, mu)
+    pdf(x, mu, rho)
         Probability density function.
 
-    cdf(x, rho, mu)
+    cdf(x, mu, rho)
         Cumulative distribution function.
 
-    Note
-    ----
-    Implementation from 4.3.6 of Pewsey et al. (2014)
+    rvs(mu, rho, size=None, random_state=None)
+        Random variates.
+
+    fit(data, method="analytical", *args, **kwargs)
+        Fit the distribution to the data and return the parameters (mu, rho).
+
+    Notes
+    -----
+    Implementation based on Section 4.3.6 of Pewsey et al. (2014).
     """
 
-    def _argcheck(self, rho, mu):
-        return 0 < rho <= 1 and 0 <= mu <= np.pi * 2
+    def _argcheck(self, mu, rho):
+        return 0 <= mu <= np.pi * 2 and 0 < rho <= 1
 
-    def _pdf(self, x, rho, mu):
+    def _pdf(self, x, mu, rho):
         return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
 
-    def _cdf(self, x, rho, mu):
-        @np.vectorize
-        def _cdf_single(x, rho, mu):
-            return quad(self._pdf, a=0, b=x, args=(rho, mu))
+    def pdf(self, x, *args, **kwargs):
+        """
+        Probability density function of the Wrapped Cauchy distribution.
 
-        return _cdf_single(x, rho, mu)
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Shape parameter, 0 < rho <= 1.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, *args, **kwargs)
+
+    def _logpdf(self, x, mu, rho):
+        return np.log(np.clip(self._pdf(x, mu, rho), 1e-16, None))
+
+    def logpdf(self, x, *args, **kwargs):
+        """
+        Logarithm of the probability density function.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-PDF.
+        rho : float
+            Shape parameter, 0 < rho <= 1.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, *args, **kwargs)
+
+    def _cdf(self, x, mu, rho):
+        @np.vectorize
+        def _cdf_single(x, mu, rho):
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, rho))
+            return integral
+
+        return _cdf_single(x, mu, rho)
+
+    def cdf(self, x, *args, **kwargs):
+        """
+        Cumulative distribution function of the Wrapped Cauchy distribution.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the CDF.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Shape parameter, 0 < rho <= 1.
+
+        Returns
+        -------
+        cdf_values : array_like
+            CDF evaluated at `x`.
+        """
+        return super().cdf(x, *args, **kwargs)
+
+    def _rvs(self, mu, rho, size=None, random_state=None):
+        """
+        Random variate generation for the Wrapped Cauchy distribution.
+
+        Parameters
+        ----------
+        rho : float
+            Shape parameter, 0 <= rho <= 1.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        size : int or tuple, optional
+            Number of samples to generate.
+        random_state : RandomState, optional
+            Random number generator instance.
+
+        Returns
+        -------
+        samples : ndarray
+            Random variates from the Wrapped Cauchy distribution.
+        """
+        rng = self._random_state if random_state is None else random_state
+
+        if rho == 0:
+            return rng.uniform(0, 2 * np.pi, size=size)
+        elif rho == 1:
+            return np.full(size, mu % (2 * np.pi))
+        else:
+            from scipy.stats import cauchy
+
+            scale = -np.log(rho)
+            samples = cauchy.rvs(loc=mu, scale=scale, size=size, random_state=rng)
+            return np.mod(samples, 2 * np.pi)
+
+    def fit(self, data, method="analytical", *args, **kwargs):
+        """
+        Fit the Wrapped Cauchy distribution to the data.
+
+        Parameters
+        ----------
+        data : array_like
+            Input data (angles in radians).
+        method : str, optional
+            The approach for fitting the distribution. Options are:
+            - "analytical": Compute `rho` and `mu` using closed-form solutions.
+            - "numerical": Fit the parameters by minimizing the negative log-likelihood using an optimizer.
+            Default is "analytical".
+
+        *args, **kwargs :
+            Additional arguments passed to the optimizer (if used).
+
+        Returns
+        -------
+        rho : float
+            Estimated shape parameter.
+        mu : float
+            Estimated mean direction.
+        """
+
+        # Validate the fitting method
+        valid_methods = ["analytical", "numerical"]
+        if method not in valid_methods:
+            raise ValueError(
+                f"Invalid method '{method}'. Available methods are {valid_methods}."
+            )
+
+        # Validate the data
+        if not np.all((0 <= data) & (data < 2 * np.pi)):
+            raise ValueError("Data must be in the range [0, 2π).")
+
+        # Analytical solution for the Von Mises distribution
+        mu, rho = circ_mean_and_r(alpha=data)
+
+        # Use analytical estimates for mu and rho
+        if method == "analytical":
+            return mu, rho
+        elif method == "numerical":
+            # Numerical optimization
+            def nll(params):
+                mu, rho = params
+                if not self._argcheck(mu, rho):
+                    return np.inf
+                return -np.sum(self._logpdf(data, mu, rho))
+
+            start_params = [mu, np.clip(rho, 1e-4, 1 - 1e-4)]
+            bounds = [(0, 2 * np.pi), (1e-6, 1)]
+            algo = kwargs.pop("algorithm", "L-BFGS-B")
+            result = minimize(
+                nll, start_params, bounds=bounds, method=algo, *args, **kwargs
+            )
+            if not result.success:
+                raise RuntimeError(f"Optimization failed: {result.message}")
+            mu, rho = result.x
+            return mu, rho
+        else:
+            raise ValueError(
+                "Invalid method. Supported methods are 'analytical' and 'numerical'."
+            )
 
 
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
@@ -193,20 +361,20 @@ class vonmises_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, mu)
+    pdf(x, mu, kappa)
         Probability density function.
 
-    cdf(x, kappa, mu)
+    cdf(x, mu, kappa)
         Cumulative distribution function.
 
-    ppf(q, kappa, mu)
+    ppf(q, mu, kappa)
         Percent-point function (inverse of CDF).
 
-    rvs(kappa, mu, size=None, random_state=None)
+    rvs(mu, kappa, size=None, random_state=None)
         Random variates.
 
     fit(data, *args, **kwargs)
-        Fit the distribution to the data and return the parameters (kappa, mu).
+        Fit the distribution to the data and return the parameters (mu, kappa).
 
     Note
     ----
@@ -510,10 +678,10 @@ class vonmises_gen(rv_continuous):
         Examples
         --------
         # Analytical fitting
-        kappa, mu = vonmises.fit(data, method="analytical")
+        mu, kappa = vonmises.fit(data, method="analytical")
 
         # Numerical fitting using L-BFGS-B
-        kappa, mu = vonmises.fit(data, method="L-BFGS-B")
+        mu, kappa = vonmises.fit(data, method="L-BFGS-B")
         """
 
         # Validate the fitting method
