@@ -234,10 +234,10 @@ class vonmises_gen(rv_continuous):
 
     __call__.__doc__ = _freeze_doc
 
-    def _argcheck(self, kappa, mu):
-        return kappa > 0 and 0 <= mu <= np.pi * 2
+    def _argcheck(self, mu, kappa):
+        return 0 <= mu <= np.pi * 2 and kappa > 0
 
-    def _pdf(self, x, kappa, mu):
+    def _pdf(self, x, mu, kappa):
         return np.exp(kappa * np.cos(x - mu)) / (2 * np.pi * i0(kappa))
 
     def pdf(self, x, *args, **kwargs):
@@ -260,7 +260,7 @@ class vonmises_gen(rv_continuous):
         """
         return super().pdf(x, *args, **kwargs)
 
-    def _logpdf(self, x, kappa, mu):
+    def _logpdf(self, x, mu, kappa):
         return kappa * np.cos(x - mu) - np.log(2 * np.pi * i0(kappa))
 
     def logpdf(self, x, *args, **kwargs):
@@ -283,13 +283,13 @@ class vonmises_gen(rv_continuous):
         """
         return super().logpdf(x, *args, **kwargs)
 
-    def _cdf(self, x, kappa, mu):
+    def _cdf(self, x, mu, kappa):
         @np.vectorize
-        def _cdf_single(x, kappa, mu):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(kappa, mu))
+        def _cdf_single(x, mu, kappa):
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa))
             return integral
 
-        return _cdf_single(x, kappa, mu)
+        return _cdf_single(x, mu, kappa)
 
     def cdf(self, x, *args, **kwargs):
         """
@@ -331,7 +331,7 @@ class vonmises_gen(rv_continuous):
         """
         return super().ppf(q, *args, **kwargs)
 
-    def _rvs(self, kappa, mu, size=None, random_state=None):
+    def _rvs(self, mu, kappa, size=None, random_state=None):
         # Use the random_state attribute or a new default random generator
         rng = self._random_state if random_state is None else random_state
 
@@ -378,31 +378,19 @@ class vonmises_gen(rv_continuous):
             Random variates.
         """
         # Check if instance-level parameters are set
-        kappa = getattr(self, "kappa", None)
         mu = getattr(self, "mu", None)
+        kappa = getattr(self, "kappa", None)
 
         # Override instance parameters if provided in args/kwargs
-        kappa = kwargs.pop("kappa", kappa)
         mu = kwargs.pop("mu", mu)
+        kappa = kwargs.pop("kappa", kappa)
 
         # Ensure required parameters are provided
-        if kappa is None or mu is None:
-            raise ValueError("Both 'kappa' and 'mu' must be provided.")
+        if mu is None or kappa is None:
+            raise ValueError("Both 'mu' and 'kappa' must be provided.")
 
         # Call the private _rvs method
-        return self._rvs(kappa, mu, size=size, random_state=random_state)
-
-    def fit(self, data, *args, **kwargs):
-        """
-        Override fit method to fix loc=0 and scale=1 and return only (kappa, mu).
-        """
-        kwargs["floc"] = 0  # Fix loc to 0
-        kwargs["fscale"] = 1  # Fix scale to 1
-        params = super().fit(
-            data, *args, **kwargs
-        )  # Perform fit with fixed loc and scale
-        kappa, mu = params[:-2]  # Extract kappa and mu (excluding loc and scale)
-        return kappa, mu
+        return self._rvs(mu, kappa, size=size, random_state=random_state)
 
     def support(self, *args, **kwargs):
         return (0, 2 * np.pi)
@@ -416,7 +404,7 @@ class vonmises_gen(rv_continuous):
         mean : float
             The circular mean direction (in radians), equal to `mu`.
         """
-        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        (mu, _) = self._parse_args(*args, **kwargs)[0]
         return mu
 
     def median(self, *args, **kwargs):
@@ -439,7 +427,7 @@ class vonmises_gen(rv_continuous):
         variance : float
             The circular variance, derived from `kappa`.
         """
-        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        (_, kappa) = self._parse_args(*args, **kwargs)[0]
         return 1 - i1(kappa) / i0(kappa)
 
     def std(self, *args, **kwargs):
@@ -451,7 +439,7 @@ class vonmises_gen(rv_continuous):
         std : float
             The circular standard deviation, derived from `kappa`.
         """
-        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        (_, kappa) = self._parse_args(*args, **kwargs)[0]
         r = i1(kappa) / i0(kappa)
 
         return np.sqrt(-2 * np.log(r))
@@ -465,20 +453,20 @@ class vonmises_gen(rv_continuous):
         entropy : float
             The entropy of the distribution.
         """
-        (kappa, mu) = self._parse_args(*args, **kwargs)[0]
+        (_, kappa) = self._parse_args(*args, **kwargs)[0]
         return -np.log(i0(kappa)) + (kappa * i1(kappa)) / i0(kappa)
 
     def _nnlf(self, theta, data):
         """
         Custom negative log-likelihood function for the Von Mises distribution.
         """
-        kappa, mu = theta
+        mu, kappa = theta
 
-        if not self._argcheck(kappa, mu):  # Validate parameter range
+        if not self._argcheck(mu, kappa):  # Validate parameter range
             return np.inf
 
         # Compute log-likelihood robustly
-        log_likelihood = self._logpdf(data, kappa, mu)
+        log_likelihood = self._logpdf(data, mu, kappa)
 
         # Negative log-likelihood
         return -np.sum(log_likelihood)
@@ -492,10 +480,14 @@ class vonmises_gen(rv_continuous):
         data : array_like
             The data to fit the distribution to. Assumes values are in radians.
         method : str, optional
-            The fitting method to use. Options are:
-            - "analytical": Use closed-form analytical solutions for `mu` and `kappa`.
-            - Any method supported by `scipy.optimize.minimize` (e.g., "L-BFGS-B", "Nelder-Mead").
+            The approach for fitting the distribution. Options are:
+            - "analytical": Compute `mu` and `kappa` using closed-form solutions.
+            - "numerical": Fit the parameters by minimizing the negative log-likelihood using an optimizer.
             Default is "analytical".
+
+            When `method="numerical"`, the optimization algorithm can be specified via `algorithm` in `kwargs`.
+            Supported algorithms include any method from `scipy.optimize.minimize`, such as "L-BFGS-B" (default) or "Nelder-Mead".
+
         *args : tuple, optional
             Additional positional arguments passed to the optimizer (if used).
         **kwargs : dict, optional
@@ -525,21 +517,32 @@ class vonmises_gen(rv_continuous):
         """
 
         # Validate the fitting method
-        valid_methods = ["analytical"] + OPTIMIZERS
+        valid_methods = ["analytical", "numerical"]
         if method not in valid_methods:
             raise ValueError(
                 f"Invalid method '{method}'. Available methods are {valid_methods}."
             )
 
-        # Define the initial guess for parameters
+        # Validate the data
+        if not np.all((0 <= data) & (data < 2 * np.pi)):
+            raise ValueError("Data must be in the range [0, 2π).")
+
+        # Analytical solution for the Von Mises distribution
         mu, r = circ_mean_and_r(alpha=data)
         kappa = circ_kappa(r=r, n=len(data))
 
         if method == "analytical":
-            return kappa, mu
-        else:
-            start_params = [kappa, mu]
-            bounds = [(0, None), (0, 2 * np.pi)]  # kappa > 0, 0 <= mu < 2*pi
+            if np.isclose(r, 0):
+                raise ValueError(
+                    "Resultant vector length (r) is zero, e.g. uniform data or low directional bias."
+                )
+            return mu, kappa
+        elif method == "numerical":
+            # Use analytical solution as initial guess
+            start_params = [mu, kappa]
+            bounds = [(0, 2 * np.pi), (0, None)]  # 0 <= mu < 2*pi, kappa > 0,
+
+            algo = kwargs.pop("algorithm", "L-BFGS-B")
 
             # Define the objective function (NLL) using `_nnlf`
             def nll(params):
@@ -547,15 +550,19 @@ class vonmises_gen(rv_continuous):
 
             # Use the optimizer to minimize NLL
             result = minimize(
-                nll, start_params, bounds=bounds, method=method, *args, **kwargs
+                nll, start_params, bounds=bounds, method=algo, *args, **kwargs
             )
 
             # Extract parameters from optimization result
             if not result.success:
-                raise RuntimeError("Optimization failed: " + result.message)
+                raise RuntimeError(f"Optimization failed: {result.message}")
 
-            kappa, mu = result.x
-            return kappa, mu
+            mu, kappa = result.x
+            return mu, kappa
+        else:
+            raise ValueError(
+                f"Invalid method '{method}'. Supported methods are 'analytical' and 'numerical'."
+            )
 
 
 vonmises = vonmises_gen(name="vonmises")
