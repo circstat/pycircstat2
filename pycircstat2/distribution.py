@@ -1,8 +1,27 @@
 import numpy as np
 from scipy.integrate import quad, quad_vec
-from scipy.optimize import root
+from scipy.optimize import minimize, root
 from scipy.special import gamma, i0, i1
 from scipy.stats import rv_continuous
+
+from .descriptive import circ_kappa, circ_mean_and_r
+
+OPTIMIZERS = [
+    "Nelder-Mead",
+    "Powell",
+    "CG",
+    "BFGS",
+    "Newton-CG",
+    "L-BFGS-B",
+    "TNC",
+    "COBYLA",
+    "SLSQP",
+    "trust-constr",
+    "dogleg",
+    "trust-ncg",
+    "trust-exact",
+    "trust-krylov",
+]
 
 ###########################
 ## Symmetric Distribtion ##
@@ -448,6 +467,95 @@ class vonmises_gen(rv_continuous):
         """
         (kappa, mu) = self._parse_args(*args, **kwargs)[0]
         return -np.log(i0(kappa)) + (kappa * i1(kappa)) / i0(kappa)
+
+    def _nnlf(self, theta, data):
+        """
+        Custom negative log-likelihood function for the Von Mises distribution.
+        """
+        kappa, mu = theta
+
+        if not self._argcheck(kappa, mu):  # Validate parameter range
+            return np.inf
+
+        # Compute log-likelihood robustly
+        log_likelihood = self._logpdf(data, kappa, mu)
+
+        # Negative log-likelihood
+        return -np.sum(log_likelihood)
+
+    def fit(self, data, method="analytical", *args, **kwargs):
+        """
+        Fit the Von Mises distribution to the given data.
+
+        Parameters
+        ----------
+        data : array_like
+            The data to fit the distribution to. Assumes values are in radians.
+        method : str, optional
+            The fitting method to use. Options are:
+            - "analytical": Use closed-form analytical solutions for `mu` and `kappa`.
+            - Any method supported by `scipy.optimize.minimize` (e.g., "L-BFGS-B", "Nelder-Mead").
+            Default is "analytical".
+        *args : tuple, optional
+            Additional positional arguments passed to the optimizer (if used).
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the optimizer (if used).
+
+        Returns
+        -------
+        kappa : float
+            The estimated concentration parameter of the Von Mises distribution.
+        mu : float
+            The estimated mean direction of the Von Mises distribution.
+
+        Notes
+        -----
+        - The "analytical" method directly computes the parameters using the circular mean
+        and resultant vector length (`r`) for `mu` and `kappa`, respectively.
+        - For numerical methods, the negative log-likelihood (NLL) is minimized using `_nnlf` as the objective function.
+
+
+        Examples
+        --------
+        # Analytical fitting
+        kappa, mu = vonmises.fit(data, method="analytical")
+
+        # Numerical fitting using L-BFGS-B
+        kappa, mu = vonmises.fit(data, method="L-BFGS-B")
+        """
+
+        # Validate the fitting method
+        valid_methods = ["analytical"] + OPTIMIZERS
+        if method not in valid_methods:
+            raise ValueError(
+                f"Invalid method '{method}'. Available methods are {valid_methods}."
+            )
+
+        # Define the initial guess for parameters
+        mu, r = circ_mean_and_r(alpha=data)
+        kappa = circ_kappa(r=r, n=len(data))
+
+        if method == "analytical":
+            return kappa, mu
+        else:
+            start_params = [kappa, mu]
+            bounds = [(0, None), (0, 2 * np.pi)]  # kappa > 0, 0 <= mu < 2*pi
+
+            # Define the objective function (NLL) using `_nnlf`
+            def nll(params):
+                return self._nnlf(params, data)
+
+            # Use the optimizer to minimize NLL
+            result = minimize(
+                nll, start_params, bounds=bounds, method=method, *args, **kwargs
+            )
+
+            # Extract parameters from optimization result
+            if not result.success:
+                raise RuntimeError("Optimization failed: " + result.message)
+
+            kappa, mu = result.x
+            return kappa, mu
 
 
 vonmises = vonmises_gen(name="vonmises")
