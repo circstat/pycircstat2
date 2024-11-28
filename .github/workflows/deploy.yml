@@ -19,9 +19,13 @@ jobs:
 
             - name: Install dependencies
               run: |
+                  pip install -r requirements.txt
                   pip install mkdocs-material mkdocs-material-extensions mkdocstrings[python]
+                  pip install -e .
 
             - name: Build and Deploy
               working-directory: docs # Set the working directory to 'docs'
+              env:
+                  PYTHONPATH: ${{ github.workspace }} # Set PYTHONPATH to the root directory
               run: |
                   mkdocs gh-deploy --force
