@@ -1,23 +1,27 @@
-site_name: Circular Statistics Documentation
+site_name: pycircstat2
 theme:
     name: material
-    features:
-        - navigation.instant
-        - content.code.copy
-        - content.tabs.link
-        - content.mathjax
+
 plugins:
-    - search # Enable search functionality
-    - mkdocstrings: # Automatically generate API documentation from docstrings
+    - search
+    - mkdocstrings:
           handlers:
               python:
                   options:
-                      show_source: true # Show source code links
-                      docstring_style: "numpy" # Parse NumPy-style docstrings
+                      show_source: true
+                      docstring_style: "numpy"
 
 nav:
     - Home: index.md
     - API Reference: api_reference.md
 
+markdown_extensions:
+    - pymdownx.arithmatex:
+          generic: true
+
 extra_javascript:
+    - javascripts/mathjax.js
     - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+watch:
+    - ../pycircstat2

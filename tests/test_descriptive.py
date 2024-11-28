@@ -2,9 +2,9 @@ import numpy as np
 
 from pycircstat2 import Circular, load_data
 from pycircstat2.descriptive import (
+    angular_std,
     circ_dispersion,
     circ_kurtosis,
-    circ_mean,
     circ_mean_and_r,
     circ_mean_and_r_of_means,
     circ_mean_ci,
@@ -46,12 +46,14 @@ def test_circ_std():
     # Part of Ch26 Example 4, using data from Ch26 Example 2
 
     # compute directly from r
-    s, s0, rc = circ_std(r=circ_zar_ex4_ch26.r, bin_size=circ_zar_ex4_ch26.bin_size)
+    s = angular_std(r=circ_zar_ex4_ch26.r, bin_size=circ_zar_ex4_ch26.bin_size)
+    s0 = circ_std(r=circ_zar_ex4_ch26.r, bin_size=circ_zar_ex4_ch26.bin_size)
     np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1)
     np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1)
 
     # compute from alpha
-    s, s0, rc = circ_std(alpha=circ_zar_ex4_ch26.alpha)
+    s = angular_std(alpha=circ_zar_ex4_ch26.alpha)
+    s0 = circ_std(alpha=circ_zar_ex4_ch26.alpha)
     np.testing.assert_approx_equal(np.rad2deg(s), 34.0, significant=1)
     np.testing.assert_approx_equal(np.rad2deg(s0), 36.0, significant=1)
 
@@ -61,14 +63,20 @@ def test_circ_std():
     )
 
     # compute directly from r
-    s, s0, rc = circ_std(r=circ_zar_ex5_ch26.r, bin_size=circ_zar_ex5_ch26.bin_size)
+    s = angular_std(r=circ_zar_ex5_ch26.r, bin_size=circ_zar_ex5_ch26.bin_size)
+    s0 = circ_std(r=circ_zar_ex5_ch26.r, bin_size=circ_zar_ex5_ch26.bin_size)
     np.testing.assert_approx_equal(np.rad2deg(s), 54.0, significant=1)
-    np.testing.assert_approx_equal(np.rad2deg(s0), 63.0, significant=1)
+    np.testing.assert_approx_equal(
+        np.rad2deg(s0), 62.0, significant=1
+    )  # 63 in the book, but we should correct the bias in r for grouped data.
 
     # compute from alpha and w
-    s, s0, rc = circ_std(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
+    s = angular_std(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
+    s0 = circ_std(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
     np.testing.assert_approx_equal(np.rad2deg(s), 54.0, significant=1)
-    np.testing.assert_approx_equal(np.rad2deg(s0), 63.0, significant=1)
+    np.testing.assert_approx_equal(
+        np.rad2deg(s0), 62.0, significant=1
+    )  # 63 in the book, but we should correct the bias in r for grouped data.
 
 
 def test_circ_median():
@@ -77,7 +85,6 @@ def test_circ_median():
     circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].values)
     median = circ_median(
         alpha=circ_zar_ex2_ch26.alpha,
-        grouped=False,
         method="deviation",
         return_average=True,
     )
@@ -88,7 +95,6 @@ def test_circ_median():
     circ_zar_ex2_ch26_odd = Circular(data=data_zar_ex2_ch26["θ"].values[1:])
     median = circ_median(
         alpha=circ_zar_ex2_ch26_odd.alpha,
-        grouped=False,
         method="deviation",
         return_average=True,
     )
@@ -101,7 +107,6 @@ def test_circ_median():
     median = circ_median(
         alpha=circ_mallard.alpha_ub,
         w=circ_mallard.w,
-        grouped=True,
         return_average=True,
     )
 

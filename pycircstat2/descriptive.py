@@ -10,10 +10,17 @@ def compute_C_and_S(
     alpha: np.ndarray,
     w: np.ndarray,
     p: int = 1,
-    mean: float = 0.0,
+    mean: Union[float, np.ndarray] = 0.0,
 ) -> Tuple[float, float]:
-    """
+    r"""
     Compute the intermediate values Cbar and Sbar.
+
+    $$
+    \displaylines{
+    \bar{C}_{p} = \frac{\sum_{i=1}^{n} w_{i} \cos(p(\alpha_{i} - \mu))}{n} \\
+    \bar{S}_{p} = \frac{\sum_{i=1}^{n} w_{i} \sin(p(\alpha_{i} - \mu))}{n}
+    }
+    $$
 
     Parameters
     ----------
@@ -24,7 +31,7 @@ def compute_C_and_S(
     p: int, optional
         Order of the moment (default is 1, for the first moment).
     mean: float, optional
-        Mean angle to center the computation (default is 0.0).
+        Mean angle (μ) to center the computation (default is 0.0).
 
     Returns
     -------
@@ -46,8 +53,12 @@ def circ_r(
     Cbar: Union[float, None] = None,
     Sbar: Union[float, None] = None,
 ) -> float:
-    """
+    r"""
     Circular mean resultant vector length (r).
+
+    $$
+    r = \sqrt{\bar{C}^2 + \bar{S}^2}
+    $$
 
     Parameters
     ----------
@@ -62,10 +73,6 @@ def circ_r(
     -------
     r: float
         Resultant vector length
-    Cbar: float
-        Intermediate value
-    Sbar: float
-        Intermediate value
 
     References
     ----------
@@ -90,8 +97,21 @@ def circ_mean(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
 ) -> Union[np.ndarray, float]:
-    """
+    r"""
     Circular mean (m).
+
+    $$\cos\bar\theta = C/R,\space \sin\bar\theta = S/R$$
+    
+    or 
+
+    $$
+    \bar\theta =
+    \begin{cases} 
+    \tan^{-1}\left(S/C\right), & \text{if } S > 0, C > 0 \\ 
+    \tan^{-1}\left(S/C\right) + \pi, & \text{if } C < 0 \\ 
+    \tan^{-1}\left(S/C\right) + 2\pi, & \text{S < 0, C > 0}
+    \end{cases}
+    $$
 
     Parameters
     ----------
@@ -120,10 +140,7 @@ def circ_mean(
     if np.isclose(r, 0):
         m = np.nan
     else:
-        if Cbar != 0 and Sbar != 0:
-            m = np.arctan2(Sbar, Cbar)
-        else:
-            m = np.arccos(Cbar / r)
+        m = np.arctan2(Sbar, Cbar)
 
     return angrange(m)
 
@@ -131,7 +148,7 @@ def circ_mean(
 def circ_mean_and_r(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
-) -> Tuple[float, float]:
+) -> Tuple[Union[float, np.ndarray], float]:
     """
     Circular mean (m) and resultant vector length (r).
 
@@ -163,24 +180,26 @@ def circ_mean_and_r(
     # angular mean
     if np.isclose(r, 0):
         m = np.nan
+        return m, r
     else:
-        if Cbar != 0 and Sbar != 0:
-            m = np.arctan2(Sbar, Cbar)
-        else:
-            m = np.arccos(Cbar / r)
+        m = np.arctan2(Sbar, Cbar)
 
-    return angrange(m), r
+        return angrange(m), r
 
 
 def circ_moment(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     p: int = 1,
-    mean: Union[float, None] = None,
+    mean: Union[float, np.ndarray, None] = None,
     centered: bool = False,
 ) -> complex:
-    """
+    r"""
     Compute the p-th circular moment.
+
+    $$
+    m^{\prime}_{p} = \bar{C}_{p} + i\bar{S}_{p}
+    $$
 
     Parameters
     ----------
@@ -249,9 +268,9 @@ def circ_dispersion(
     r"""
     Sample Circular Dispersion, defined by Equation 2.28 (Fisher, 1993):
 
-       $$
-       \hat\delta = (1 - \hat\rho_{2})/(2 \hat\rho_{1}^{2})
-       $$
+    $$
+    \hat\delta = (1 - \hat\rho_{2})/(2 \hat\rho_{1}^{2})
+    $$
 
     Parameters
     ----------
@@ -287,9 +306,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     r"""
     Circular skewness, as defined by Equation 2.29 (Fisher, 1993):
 
-    $$
-    \hat s = [\hat\rho_2 \sin(\hat\mu_2 - 2 \hat\mu_1)] / (1 - \hat\rho_1)^{\frac{3}{2}}
-    $$
+    $$\hat s = [\hat\rho_2 \sin(\hat\mu_2 - 2 \hat\mu_1)] / (1 - \hat\rho_1)^{\frac{3}{2}}$$
 
     But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by NOT centering the second moment.
 
@@ -325,9 +342,9 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     r"""
     Circular kurtosis, as defined by Equation 2.30 (Fisher, 1993):
 
-    $$\hat k = [\hat\rho_2 \cos(\hat\mu_2 - 2 \hat\mu_1) - \hat\rho_1^4] / (1 - \hat\rho_1)^{2$$
+    $$\hat k = [\hat\rho_2 \cos(\hat\mu_2 - 2 \hat\mu_1) - \hat\rho_1^4] / (1 - \hat\rho_1)^{2}$$
 
-    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by NOT centering the second moment.
+    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by **NOT** centering the second moment.
 
     Parameters
     ----------
@@ -357,14 +374,16 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     return kurtosis
 
 
-def circ_std(
+def angular_var(
     alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
     r: Union[float, None] = None,
     bin_size: Union[float, None] = None,
-) -> tuple:
-    """
-    Mean angular deviation (s) & Circular standard deviation (s0).
+) -> float:
+    r"""
+    Angular variance
+
+    $$ V = 1 - r $$
 
     Parameters
     ----------
@@ -375,19 +394,93 @@ def circ_std(
     r: float or None
         Resultant vector length
     bin_size: float
-        Interval size of grouped data.
-        Needed for correcting biased r.
+        Interval size of grouped data. Needed for correcting biased r.
 
     Returns
     -------
-    s: float or NaN
-        Mean angular deviation.
-    s0: float
-        Circular standard deviation.
+    angular_variance: float
+        Angular variance, range from 0 to 2.
 
     References
     ----------
-    Implementation of Equation 26.15-16/20-21 (Zar, 2010)
+    - Batschlet (1965, 1981), from Section 26.5 of Zar (2010)
+    """
+
+    variance = circ_var(alpha=alpha, w=w, r=r, bin_size=bin_size)
+    angular_variance = 2 * variance
+    return angular_variance
+
+
+def angular_std(
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
+    r: Union[float, None] = None,
+    bin_size: Union[float, None] = None,
+) -> float:
+    r"""
+    Angular (standard) deviation
+
+    $$
+    s = \sqrt{2V} = \sqrt{2(1 - r)}
+    $$
+
+    Parameters
+    ----------
+    alpha: np.array (n, ) or None
+        Angles in radian.
+    w: np.array (n,) or None
+        Frequencies or weights
+    r: float or None
+        Resultant vector length
+    bin_size: float
+        Interval size of grouped data. Needed for correcting biased r.
+
+    Returns
+    -------
+    angular_std: float
+        Angular (standard) deviation, range from 0 to sqrt(2).
+
+    References
+    ----------
+    - Equation 26.20 of Zar (2010)
+    """
+
+    angular_variance = angular_var(alpha=alpha, w=w, r=r, bin_size=bin_size)
+    angular_std = np.sqrt(angular_variance)
+    return angular_std
+
+
+def circ_var(
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
+    r: Union[float, None] = None,
+    bin_size: Union[float, None] = None,
+) -> float:
+    r"""
+    Circular variance
+
+    $$ V = 1 - r $$
+
+    Parameters
+    ----------
+    alpha: np.array (n, ) or None
+        Angles in radian.
+    w: np.array (n,) or None
+        Frequencies or weights
+    r: float or None
+        Resultant vector length
+    bin_size: float
+        Interval size of grouped data. Needed for correcting biased r.
+
+    Returns
+    -------
+    variance: float
+        Circular variance, range from 0 to 1.
+
+    References
+    ----------
+    - Equation 2.11 of Fisher (1993)
+    - Equation 26.17 of Zar (2010)
     """
 
     if w is None:
@@ -411,27 +504,70 @@ def circ_std(
     ## corrected r if data are grouped.
     if bin_size == 0:
         rc = r
+
     else:
         c = bin_size / 2 / np.sin(bin_size / 2)  # eq(26.16)
         rc = r * c  # eq(26.15)
 
-    # mean angular deviation
-    s = np.sqrt(2 * (1 - rc))  # eq(26.20)
-    # circular standard deviation
-    s0 = np.sqrt(-2 * np.log(rc))  # eq(26.21)
+    variance = 1 - rc
 
-    return (s, s0, rc)
+    return variance
+
+
+def circ_std(
+    alpha: Union[np.ndarray, None] = None,
+    w: Union[np.ndarray, None] = None,
+    r: Union[float, None] = None,
+    bin_size: Union[float, None] = None,
+) -> tuple:
+    r"""
+    Circular standard deviation (s0).
+
+    Parameters
+    ----------
+    alpha: np.array (n, ) or None
+        Angles in radian.
+    w: np.array (n,) or None
+        Frequencies or weights
+    r: float or None
+        Resultant vector length
+    bin_size: float
+        Interval size of grouped data.
+        Needed for correcting biased r.
+
+    Returns
+    -------
+    s: float
+        Circular standard deviation.
+
+    References
+    ----------
+    Implementation of Equation 26.15-16/20-21 (Zar, 2010)
+    """
+    var = circ_var(alpha=alpha, w=w, r=r, bin_size=bin_size)
+
+    # circular standard deviation
+    s = np.sqrt(-2 * np.log(1 - var))  # eq(26.21)
+
+    return s
 
 
 def circ_median(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
-    grouped: bool = False,
     method: str = "deviation",
     return_average: bool = True,
-) -> float:
-    """
+    average_method: str = "all",
+) -> Union[float, np.ndarray]:
+    r"""
     Circular median.
+
+    Two ways to compute the circular median for ungrouped data (Fisher, 1993):
+
+    - `deviation`: find the angle that has the minimal mean deviation.
+    - `count`: find the angle that has the equally devide the number of points on the right and left of it.
+
+    For grouped data, we use the method described in Mardia (1972).
 
     Parameters
     ----------
@@ -439,26 +575,33 @@ def circ_median(
         Angles in radian.
     w: np.array (n,) or None
         Frequencies or weights
-    grouped: bool
-        Grouped data or not.
     method: str
-        For ungrouped data, there are two ways
-        to compute the medians:
+        - For ungrouped data, there are two ways
+        - To compute the medians:
             - deviation
             - count
+        - Set to `none` to return np.nan.
     return_average: bool
         Return the average of the median
+    average_method: str
+        - all: circular mean of all medians
+        - unique: circular mean of unique medians
 
     Returns
     -------
     median: float or NaN
+
+    References
+    ----------
+    - For ungrouped data: Section 2.3.2 of Fisher (1993)
+    - For grouped data: Mardia (1972)
     """
 
     if w is None:
         w = np.ones_like(alpha)
 
     # grouped data
-    if grouped:
+    if not np.all(w == 1):
         median = _circ_median_grouped(alpha, w)
     # ungrouped data
     else:
@@ -476,12 +619,16 @@ def circ_median(
             )
 
     if return_average:
-        # There are two ways to take the average of the median
-        # 1. circular mean of all medians / `circular` use this way
-        median = circ_mean(alpha=median)
-        # 2. circular mean of unique medians / Fisher 1993 use this way
-        # median = circ_mean(alpha=np.unique(median))
-        # we use the first way here.
+        if average_method == "all":
+            # Circular mean of all medians
+            median = circ_mean(alpha=median)
+        elif average_method == "unique":
+            # Circular mean of unique medians
+            median = circ_mean(alpha=np.unique(median))
+        else:
+            raise ValueError(
+                f"Average method `{average_method}` is not supported.\nTry `all` or `unique`."
+            )
 
     return angrange(median)
 
@@ -489,7 +636,7 @@ def circ_median(
 def _circ_median_grouped(
     alpha: np.array,
     w: Union[np.array, None] = None,
-) -> float:
+) -> Union[float, np.array]:
     n = np.sum(w)  # sample size
     n_bins = len(alpha)  # number of intervals
     bin_size = np.diff(alpha).min()
@@ -570,8 +717,7 @@ def _circ_median_count(alpha: np.ndarray) -> float:
     # if number of potential median is 1, return it as median
     elif len(idx_candidates) == 1:
         median = alpha[idx_candidates][0]
-    # if there are more than one potential median, do we need to
-    # distinguish odd or even? or just calculate the circular mean?
+    # if there are more than one potential median, return them all
     else:
         median = alpha[idx_candidates]
 
@@ -582,14 +728,12 @@ def _circ_median_mean_deviation(alpha: np.array) -> float:
     """
     Note
     ----
-    Implementation of Section 2.3.2
+    Implementation of Section 2.3.2 of Fisher (1993)
     """
 
     # get pairwise circular mean deviation
     angdist = circ_mean_deviation(alpha, alpha)
-    # data point(s) with minimal circular mean deviation is/are
-    # potential median(s); pitfall: angdist sound be rounded!
-    # (fixed in circ_mean_deviation())
+    # data point(s) with minimal circular mean deviation is/are potential median(s);
     idx_candidates = np.where(angdist == angdist.min())[0]
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Retrun Nan.
@@ -598,8 +742,7 @@ def _circ_median_mean_deviation(alpha: np.array) -> float:
     # if number of potential median is 1, return it as median
     elif len(idx_candidates) == 1:
         median = alpha[idx_candidates][0]
-    # if there are more than one potential median, do we need to
-    # distinguish odd or even? or just calculate the circular mean?
+    # if there are more than one potential median, return them all
     else:
         median = alpha[idx_candidates]
 
@@ -611,8 +754,12 @@ def circ_mean_deviation(
     beta: Union[np.ndarray, float, int, list],
     chunk_size=1000,
 ):
-    """
+    r"""
     Optimized circular mean deviation with chunking.
+
+    $$
+    \delta = \pi - \frac{1}{n} \sum^{n}_{1}\left| \pi - \left| \alpha - \beta \right| \right|
+    $$
 
     Parameters
     ----------
@@ -649,8 +796,12 @@ def circ_mean_deviation(
 #     alpha: Union[np.ndarray, float, int, list],
 #     beta: Union[np.ndarray, float, int, list],
 # ) -> np.ndarray:
-#     """
+#     r"""
 #     Circular mean deviation.
+
+#     $$
+#     \delta = \pi - \left| \pi - \left| \alpha - \beta \right| \right| / n
+#     $$
 
 #     It is the mean angular distance from one data point to all others.
 #     The circular median of a set of data should be the point with minimal
@@ -689,8 +840,77 @@ def circ_mean_ci(
     ci: float = 0.95,
     method: str = "approximate",
     B: int = 2000,  # number of samples for bootstrap
-) -> tuple:
-    # TODO
+) -> tuple[float, float]:
+    r"""
+    Confidence interval of circular mean.
+
+    There are three methods to compute the confidence interval of circular mean:
+
+    - `approximate`: for n > 8
+    - `bootstrap`: for 8 < n < 25
+    - `dispersion`: for n >= 25
+
+    ### Approximate Method
+
+    For n as small as 8, and r $\le$ 0.9, r $>$ $\sqrt{\chi^{2}_{\alpha, 1}/2n}$, the confidence interval can be approximated by:
+
+    $$
+    \delta = \arccos\left(\sqrt{\frac{2n(2R^{2} - n\chi^{2}_{\alpha, 1})}{4n - \chi^{2}_{\alpha, 1}}} /R \right)
+    $$
+
+    For r $ge$ 0.9,
+
+    $$
+    \delta = \arccos \left(\sqrt{n^2 - (n^2 - R^2)e^{\chi^2_{\alpha, 1}/n} } /R \right)
+    $$
+
+    ### Bootstrap Method
+
+    For 8 $<$ n $<$ 25, the confidence interval can be computed by bootstrapping the data.
+
+    ### Dispersion Method
+
+    For n $\ge$ 25, the confidence interval can be computed by the circular dispersion:
+
+    $$ \hat\sigma = \hat\delta / n$$
+
+    where $\hat\delta$ is the sample circular dispersion (see `circ_dispersion`). The confidence interval is then:
+
+    $$(\hat\mu - \sin^-1(z_{\frac{1}{2}\alpha}\hat\sigma),\space \hat\mu + \sin^-1(z_{\frac{1}{2}\alpha} \hat\sigma))$$
+
+    Parameters
+    ----------
+    alpha: np.array (n, )
+        Angles in radian.
+    w: np.array (n,) or None
+        Frequencies or weights
+    mean: float or None
+        Precomputed circular mean.
+    r: float or None
+        Precomputed resultant vector length.
+    n: int or None
+        Sample size.
+    ci: float
+        Confidence interval (default is 0.95).
+    method: str
+        - approximate: for n > 8
+        - bootstrap: for n < 25
+        - dispersion: for n >= 25
+    B: int
+        Number of samples for bootstrap.
+
+    Returns
+    -------
+    lower_bound: float
+        Lower bound of the confidence interval.
+    upper_bound: float
+        Upper bound of the confidence
+
+    References
+    ----------
+    - Section 26.7, Zar (2010)
+    - Section 4.4.4a/b, Fisher (1993)
+    """
 
     #  n > 8, according to Ch 26.7 (Zar, 2010)
     if method == "approximate":
@@ -719,8 +939,28 @@ def _circ_mean_ci_dispersion(
     w: Union[np.ndarray, None] = None,
     mean: Union[float, None] = None,
     ci: float = 0.95,
-) -> tuple:
-    """Confidence intervals based on circular dispersion.
+) -> tuple[float, float]:
+    r"""Confidence intervals based on circular dispersion.
+
+    Parameters
+    ----------
+    alpha: np.array (n, )
+        Angles in radian.
+    w: np.array (n,) or None
+        Frequencies or weights
+    mean: float or None
+        Precomputed circular mean.
+    ci: float
+        Confidence interval (default is 0.95).
+
+
+    Returns
+    -------
+    lower_bound: float
+        Lower bound of the confidence interval.
+    upper_bound: float
+        Upper bound of the confidence interval.
+
 
     Note
     ----
@@ -739,7 +979,7 @@ def _circ_mean_ci_dispersion(
         )
 
     # TODO: sometime return nan because x in arcsin(x) is larger than 1.
-    # Should we centered the data here? No.
+    # Should we centered the data here? <- No.
     d = np.arcsin(
         np.sqrt(circ_dispersion(alpha=alpha, w=w) / n) * norm.ppf(1 - 0.5 * (1 - ci))
     )
@@ -760,8 +1000,36 @@ def _circ_mean_ci_approximate(
     n: Union[int, None] = None,
     ci: float = 0.95,
 ) -> tuple:
-    """
+    r"""
     Confidence Interval of circular mean.
+
+    $$
+    \displaylines{
+    \delta = \arccos\left(\sqrt{\frac{2n(2R^{2} - n\chi^{2}_{alpha, 1})}{4n - \chi^{2}_{\alpha, 1}}}\right)/R \cr
+    }
+    $$
+
+    Parameters
+    ----------
+    alpha: np.array (n, )
+        Angles in radian.
+    w: np.array (n,) or None
+        Frequencies or weights
+    mean: float or None
+        Precomputed circular mean.
+    r: float or None
+        Precomputed resultant vector length.
+    n: int or None
+        Sample size.
+    ci: float
+        Confidence interval (default is 0.95).
+
+    Returns
+    -------
+    lower_bound: float
+        Lower bound of the confidence interval.
+    upper_bound: float
+        Upper bound of the confidence interval.
 
     Note
     ----
@@ -928,12 +1196,8 @@ def _circ_mean_resample(alpha, z0, v0):
     Cbar = np.power(Cbar**2 + Sbar**2, -0.5) * Cbar
     Sbar = np.power(Cbar**2 + Sbar**2, -0.5) * Sbar
 
-    r = np.sqrt(Cbar**2 + Sbar**2)
+    m = np.arctan2(Sbar, Cbar)
 
-    if Cbar != 0 and Sbar != 0:
-        m = np.arctan2(Sbar, Cbar)
-    else:
-        m = np.arccos(Cbar / r)
     return angrange(m)
 
 
@@ -942,10 +1206,17 @@ def circ_median_ci(
     alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
     method: str = "deviation",
-    grouped: bool = False,
     ci: float = 0.95,
 ) -> tuple:
-    """Confidence interval for circular median
+    r"""Confidence interval for circular median
+
+    For n > 15, the confidence interval can be computed by:
+
+    $$
+    m = 1 + \text{integer part of} \frac{1}{2} n^{1/2} z_{\frac{1}{2}\alpha}
+    $$
+
+    For n $\le$ 15, the confidence interval can be selected from the table in Fisher (1993).
 
     Parameters
     ----------
@@ -972,7 +1243,7 @@ def circ_median_ci(
         ), "If `median` is None, then `alpha` (and `w`) is needed."
         if w is None:
             w = np.ones_like(alpha)
-        median = circ_median(alpha=alpha, w=w, grouped=grouped, method=method)
+        median = circ_median(alpha=alpha, w=w, method=method)
 
     if alpha is None:
         raise ValueError(
@@ -1054,18 +1325,39 @@ def circ_median_ci(
 
 
 def circ_kappa(r: float, n: Union[int, None] = None) -> float:
-    """Approximate kappa
+    r"""Estimate kappa by approximation.
+
+    $$
+    \hat\kappa_{ML} =
+    \begin{cases} 
+     2r + r^3 + 5r^5/6, , & \text{if } r < 0.53  \\ 
+     -0.4 + 1.39 r + 0.43 / (1 - r) , & \text{if } 0.53 \le r < 0.85\\ 
+        1 / (r^3 - 4r^2 + 3r), & \text{if } r \ge 0.85
+    \end{cases}
+    $$
+
+    For $n \le 15$:
+
+    $$
+    \hat\kappa = 
+    \begin{cases} 
+        \max\left(\hat\kappa - \frac{2}{n\hat\kappa}, 0\right), & \text{if } \hat\kappa < 2 \\
+        \frac{(n - 1)^3 \hat\kappa}{n^3 + n}, & \text{if } \hat\kappa \ge 2
+    \end{cases}
+    $$
+
+
     Parameters
     ----------
     r: float
-        resultant vector length
+        Resultant vector length
     n: int or None
-        sample size
+        Sample size. If n is not None, the adjustment for small sample size will be applied.
 
     Returns
     -------
     kappa: float
-        concentration parameter
+        Concentration parameter
 
     Reference
     ---------

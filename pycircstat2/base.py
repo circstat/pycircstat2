@@ -5,6 +5,7 @@ import pandas as pd
 
 from .clustering import MoVM
 from .descriptive import (
+    angular_std,
     circ_kappa,
     circ_kurtosis,
     circ_mean_and_r,
@@ -106,9 +107,10 @@ class Circular:
             self.n_intervals = n_intervals
 
         self.n_clusters_max = n_clusters_max
-        self.kwargs_median = kwargs_median = kwargs.pop(
-            "kwargs_median", {"method": "deviation"}
-        )
+        self.kwargs_median = kwargs_median = {
+            **{"method": "deviation", "return_average": True, "average_method": "all"},
+            **kwargs.pop("kwargs_median", {}),
+        }
         self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop("kwargs_mean_ci", None)
 
         # data
@@ -194,7 +196,8 @@ class Circular:
             self.mean_lb, self.mean_ub = mean_lb, mean_ub = np.nan, np.nan
 
         # angular deviation, circular standard deviation, adjusted resultant vector length (if needed)
-        self.s, self.s0, self.rc = s, s0, rc = circ_std(r=r, bin_size=bin_size)
+        self.s = s = angular_std(r=r, bin_size=bin_size)
+        self.s0 = s0 = circ_std(r=r, bin_size=bin_size)
 
         # angular median
         if n > 10000 and kwargs_median["method"] is not None:
@@ -202,7 +205,11 @@ class Circular:
                 "Sample size is large (n>10000), it will take a while to find the median.\nOr set `kwargs_median={'method': None}` to skip."
             )
         self.median = median = circ_median(
-            alpha=alpha, w=w, grouped=grouped, method=kwargs_median["method"]
+            alpha=alpha,
+            w=w,
+            method=kwargs_median["method"],
+            return_average=kwargs_median["return_average"],
+            average_method=kwargs_median["average_method"],
         )
 
         # confidence inerval for angular median (only for ungrouped data)

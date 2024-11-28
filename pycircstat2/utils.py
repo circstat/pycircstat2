@@ -10,8 +10,21 @@ def data2rad(
     data: Union[np.ndarray, float, int],
     k: Union[float, int] = 360,  # number of intervals in the full cycle
 ) -> Union[np.ndarray, float]:  # eq(26.1), zar 2010
-    """Convert data measured on a circular scale to corresponding angular
-    directions.
+    r"""Convert data measured on a circular scale to corresponding angular directions.
+
+    $$ \alpha = \frac{2\pi \times \mathrm{data}}{k} $$
+
+    Parameters
+    ----------
+    data : np.ndarray or float
+        Data measured on a circular scale.
+    k : float or int
+        Number of intervals in the full cycle. Default is 360.
+
+    Returns
+    -------
+    angle: np.ndarray or float
+        Angular directions in radian.
     """
     return 2 * np.pi * data / k
 
