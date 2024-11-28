@@ -779,26 +779,17 @@ class jonespewsey_gen(rv_continuous):
     Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
 
-    def __init__(
-        self, name="jonespewsey", mu=None, kappa=None, psi=None, *args, **kwargs
-    ):
-        super().__init__(name=name, *args, **kwargs)
-        if kappa is not None and psi is not None and mu is not None:
-            self._c = _c_jonespewsey(mu, kappa, psi)
-        else:
-            self._c = None
-
-    def _argcheck(self, mu, kappa, psi):
-        # we can save a lot of computation if c is automatically computed before others
-        # but tbh this is a hack, and I don't have a better way to do it atm.
+    def _validate_params(self, mu, kappa, psi):
         return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
 
-    def _pdf(self, x, mu, kappa, psi):
-
-        if self._c is None:
-            c = _c_jonespewsey(mu, kappa, psi)
+    def _argcheck(self, mu, kappa, psi):
+        if self._validate_params(mu, kappa, psi):
+            self._c = _c_jonespewsey(mu, kappa, psi)
+            return True
         else:
-            c = self._c
+            return False
+
+    def _pdf(self, x, mu, kappa, psi):
 
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi)
@@ -806,21 +797,17 @@ class jonespewsey_gen(rv_continuous):
             if np.isclose(np.abs(psi), 0).all():
                 return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
             else:
-                return _kernel_jonespewsey(x, mu, kappa, psi) / c
+                return _kernel_jonespewsey(x, mu, kappa, psi) / self._c
 
     def _cdf(self, x, mu, kappa, psi):
         def vonmises_pdf(x, mu, kappa, psi, c):
             return c * np.exp(kappa * np.cos(x - mu))
 
         if np.isclose(np.abs(psi), 0).all():
-            if self._c is None:
-                c = _c_jonespewsey(mu, kappa, psi)
-            else:
-                c = self._c
 
             @np.vectorize
             def _cdf_single(x, mu, kappa, psi, c):
-                return quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, c))
+                return quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, self._c))
 
             return _cdf_single(x, mu, kappa, psi, c)
         else:
@@ -879,12 +866,18 @@ class vonmises_ext_gen(rv_continuous):
     Implementation based on Section 4.3.10 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, mu, kappa, nu):
-        self.c = _c_vmext(mu, kappa, nu)
+    def _validate_params(self, mu, kappa, nu):
         return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-1 <= nu <= 1)
 
+    def _argcheck(self, mu, kappa, nu):
+        if self._validate_params(mu, kappa, nu):
+            self._c = _c_vmext(mu, kappa, nu)
+            return True
+        else:
+            return False
+
     def _pdf(self, x, mu, kappa, nu):
-        return self.c * _kernel_vmext(x, mu, kappa, nu)
+        return self._c * _kernel_vmext(x, mu, kappa, nu)
 
     def _cdf(self, x, mu, kappa, nu):
         @np.vectorize
@@ -932,28 +925,7 @@ class jonespewsey_sineskewed_gen(rv_continuous):
     Implementation based on Section 4.3.11 of Pewsey et al. (2014)
     """
 
-    def __init__(
-        self,
-        name="jonespewsey",
-        xi=None,
-        kappa=None,
-        psi=None,
-        lmbd=None,
-        *args,
-        **kwargs,
-    ):
-        super().__init__(name=name, *args, **kwargs)
-        if (
-            kappa is not None
-            and psi is not None
-            and xi is not None
-            and lmbd is not None
-        ):
-            self._c = _c_jonespewsey(xi, kappa, psi)
-        else:
-            self._c = None
-
-    def _argcheck(self, xi, kappa, psi, lmbd):
+    def _validate_params(self, xi, kappa, psi, lmbd):
         return (
             (0 <= xi <= np.pi * 2)
             and (kappa >= 0)
@@ -961,12 +933,14 @@ class jonespewsey_sineskewed_gen(rv_continuous):
             and (-1 <= lmbd <= 1)
         )
 
-    def _pdf(self, x, xi, kappa, psi, lmbd):
-
-        if self._c is None:
-            c = _c_jonespewsey(xi, kappa, psi)
+    def _argcheck(self, xi, kappa, psi, lmbd):
+        if self._validate_params(xi, kappa, psi, lmbd):
+            self._c = _c_jonespewsey(xi, kappa, psi)
+            return True
         else:
-            c = self._c
+            return False
+
+    def _pdf(self, x, xi, kappa, psi, lmbd):
 
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi) * (1 + lmbd * np.sin(x - xi))
@@ -982,7 +956,7 @@ class jonespewsey_sineskewed_gen(rv_continuous):
                 return (
                     (1 + lmbd * np.sin(x - xi))
                     * _kernel_jonespewsey(x, xi, kappa, psi)
-                    / c
+                    / self._c
                 )
 
     def _cdf(self, x, xi, kappa, psi, lmbd):
@@ -1017,8 +991,7 @@ class jonespewsey_asymext_gen(rv_continuous):
     Implementation from 4.3.12 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, xi, kappa, psi, nu):
-        self.c = _c_jonespewsey_asymext(xi, kappa, psi, nu)
+    def _validate_params(self, xi, kappa, psi, nu):
         return (
             (0 <= xi <= np.pi * 2)
             and (kappa >= 0)
@@ -1026,8 +999,15 @@ class jonespewsey_asymext_gen(rv_continuous):
             and (0 <= nu < 1)
         )
 
+    def _argcheck(self, xi, kappa, psi, nu):
+        if self._validate_params(xi, kappa, psi, nu):
+            self._c = _c_jonespewsey_asymext(xi, kappa, psi, nu)
+            return True
+        else:
+            return False
+
     def _pdf(self, x, xi, kappa, psi, nu):
-        return _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu) / self.c
+        return _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu) / self._c
 
     def _cdf(self, x, xi, kappa, psi, nu):
         @np.vectorize
@@ -1051,7 +1031,6 @@ def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
 
 
 def _c_jonespewsey_asymext(xi, kappa, psi, nu):
-
     c = quad_vec(
         _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(xi, kappa, psi, nu)
     )[0]
@@ -1075,13 +1054,7 @@ class inverse_batschelet_gen(rv_continuous):
     Implementation from 4.3.13 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, xi, kappa, nu, lmbd):
-        self.c = _c_invbatschelet(kappa, lmbd)
-        if np.isclose(lmbd, -1).all():
-            self.con1, self.con2 = 0, 0
-        else:
-            self.con1 = (1 - lmbd) / (1 + lmbd)
-            self.con2 = (2 * lmbd) / (1 + lmbd)
+    def _validate_params(self, xi, kappa, nu, lmbd):
         return (
             (0 <= xi <= np.pi * 2)
             and (kappa >= 0)
@@ -1089,15 +1062,27 @@ class inverse_batschelet_gen(rv_continuous):
             and (-1 <= lmbd <= 1)
         )
 
+    def _argcheck(self, xi, kappa, nu, lmbd):
+        if self._validate_params(xi, kappa, nu, lmbd):
+            self._c = _c_invbatschelet(kappa, lmbd)
+            if np.isclose(lmbd, -1).all():
+                self.con1, self.con2 = 0, 0
+            else:
+                self.con1 = (1 - lmbd) / (1 + lmbd)
+                self.con2 = (2 * lmbd) / (1 + lmbd)
+            return True
+        else:
+            return False
+
     def _pdf(self, x, xi, kappa, nu, lmbd):
 
         arg1 = _tnu(x, nu, xi)
         arg2 = _slmbdinv(arg1, lmbd)
 
         if np.isclose(lmbd, -1).all():
-            return self.c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
+            return self._c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
-            return self.c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
+            return self._c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
         @np.vectorize
