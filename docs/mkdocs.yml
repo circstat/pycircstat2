@@ -1,7 +1,13 @@
 site_name: pycircstat2
 theme:
     name: material
-
+    features:
+        - navigation.instant
+        - content.code.copy
+        - content.tabs.link
+        - content.mathjax
+    toc:
+        title: true
 plugins:
     - search
     - mkdocstrings:
@@ -13,7 +19,11 @@ plugins:
 
 nav:
     - Home: index.md
-    - API Reference: api_reference.md
+    - API Reference:
+          - Descriptive Statistics: reference/descriptive.md
+          - Hypothesis Testing: reference/hypothesis.md
+          - Circular Distributions: reference/distributions.md
+          - Utilities: reference/utils.md
 
 markdown_extensions:
     - pymdownx.arithmatex:

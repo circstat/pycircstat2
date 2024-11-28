@@ -521,7 +521,9 @@ def circ_std(
     bin_size: Union[float, None] = None,
 ) -> tuple:
     r"""
-    Circular standard deviation (s0).
+    Circular standard deviation (s).
+
+    $$ s = \sqrt{-2 \ln(1 - V)} $$
 
     Parameters
     ----------
