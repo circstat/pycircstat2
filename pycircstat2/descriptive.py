@@ -1,7 +1,7 @@
 from typing import Tuple, Union
 
 import numpy as np
-from scipy.stats import chi2, norm, t
+from scipy.stats import chi2, norm
 
 from .utils import angrange, is_within_circular_range
 
@@ -1331,9 +1331,9 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
 
     $$
     \hat\kappa_{ML} =
-    \begin{cases} 
-     2r + r^3 + 5r^5/6, , & \text{if } r < 0.53  \\ 
-     -0.4 + 1.39 r + 0.43 / (1 - r) , & \text{if } 0.53 \le r < 0.85\\ 
+    \begin{cases}
+     2r + r^3 + 5r^5/6, , & \text{if } r < 0.53  \\
+     -0.4 + 1.39 r + 0.43 / (1 - r) , & \text{if } 0.53 \le r < 0.85\\
         1 / (r^3 - 4r^2 + 3r), & \text{if } r \ge 0.85
     \end{cases}
     $$
@@ -1341,8 +1341,8 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
     For $n \le 15$:
 
     $$
-    \hat\kappa = 
-    \begin{cases} 
+    \hat\kappa =
+    \begin{cases}
         \max\left(\hat\kappa - \frac{2}{n\hat\kappa}, 0\right), & \text{if } \hat\kappa < 2 \\
         \frac{(n - 1)^3 \hat\kappa}{n^3 + n}, & \text{if } \hat\kappa \ge 2
     \end{cases}

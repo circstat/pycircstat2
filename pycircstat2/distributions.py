@@ -804,10 +804,11 @@ class jonespewsey_gen(rv_continuous):
             return c * np.exp(kappa * np.cos(x - mu))
 
         if np.isclose(np.abs(psi), 0).all():
+            c = self._c
 
             @np.vectorize
             def _cdf_single(x, mu, kappa, psi, c):
-                return quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, self._c))
+                return quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, c))
 
             return _cdf_single(x, mu, kappa, psi, c)
         else:
