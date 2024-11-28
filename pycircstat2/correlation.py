@@ -99,7 +99,7 @@ def _aacorr_fl(
 
     References
     ----------
-    P6574-658, Section 27.15(a), Example 27.20 (Zar, 2010).
+    P657-658, Section 27.15(a), Example 27.20 (Zar, 2010).
     """
 
     if isinstance(a, Circular):
