@@ -49,8 +49,8 @@ def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
     b: float
         target angle.
 
-    Return
-    ------
+    Returns
+    -------
     e: np.ndarray
         angular distance
 

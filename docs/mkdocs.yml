@@ -1,0 +1,23 @@
+site_name: Circular Statistics Documentation
+theme:
+    name: material
+    features:
+        - navigation.instant
+        - content.code.copy
+        - content.tabs.link
+        - content.mathjax
+plugins:
+    - search # Enable search functionality
+    - mkdocstrings: # Automatically generate API documentation from docstrings
+          handlers:
+              python:
+                  options:
+                      show_source: true # Show source code links
+                      docstring_style: "numpy" # Parse NumPy-style docstrings
+
+nav:
+    - Home: index.md
+    - API Reference: api_reference.md
+
+extra_javascript:
+    - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js

@@ -1,6 +1,6 @@
 import numpy as np
 
-from pycircstat2.distribution import (
+from pycircstat2.distributions import (
     cardioid,
     cartwright,
     circularuniform,
@@ -92,15 +92,17 @@ def test_vonmises():
 
 def test_jonespewsey():
 
+    jp = jonespewsey(kappa=2, psi=-1.5, mu=np.pi / 2)
+
     np.testing.assert_approx_equal(
-        jonespewsey.cdf(np.pi / 2, kappa=2, psi=-1.5, mu=np.pi / 2).round(7),
+        jp.cdf(np.pi / 2).round(7),
         0.4401445,
         significant=7,
     )
     # take a long time to run jonespewsey.ppf()
     # might need to implement the method explicitly
     np.testing.assert_approx_equal(
-        jonespewsey.ppf(q=0.4401445, kappa=2, psi=-1.5, mu=np.pi / 2),
+        jp.ppf(q=0.4401445),
         np.pi / 2,
         significant=7,
     )
@@ -122,17 +124,15 @@ def test_vonmises_ext():
 
 def test_jonespewsey_sineskewed():
 
+    jps = jonespewsey_sineskewed(kappa=2, psi=1, lmbd=0.5, xi=np.pi / 2)
+
     np.testing.assert_approx_equal(
-        jonespewsey_sineskewed.cdf(
-            x=3 * np.pi / 2, kappa=2, psi=1, lmbd=0.5, xi=np.pi / 2
-        ).round(4),
+        jps.cdf(x=3 * np.pi / 2).round(4),
         0.9446,
         significant=4,
     )
     np.testing.assert_approx_equal(
-        jonespewsey_sineskewed.ppf(q=0.5, kappa=2, psi=1, lmbd=0.5, xi=np.pi / 2).round(
-            4
-        ),
+        jps.ppf(q=0.5).round(4),
         2.1879,
         significant=4,
     )

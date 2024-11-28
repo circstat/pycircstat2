@@ -6,6 +6,21 @@ from scipy.stats import rv_continuous
 
 from .descriptive import circ_kappa, circ_mean_and_r
 
+__all__ = [
+    "circularuniform",
+    "cardioid",
+    "cartwright",
+    "wrapnorm",
+    "wrapcauchy",
+    "vonmises",
+    "jonespewsey",
+    "vonmises_ext",
+    "jonespewsey_sineskewed",
+    "jonespewsey_asymext",
+    "inverse_batschelet",
+]
+
+
 OPTIMIZERS = [
     "Nelder-Mead",
     "Powell",
@@ -53,28 +68,26 @@ circularuniform = circularuniform_gen(name="circularuniform")
 class cardioid_gen(rv_continuous):
     """Cardioid Distribution
 
-    Method
-    ------
-    pdf(x, rho, mu)
+    Methods
+    -------
+    pdf(x, mu, rho)
         Probability density function.
 
-    cdf(x, rho, mu)
+    cdf(x, mu, rho)
         Cumulative distribution function.
 
     Notes
     -----
-    1. Implementation from 4.3.4 of Pewsey et al. (2014)
-    2. Don't use the `loc` argument from scipy.stats.rv_continous.
-       Use `mu` to shift the location.
+    Implementation based on Section 4.3.4 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, rho, mu):
-        return 0 <= rho <= 0.5 and 0 <= mu <= np.pi * 2
+    def _argcheck(self, mu, rho):
+        return 0 <= mu <= np.pi * 2 and 0 <= rho <= 0.5
 
-    def _pdf(self, x, rho, mu):
+    def _pdf(self, x, mu, rho):
         return (1 + 2 * rho * np.cos(x - mu)) / 2.0 / np.pi
 
-    def _cdf(self, x, rho, mu):
+    def _cdf(self, x, mu, rho):
         return (x + 2 * rho * (np.sin(x - mu) + np.sin(mu))) / (2 * np.pi)
 
 
@@ -84,35 +97,35 @@ cardioid = cardioid_gen(name="cardioid")
 class cartwright_gen(rv_continuous):
     """Cartwright's Power-of-Cosine Distribution
 
-    Method
-    ------
-    pdf(x, zeta, mu)
+    Methods
+    -------
+    pdf(x, mu, zeta)
         Probability density function.
 
-    cdf(x, zeta, mu)
+    cdf(x, mu, zeta)
         Cumulative distribution function.
 
     Note
     ----
-    Implementation from 4.3.5 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.5 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, zeta, mu):
-        return zeta > 0 and 0 <= mu <= 2 * np.pi
+    def _argcheck(self, mu, zeta):
+        return 0 <= mu <= 2 * np.pi and zeta > 0
 
-    def _pdf(self, x, zeta, mu):
+    def _pdf(self, x, mu, zeta):
         return (
             (2 ** (-1 + 1 / zeta) * (gamma(1 + 1 / zeta)) ** 2)
             * (1 + np.cos(x - mu)) ** (1 / zeta)
             / (np.pi * gamma(1 + 2 / zeta))
         )
 
-    def _cdf(self, x, zeta, mu):
+    def _cdf(self, x, mu, zeta):
         @np.vectorize
-        def _cdf_single(x, zeta, mu):
-            return quad(self._pdf, a=0, b=x, args=(zeta, mu))
+        def _cdf_single(x, mu, zeta):
+            return quad(self._pdf, a=0, b=x, args=(mu, zeta))
 
-        return _cdf_single(x, zeta, mu)
+        return _cdf_single(x, mu, zeta)
 
 
 cartwright = cartwright_gen(name="cartwright")
@@ -123,33 +136,39 @@ class wrapnorm_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, rho, mu)
+    pdf(x, mu, rho)
         Probability density function.
 
-    cdf(x, rho, mu)
+    cdf(x, mu, rho)
         Cumulative distribution function.
 
-    Note
-    ----
-    Implementation from 4.3.7 of Pewsey et al. (2014)
+    Examples
+    --------
+    ```
+    from pycircstat2.distributions import wrapnorm
+    ```
+
+    Notes
+    -----
+    Implementation based on Section 4.3.7 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, rho, mu):
-        return 0 < rho <= 1 and 0 <= mu <= np.pi * 2
+    def _argcheck(self, mu, rho):
+        return 0 <= mu <= np.pi * 2 and 0 < rho <= 1
 
-    def _pdf(self, x, rho, mu):
+    def _pdf(self, x, mu, rho):
         return (
             1
             + 2
             * np.sum([rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0)
         ) / (2 * np.pi)
 
-    def _cdf(self, x, rho, mu):
+    def _cdf(self, x, mu, rho):
         @np.vectorize
-        def _cdf_single(x, rho, mu):
-            return quad(self._pdf, a=0, b=x, args=(rho, mu))
+        def _cdf_single(x, mu, rho):
+            return quad(self._pdf, a=0, b=x, args=(mu, rho))
 
-        return _cdf_single(x, rho, mu)
+        return _cdf_single(x, mu, rho)
 
 
 wrapnorm = wrapnorm_gen(name="wrapped_normal")
@@ -376,9 +395,16 @@ class vonmises_gen(rv_continuous):
     fit(data, *args, **kwargs)
         Fit the distribution to the data and return the parameters (mu, kappa).
 
-    Note
-    ----
-    Implementation from 4.3.8 of Pewsey et al. (2014)
+    Examples
+    --------
+    ```
+    from pycircstat2.distributions import vonmises
+    ```
+
+    References
+    ----------
+    - Section 4.3.8 of Pewsey et al. (2014)
+
     """
 
     _freeze_doc = """
@@ -741,25 +767,38 @@ class jonespewsey_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, mu)
+    pdf(x, mu, kappa, psi)
         Probability density function.
 
-    cdf(x, kappa, psi, mu)
+    cdf(x, mu, kappa, psi)
         Cumulative distribution function.
 
 
     Note
     ----
-    Implementation from 4.3.9 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, kappa, psi, mu):
+    def __init__(
+        self, name="jonespewsey", mu=None, kappa=None, psi=None, *args, **kwargs
+    ):
+        super().__init__(name=name, *args, **kwargs)
+        if kappa is not None and psi is not None and mu is not None:
+            self._c = _c_jonespewsey(mu, kappa, psi)
+        else:
+            self._c = None
+
+    def _argcheck(self, mu, kappa, psi):
         # we can save a lot of computation if c is automatically computed before others
         # but tbh this is a hack, and I don't have a better way to do it atm.
-        self._c = _c_jonespewsey(kappa, psi, mu)
-        return (kappa >= 0) and (-np.inf <= psi <= np.inf) and (0 <= mu <= np.pi * 2)
+        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
 
-    def _pdf(self, x, kappa, psi, mu):
+    def _pdf(self, x, mu, kappa, psi):
+
+        if self._c is None:
+            c = _c_jonespewsey(mu, kappa, psi)
+        else:
+            c = self._c
 
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi)
@@ -767,27 +806,30 @@ class jonespewsey_gen(rv_continuous):
             if np.isclose(np.abs(psi), 0).all():
                 return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
             else:
-                return _kernel_jonespewsey(x, kappa, psi, mu) / self._c
+                return _kernel_jonespewsey(x, mu, kappa, psi) / c
 
-    def _cdf(self, x, kappa, psi, mu):
-        def vonmises_pdf(x, kappa, psi, mu, c):
+    def _cdf(self, x, mu, kappa, psi):
+        def vonmises_pdf(x, mu, kappa, psi, c):
             return c * np.exp(kappa * np.cos(x - mu))
 
         if np.isclose(np.abs(psi), 0).all():
-            c = self._c
+            if self._c is None:
+                c = _c_jonespewsey(mu, kappa, psi)
+            else:
+                c = self._c
 
             @np.vectorize
-            def _cdf_single(x, kappa, psi, mu, c):
-                return quad(vonmises_pdf, a=0, b=x, args=(kappa, psi, mu, c))
+            def _cdf_single(x, mu, kappa, psi, c):
+                return quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, c))
 
-            return _cdf_single(x, kappa, psi, mu, c)
+            return _cdf_single(x, mu, kappa, psi, c)
         else:
 
             @np.vectorize
-            def _cdf_single(x, kappa, psi, mu):
-                return quad(self._pdf, a=0, b=x, args=(kappa, psi, mu))
+            def _cdf_single(x, mu, kappa, psi):
+                return quad(self._pdf, a=0, b=x, args=(mu, kappa, psi))
 
-            return _cdf_single(x, kappa, psi, mu)
+            return _cdf_single(x, mu, kappa, psi)
 
 
 jonespewsey = jonespewsey_gen(name="jonespewsey")
@@ -797,20 +839,20 @@ jonespewsey = jonespewsey_gen(name="jonespewsey")
 ####################################
 
 
-def _kernel_jonespewsey(x, kappa, psi, mu):
+def _kernel_jonespewsey(x, mu, kappa, psi):
     return (np.cosh(kappa * psi) + np.sinh(kappa * psi) * np.cos(x - mu)) ** (
         1 / psi
     ) / (2 * np.pi * np.cosh(kappa * np.pi))
 
 
-def _c_jonespewsey(kappa, psi, mu):
+def _c_jonespewsey(mu, kappa, psi):
     if np.all(kappa < 0.001):
         return np.ones_like(kappa) * 1 / 2 / np.pi
     else:
         if np.isclose(np.abs(psi), 0).all():
             return 1 / (2 * np.pi * i0(kappa))
         else:
-            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(kappa, psi, mu))[
+            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi))[
                 0
             ]
     return c
@@ -826,30 +868,30 @@ class vonmises_ext_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, nu, mu)
+    pdf(x, mu, kappa, nu)
         Probability density function.
 
-    cdf(x, kappa, nu, mu)
+    cdf(x, mu, kappa, nu)
         Cumulative distribution function.
 
     Note
     ----
-    Implementation from 4.3.10 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.10 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, kappa, nu, mu):
-        self.c = _c_vmext(kappa, nu, mu)
-        return (kappa >= 0) and (-1 <= nu <= 1) and (0 <= mu <= np.pi * 2)
+    def _argcheck(self, mu, kappa, nu):
+        self.c = _c_vmext(mu, kappa, nu)
+        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-1 <= nu <= 1)
 
-    def _pdf(self, x, kappa, nu, mu):
-        return self.c * _kernel_vmext(x, kappa, nu, mu)
+    def _pdf(self, x, mu, kappa, nu):
+        return self.c * _kernel_vmext(x, mu, kappa, nu)
 
-    def _cdf(self, x, kappa, nu, mu):
+    def _cdf(self, x, mu, kappa, nu):
         @np.vectorize
-        def _cdf_single(x, kappa, nu, mu):
-            return quad(self._pdf, a=0, b=x, args=(kappa, nu, mu))
+        def _cdf_single(x, mu, kappa, nu):
+            return quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
 
-        return _cdf_single(x, kappa, nu, mu)
+        return _cdf_single(x, mu, kappa, nu)
 
 
 vonmises_ext = vonmises_ext_gen(name="vonmises_ext")
@@ -859,12 +901,12 @@ vonmises_ext = vonmises_ext_gen(name="vonmises_ext")
 ###########################################
 
 
-def _kernel_vmext(x, kappa, nu, mu):
+def _kernel_vmext(x, mu, kappa, nu):
     return np.exp(kappa * np.cos(x - mu + nu * np.sin(x - mu)))
 
 
-def _c_vmext(kappa, nu, mu):
-    c = 1 / quad_vec(_kernel_vmext, a=-np.pi, b=np.pi, args=(kappa, nu, mu))[0]
+def _c_vmext(mu, kappa, nu):
+    c = 1 / quad_vec(_kernel_vmext, a=-np.pi, b=np.pi, args=(mu, kappa, nu))[0]
     return c
 
 
@@ -878,29 +920,53 @@ class jonespewsey_sineskewed_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, lmbd, xi)
+    pdf(x, xi, kappa, psi, lmbd)
         Probability density function.
 
-    cdf(x, kappa, psi, lmbd, xi)
+    cdf(x, xi, kappa, psi, lmbd)
         Cumulative distribution function.
 
 
     Note
     ----
-    Implementation from 4.3.11 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.11 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, kappa, psi, lmbd, xi):
-        # reuse helpers from jonespewsey()
-        self.c = _c_jonespewsey(kappa, psi, xi)
+    def __init__(
+        self,
+        name="jonespewsey",
+        xi=None,
+        kappa=None,
+        psi=None,
+        lmbd=None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(name=name, *args, **kwargs)
+        if (
+            kappa is not None
+            and psi is not None
+            and xi is not None
+            and lmbd is not None
+        ):
+            self._c = _c_jonespewsey(xi, kappa, psi)
+        else:
+            self._c = None
+
+    def _argcheck(self, xi, kappa, psi, lmbd):
         return (
-            (kappa >= 0)
+            (0 <= xi <= np.pi * 2)
+            and (kappa >= 0)
             and (-np.inf <= psi <= np.inf)
             and (-1 <= lmbd <= 1)
-            and (0 <= xi <= np.pi * 2)
         )
 
-    def _pdf(self, x, kappa, psi, lmbd, xi):
+    def _pdf(self, x, xi, kappa, psi, lmbd):
+
+        if self._c is None:
+            c = _c_jonespewsey(xi, kappa, psi)
+        else:
+            c = self._c
 
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi) * (1 + lmbd * np.sin(x - xi))
@@ -915,16 +981,16 @@ class jonespewsey_sineskewed_gen(rv_continuous):
             else:
                 return (
                     (1 + lmbd * np.sin(x - xi))
-                    * _kernel_jonespewsey(x, kappa, psi, xi)
-                    / self.c
+                    * _kernel_jonespewsey(x, xi, kappa, psi)
+                    / c
                 )
 
-    def _cdf(self, x, kappa, psi, lmbd, xi):
+    def _cdf(self, x, xi, kappa, psi, lmbd):
         @np.vectorize
-        def _cdf_single(x, kappa, psi, lmbd, xi):
-            return quad(self._pdf, a=0, b=x, args=(kappa, psi, lmbd, xi))
+        def _cdf_single(x, xi, kappa, psi, lmbd):
+            return quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, lmbd))
 
-        return _cdf_single(x, kappa, psi, lmbd, xi)
+        return _cdf_single(x, xi, kappa, psi, lmbd)
 
 
 jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed")
@@ -939,10 +1005,10 @@ class jonespewsey_asymext_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, nu, xi)
+    pdf(x, xi, kappa, psi, nu)
         Probability density function.
 
-    cdf(x, kappa, psi, nu, xi)
+    cdf(x, xi, kappa, psi, nu)
         Cumulative distribution function.
 
 
@@ -951,30 +1017,30 @@ class jonespewsey_asymext_gen(rv_continuous):
     Implementation from 4.3.12 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, kappa, psi, nu, xi):
-        self.c = _c_jonespewsey_asymext(kappa, psi, nu, xi)
+    def _argcheck(self, xi, kappa, psi, nu):
+        self.c = _c_jonespewsey_asymext(xi, kappa, psi, nu)
         return (
-            (kappa >= 0)
+            (0 <= xi <= np.pi * 2)
+            and (kappa >= 0)
             and (-np.inf <= psi <= np.inf)
             and (0 <= nu < 1)
-            and (0 <= xi <= np.pi * 2)
         )
 
-    def _pdf(self, x, kappa, psi, nu, xi):
-        return _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi) / self.c
+    def _pdf(self, x, xi, kappa, psi, nu):
+        return _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu) / self.c
 
-    def _cdf(self, x, kappa, psi, nu, xi):
+    def _cdf(self, x, xi, kappa, psi, nu):
         @np.vectorize
-        def _cdf_single(x, kappa, psi, nu, xi):
-            return quad(self._pdf, a=0, b=x, args=(kappa, psi, nu, xi))
+        def _cdf_single(x, xi, kappa, psi, nu):
+            return quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, nu))
 
-        return _cdf_single(x, kappa, psi, nu, xi)
+        return _cdf_single(x, xi, kappa, psi, nu)
 
 
 jonespewsey_asymext = jonespewsey_asymext_gen(name="jonespewsey_asymext")
 
 
-def _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi):
+def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
     if np.isclose(np.abs(psi), 0).all():
         return np.exp(kappa * np.cos(x - xi + nu * np.cos(x - xi)))
     else:
@@ -984,10 +1050,10 @@ def _kernel_jonespewsey_asymext(x, kappa, psi, nu, xi):
         ) ** (1 / psi)
 
 
-def _c_jonespewsey_asymext(kappa, psi, nu, xi):
+def _c_jonespewsey_asymext(xi, kappa, psi, nu):
 
     c = quad_vec(
-        _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(kappa, psi, nu, xi)
+        _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(xi, kappa, psi, nu)
     )[0]
     return c
 
@@ -997,10 +1063,10 @@ class inverse_batschelet_gen(rv_continuous):
 
     Methods
     -------
-    pdf(x, kappa, psi, nu, lmbd, xi)
+    pdf(x, xi, kappa, psi, nu, lmbd)
         Probability density function.
 
-    cdf(x, kappa, psi, nu, lmbd, xi)
+    cdf(x, xi, kappa, psi, nu, lmbd)
         Cumulative distribution function.
 
 
@@ -1009,7 +1075,7 @@ class inverse_batschelet_gen(rv_continuous):
     Implementation from 4.3.13 of Pewsey et al. (2014)
     """
 
-    def _argcheck(self, kappa, nu, lmbd, xi):
+    def _argcheck(self, xi, kappa, nu, lmbd):
         self.c = _c_invbatschelet(kappa, lmbd)
         if np.isclose(lmbd, -1).all():
             self.con1, self.con2 = 0, 0
@@ -1017,13 +1083,13 @@ class inverse_batschelet_gen(rv_continuous):
             self.con1 = (1 - lmbd) / (1 + lmbd)
             self.con2 = (2 * lmbd) / (1 + lmbd)
         return (
-            (kappa >= 0)
+            (0 <= xi <= np.pi * 2)
+            and (kappa >= 0)
             and (-1 <= nu <= 1)
             and (-1 <= lmbd <= 1)
-            and (0 <= xi <= np.pi * 2)
         )
 
-    def _pdf(self, x, kappa, nu, lmbd, xi):
+    def _pdf(self, x, xi, kappa, nu, lmbd):
 
         arg1 = _tnu(x, nu, xi)
         arg2 = _slmbdinv(arg1, lmbd)
@@ -1033,12 +1099,12 @@ class inverse_batschelet_gen(rv_continuous):
         else:
             return self.c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
 
-    def _cdf(self, x, kappa, nu, lmbd, xi):
+    def _cdf(self, x, xi, kappa, nu, lmbd):
         @np.vectorize
-        def _cdf_single(x, kappa, nu, lmbd, xi):
-            return quad(self._pdf, a=0, b=x, args=(kappa, nu, lmbd, xi))
+        def _cdf_single(x, xi, kappa, nu, lmbd):
+            return quad(self._pdf, a=0, b=x, args=(xi, kappa, nu, lmbd))
 
-        return _cdf_single(x, kappa, nu, lmbd, xi)
+        return _cdf_single(x, xi, kappa, nu, lmbd)
 
 
 inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")

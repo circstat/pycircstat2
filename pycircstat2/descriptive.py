@@ -67,8 +67,8 @@ def circ_r(
     Sbar: float
         Intermediate value
 
-    Note
-    ----
+    References
+    ----------
     Implementation of Example 26.5 (Zar, 2010)
     """
     if alpha is None and (Cbar is None or Sbar is None):
@@ -247,9 +247,11 @@ def circ_dispersion(
     mean=None,
 ) -> float:
     r"""
-    Sample Circular Dispersion, defined by Fisher eq(2.28):
+    Sample Circular Dispersion, defined by Equation 2.28 (Fisher, 1993):
 
+       $$
        \hat\delta = (1 - \hat\rho_{2})/(2 \hat\rho_{1}^{2})
+       $$
 
     Parameters
     ----------
@@ -265,11 +267,6 @@ def circ_dispersion(
     -------
     dispersion: float
         Sample Circular Dispersion
-
-    Note
-    ----
-    Implementation of Equation 2.28 (Fisher, 1993)
-
     """
 
     if w is None:
@@ -288,9 +285,13 @@ def circ_dispersion(
 
 def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float:
     r"""
-    Circular skewness, as defined by Fisher eq(2.29):
+    Circular skewness, as defined by Equation 2.29 (Fisher, 1993):
 
-        \hat s = [\hat\rho_2 \sin(\hat\mu_2 - 2 \hat\mu_1)] / (1 - \hat\rho_1)^{\frac{3}{2}}
+    $$
+    \hat s = [\hat\rho_2 \sin(\hat\mu_2 - 2 \hat\mu_1)] / (1 - \hat\rho_1)^{\frac{3}{2}}
+    $$
+
+    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by NOT centering the second moment.
 
     Parameters
     ----------
@@ -304,11 +305,6 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     -------
     skewness: float
         Circular Skewness
-
-    Note
-    ----
-    Unlike the implementation of Equation 2.29 (Fisher, 1993),
-    here we followed Pewsey et al. (2014) by NOT centering the second moment.
     """
 
     if w is None:
@@ -327,9 +323,11 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
 def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float:
     r"""
-    Circular kurtosis, as defined by Fisher eq(2.30):
+    Circular kurtosis, as defined by Equation 2.30 (Fisher, 1993):
 
-        \hat k = [\hat\rho_2 \cos(\hat\mu_2 - 2 \hat\mu_1) - \hat\rho_1^4] / (1 - \hat\rho_1)^{2}
+    $$\hat k = [\hat\rho_2 \cos(\hat\mu_2 - 2 \hat\mu_1) - \hat\rho_1^4] / (1 - \hat\rho_1)^{2$$
+
+    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by NOT centering the second moment.
 
     Parameters
     ----------
@@ -343,11 +341,6 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     -------
     kurtosis: float
         Circular Kurtosis
-
-    Note
-    ----
-    Unlike the implementation of Equation 2.30 (Fisher, 1993),
-    here we followed Pewsey et al. (2014) by NOT centering the second moment.
     """
 
     if w is None:
@@ -392,8 +385,8 @@ def circ_std(
     s0: float
         Circular standard deviation.
 
-    Note
-    ----
+    References
+    ----------
     Implementation of Equation 26.15-16/20-21 (Zar, 2010)
     """
 
@@ -456,8 +449,8 @@ def circ_median(
     return_average: bool
         Return the average of the median
 
-    Return
-    ------
+    Returns
+    -------
     median: float or NaN
     """
 
@@ -670,8 +663,8 @@ def circ_mean_deviation(
 #     beta: np.array, int or float
 #         reference angle in radian.
 
-#     Return
-#     ------
+#     Returns
+#     -------
 #     circular mean deviation: np.array
 
 #     Note
@@ -1069,8 +1062,8 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
     n: int or None
         sample size
 
-    Return
-    ------
+    Returns
+    -------
     kappa: float
         concentration parameter
 
@@ -1112,8 +1105,8 @@ def compute_smooth_params(r: float, n: int) -> float:
     n: int
         sample size
 
-    Return
-    ------
+    Returns
+    -------
     h: float
         smoothing parameter
 
@@ -1191,8 +1184,8 @@ def circ_mean_and_r_of_means(
     rs: np.array (n, )
         a set of mean resultant vecotr lengths
 
-    Return
-    ------
+    Returns
+    -------
     m: float
         mean of means in radian
 

@@ -14,7 +14,6 @@ def aacorr(
     test: bool = False,
     strict: bool = True,
 ) -> tuple:
-
     """
     Angular-Angular Correlation.
 
@@ -34,8 +33,8 @@ def aacorr(
         Strict mode. If True, raise an error when mean direction is
         not significant. Only for Jammalamadaka & SenGupta (2001)
 
-    Return
-    ------
+    Returns
+    -------
     r: float
         Correlation coefficient.
     reject: bool
@@ -84,7 +83,6 @@ def _aacorr_fl(
     b: Union[Type[Circular], np.ndarray],
     stric: bool,
 ) -> float:
-
     """Angular-Angular Correlation based on Fisher & Lee (1983)
 
     Parameters
@@ -94,13 +92,13 @@ def _aacorr_fl(
     b: Circular or np.ndarray
         Angles in radian
 
-    Return
-    ------
+    Returns
+    -------
     raa: float
         correlation coefficient.
 
-    Reference
-    ----
+    References
+    ----------
     P6574-658, Section 27.15(a), Example 27.20 (Zar, 2010).
     """
 
@@ -124,7 +122,6 @@ def _aacorr_js(
     b: Union[Type[Circular], np.ndarray],
     strict: bool,
 ) -> float:
-
     """Implementation of Angular-Angular Correlation
     in R.Circular.
 
@@ -138,13 +135,13 @@ def _aacorr_js(
         if True, raise an error when mean direction is
         not significant.
 
-    Return
-    ------
+    Returns
+    -------
     raa: float
         correlation coefficient.
 
-    Reference
-    ---------
+    References
+    ----------
     Jammalamadaka & SenGupta (2001)
     """
 
@@ -197,9 +194,7 @@ def _aacorr_np(
     r1 = (
         np.sum(np.cos(C * rank_diff)) ** 2 + np.sum(np.sin(C * rank_diff)) ** 2
     ) / n**2
-    r2 = (
-        np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2
-    ) / n**2
+    r2 = (np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2) / n**2
 
     return r1 - r2
 
@@ -208,7 +203,6 @@ def alcorr(
     a: Union[Type[Circular], np.ndarray],
     x: np.ndarray,
 ) -> float:
-
     """Angular-Linear Correlation based on Mardia (1972)
 
     Parameters
@@ -218,8 +212,8 @@ def alcorr(
     x: np.ndarray
         Linear variable
 
-    Return
-    ------
+    Returns
+    -------
     ral: float
         correlation coefficient.
     pval: float

@@ -95,8 +95,8 @@ def chisquare_test(w: np.ndarray, verbose=False):
 
     For method is for grouped data.
 
-    Parameter
-    ---------
+    Parameters
+    ----------
     w: np.ndarray
         Frequencies of angles
 
@@ -252,8 +252,8 @@ def one_sample_test(
     verbose: bool
         Print formatted results.
 
-    Return
-    ------
+    Returns
+    -------
     reject: bool
         Reject or not reject the null hypothesis.
 
@@ -318,8 +318,8 @@ def omnibus_test(
     verbose: bool
         Print formatted results.
 
-    Return
-    ------
+    Returns
+    -------
     A: float
         Test statistics
 
@@ -383,8 +383,8 @@ def batschelet_test(
     verbose: bool
         Print formatted results.
 
-    Return
-    ------
+    Returns
+    -------
     pval: float
         p-value
 
@@ -436,8 +436,8 @@ def symmetry_test(
     verbose: bool
         Print formatted results.
 
-    Return
-    ------
+    Returns
+    -------
     test_statistic: float
         Test statistic
     pval: float
@@ -479,8 +479,8 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
     H0: All samples are from populations with the same mean angle
     H1: All samples are not from populations with the same mean angle
 
-    Parameter
-    ---------
+    Parameters
+    ----------
     circs: list (k, )
         A list of Circular objects.
 
@@ -541,8 +541,8 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
     of the latter test. It may be used on grouped data if the
     grouping interval is no greater than 5 degree.
 
-    Parameter
-    ---------
+    Parameters
+    ----------
     circs: list
         A list of Circular objects.
 
@@ -613,8 +613,8 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
     H1: The two samples did not come from the same population,
         or from two populations having the same directions.
 
-    Parameter
-    ---------
+    Parameters
+    ----------
     circs: list
         A list of Circular objects.
 
@@ -758,8 +758,8 @@ def kuiper_test(
 
     This method is for ungrouped data.
 
-    Parameter
-    ---------
+    Parameters
+    ----------
 
     alpha: np.array
         Angles in radian.
@@ -835,8 +835,8 @@ def watson_test(
 
     This method is for ungrouped data.
 
-    Parameter
-    ---------
+    Parameters
+    ----------
 
     alpha: np.array
         Angles in radian.
@@ -929,7 +929,7 @@ def rao_spacing_test(
     kappa: float
         Concentration parameter. Only use for grouped data.
 
-    num_sims: int
+    n_simulation: int
         Number of simulations.
 
     seed: int

@@ -72,8 +72,8 @@ class Circular:
         for computing median.
         `median = circ_median(alpha, w, kwargs_median)`
 
-    Reference
-    ---------
+    References
+    ----------
     - Chapter 26 of Biostatistical Analysis, Fifth Edition, Jerrold H. Zar. (2010)
     """
 
