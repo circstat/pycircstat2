@@ -22,8 +22,8 @@ def rayleigh_test(
     """
     Rayleigh's Test for Circular Uniformity.
 
-    H0: The data in the population are distributed uniformly around the circle.
-    H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H0: The data in the population are distributed uniformly around the circle.
+    - H1: THe data in the population are not disbutrited uniformly around the circle.
 
     This method is for ungrouped data. For testing uniformity with
     grouped data, use chisquare_test() or scipy.stats.chisquare().
@@ -90,8 +90,8 @@ def rayleigh_test(
 def chisquare_test(w: np.ndarray, verbose=False):
     """Chi-Square Goodness of Fit for Circular data.
 
-    H0: The data in the population are distributed uniformly around the circle.
-    H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H0: The data in the population are distributed uniformly around the circle.
+    - H1: THe data in the population are not disbutrited uniformly around the circle.
 
     For method is for grouped data.
 
@@ -148,8 +148,8 @@ def V_test(
     """
     Modified Rayleigh Test for Uniformity versus a Specified Angle.
 
-    H0: The population is uniformly distributed around the circle (i.e., H0: ρ=0)
-    H1: The population is not uniformly distributed around the circle (i.e., H1: ρ!=0),
+    - H0: The population is uniformly distributed around the circle (i.e., H0: ρ=0)
+    - H1: The population is not uniformly distributed around the circle (i.e., H1: ρ!=0),
         but has a mean of 90 degree.
 
     Parameters
@@ -228,8 +228,8 @@ def one_sample_test(
     To test wheter the population mean angle is equal to a specified value,
     which is achieved by observing whether the angle lies within the 95% CI.
 
-    H0: The population has a mean of μ
-    H1: The population mean is not μ
+    - H0: The population has a mean of μ
+    - H1: The population mean is not μ
 
     Parameters
     ----------
@@ -304,8 +304,8 @@ def omnibus_test(
     is called an "omnibus test" because it works well for unimodal,
     bimodal, and multimodal distributions (for ungrouped data).
 
-    H0: The population is uniformly distributed around the circle
-    H1: The population is not uniformly distributed.
+    - H0: The population is uniformly distributed around the circle
+    - H1: The population is not uniformly distributed.
 
     Parameters
     ----------
@@ -368,8 +368,8 @@ def batschelet_test(
     """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
     (for ungrouped data).
 
-    H0: The population is uniformly distributed around the circle.
-    H1: The population is not uniformly distributed around the circle, but
+    - H0: The population is uniformly distributed around the circle.
+    - H1: The population is not uniformly distributed around the circle, but
         is concentrated around a specified angle.
 
     Parameters
@@ -417,13 +417,13 @@ def symmetry_test(
     alpha: np.ndarray,
     median: Union[int, float, None] = None,
     verbose: bool = False,
-) -> float:
+) -> tuple[float, float]:
     """Non-parametric test for symmetry around the median. Works by performing a
     Wilcoxon sign rank test on the differences to the median. Also known as
     Wilcoxon paired-sample test.
 
-    H0: the population is symmetrical around the median
-    HA: the population is not symmetrical around the median
+    - H0: the population is symmetrical around the median
+    - HA: the population is not symmetrical around the median
 
     Parameters
     ----------
@@ -476,8 +476,8 @@ def symmetry_test(
 def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
     """The Watson-Williams Test for multiple samples.
 
-    H0: All samples are from populations with the same mean angle
-    H1: All samples are not from populations with the same mean angle
+    - H0: All samples are from populations with the same mean angle
+    - H1: All samples are not from populations with the same mean angle
 
     Parameters
     ----------
@@ -530,9 +530,9 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
     """Watson's U2 Test for nonparametric two-sample testing
     (with or without ties).
 
-    H0: The two samples came from the same population,
+    - H0: The two samples came from the same population,
         or from two populations having the same direction.
-    H1: The two samples did not come from the same population,
+    - H1: The two samples did not come from the same population,
         or from two populations having the same directions.
 
     Use this instead of Watson-Williams two-sample test when at
@@ -608,9 +608,9 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
 def wheeler_watson_test(circs: list, verbose: bool = False):
     """The Wheeler and Watson Two/Multi-Sample Test.
 
-    H0: The two samples came from the same population,
+    - H0: The two samples came from the same population,
         or from two populations having the same direction.
-    H1: The two samples did not come from the same population,
+    - H1: The two samples did not come from the same population,
         or from two populations having the same directions.
 
     Parameters
@@ -753,8 +753,8 @@ def kuiper_test(
     """
     Kuiper's test for Circular Uniformity.
 
-    H0: The data in the population are distributed uniformly around the circle.
-    H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H0: The data in the population are distributed uniformly around the circle.
+    - H1: THe data in the population are not disbutrited uniformly around the circle.
 
     This method is for ungrouped data.
 
@@ -830,8 +830,8 @@ def watson_test(
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
 
-    H0: The sample data come from a population distributed uniformly around the circle.
-    H1: The sample data do not come from a population distributed uniformly around the circle.
+    - H0: The sample data come from a population distributed uniformly around the circle.
+    - H1: The sample data do not come from a population distributed uniformly around the circle.
 
     This method is for ungrouped data.
 
@@ -913,8 +913,8 @@ def rao_spacing_test(
 ) -> tuple:
     """Simulation based Rao's spacing test.
 
-    H0: The sample data come from a population distributed uniformly around the circle.
-    H1: The sample data do not come from a population distributed uniformly around the circle.
+    - H0: The sample data come from a population distributed uniformly around the circle.
+    - H1: The sample data do not come from a population distributed uniformly around the circle.
 
     This method is for both grouped and ungrouped data.
 
