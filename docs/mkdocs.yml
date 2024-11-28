@@ -22,6 +22,7 @@ nav:
     - API Reference:
           - Descriptive Statistics: reference/descriptive.md
           - Hypothesis Testing: reference/hypothesis.md
+          - Angular Correlation: reference/correlation.md
           - Circular Distributions: reference/distributions.md
           - Utilities: reference/utils.md
 
