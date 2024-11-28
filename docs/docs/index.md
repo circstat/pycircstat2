@@ -1,8 +1,6 @@
 # pycircstat2: Circular Statistics with Python
 
-A rework of [pycircstat](https://github.com/circstat/pycircstat).
-
-A rework of [pycircstat](https://github.com/circstat/pycircstat).
+A rework(-in-progress) of [pycircstat](https://github.com/circstat/pycircstat).
 
 [**Installlation**](#installation) |
 [**Examples**](#examples) (
