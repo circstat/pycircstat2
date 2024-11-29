@@ -17,6 +17,7 @@ plugins:
                       docstring_style: "numpy"
                       show_symbol_type_toc: true
                       show_root_toc_entry: true
+                      members_order: "source"
 
 nav:
     - Home: index.md

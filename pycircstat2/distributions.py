@@ -58,15 +58,78 @@ class circularuniform_gen(rv_continuous):
     def _pdf(self, x):
         return 1 / np.pi
 
+    def pdf(self, x, *args, **kwargs):
+        r"""
+        Probability density function of the Circular Uniform distribution.
+
+        $$
+        f(\theta) = \frac{1}{\pi}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, *args, **kwargs)
+
     def _cdf(self, x):
         return x / (2 * np.pi)
 
+    def cdf(self, x, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Circular Uniform distribution.
 
-circularuniform = circularuniform_gen(name="circularuniform")
+        $$
+        F(\theta) = \frac{\theta}{2\pi}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, *args, **kwargs)
+
+    def _ppf(self, q):
+        return 2 * np.pi * q
+
+    def ppf(self, q, *args, **kwargs):
+        r"""
+        Percent-point function (inverse of the CDF) of the Circular Uniform distribution.
+
+        $$
+        Q(q) = F^{-1}(q) = 2\pi q, \space 0 \leq q \leq 1
+        $$
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Values at the given quantiles.
+        """
+        return super().ppf(q, *args, **kwargs)
+
+
+circularuniform = circularuniform_gen(a=0, b=2 * np.pi, name="circularuniform")
 
 
 class cardioid_gen(rv_continuous):
-    """Cardioid Distribution
+    """Cardioid (cosine) Distribution
 
     Methods
     -------
@@ -87,11 +150,59 @@ class cardioid_gen(rv_continuous):
     def _pdf(self, x, mu, rho):
         return (1 + 2 * rho * np.cos(x - mu)) / 2.0 / np.pi
 
+    def pdf(self, x, mu, rho, *args, **kwargs):
+        r"""
+        Probability density function of the Cardioid distribution.
+
+        $$
+        f(\theta) = \frac{1}{2\pi} \left(1 + 2\rho \cos(\theta - \mu)\right), \space \rho \in [0, 1/2]
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 <= rho <= 0.5.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, mu, rho, *args, **kwargs)
+
     def _cdf(self, x, mu, rho):
         return (x + 2 * rho * (np.sin(x - mu) + np.sin(mu))) / (2 * np.pi)
 
+    def cdf(self, x, mu, rho, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Cardioid distribution.
 
-cardioid = cardioid_gen(name="cardioid")
+        $$
+        F(\theta) = \frac{\theta + 2\rho (\sin(\mu) + \sin(\theta - \mu))}{2\pi}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 <= rho <= 0.5.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, mu, rho, *args, **kwargs)
+
+
+cardioid = cardioid_gen(a=0, b=2 * np.pi, name="cardioid")
 
 
 class cartwright_gen(rv_continuous):
@@ -128,7 +239,7 @@ class cartwright_gen(rv_continuous):
         return _cdf_single(x, mu, zeta)
 
 
-cartwright = cartwright_gen(name="cartwright")
+cartwright = cartwright_gen(a=0, b=2 * np.pi, name="cartwright")
 
 
 class wrapnorm_gen(rv_continuous):
@@ -160,9 +271,7 @@ class wrapnorm_gen(rv_continuous):
         return (
             1
             + 2
-            * np.sum(
-                [rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0
-            )
+            * np.sum([rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0)
         ) / (2 * np.pi)
 
     def _cdf(self, x, mu, rho):
@@ -173,7 +282,7 @@ class wrapnorm_gen(rv_continuous):
         return _cdf_single(x, mu, rho)
 
 
-wrapnorm = wrapnorm_gen(name="wrapped_normal")
+wrapnorm = wrapnorm_gen(a=0, b=2 * np.pi, name="wrapped_normal")
 
 
 class wrapcauchy_gen(rv_continuous):
@@ -202,11 +311,9 @@ class wrapcauchy_gen(rv_continuous):
         return 0 <= mu <= np.pi * 2 and 0 < rho <= 1
 
     def _pdf(self, x, mu, rho):
-        return (1 - rho**2) / (
-            2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu))
-        )
+        return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
 
-    def pdf(self, x, *args, **kwargs):
+    def pdf(self, x, mu, rho, *args, **kwargs):
         """
         Probability density function of the Wrapped Cauchy distribution.
 
@@ -224,12 +331,12 @@ class wrapcauchy_gen(rv_continuous):
         pdf_values : array_like
             Probability density function evaluated at `x`.
         """
-        return super().pdf(x, *args, **kwargs)
+        return super().pdf(x, mu, rho, *args, **kwargs)
 
     def _logpdf(self, x, mu, rho):
         return np.log(np.clip(self._pdf(x, mu, rho), 1e-16, None))
 
-    def logpdf(self, x, *args, **kwargs):
+    def logpdf(self, x, mu, rho, *args, **kwargs):
         """
         Logarithm of the probability density function.
 
@@ -237,17 +344,17 @@ class wrapcauchy_gen(rv_continuous):
         ----------
         x : array_like
             Points at which to evaluate the log-PDF.
-        rho : float
-            Shape parameter, 0 < rho <= 1.
         mu : float
             Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 < rho <= 1.
 
         Returns
         -------
         logpdf_values : array_like
             Logarithm of the probability density function evaluated at `x`.
         """
-        return super().logpdf(x, *args, **kwargs)
+        return super().logpdf(x, mu, rho, *args, **kwargs)
 
     def _cdf(self, x, mu, rho):
         @np.vectorize
@@ -257,7 +364,7 @@ class wrapcauchy_gen(rv_continuous):
 
         return _cdf_single(x, mu, rho)
 
-    def cdf(self, x, *args, **kwargs):
+    def cdf(self, x, mu, rho, *args, **kwargs):
         """
         Cumulative distribution function of the Wrapped Cauchy distribution.
 
@@ -275,7 +382,7 @@ class wrapcauchy_gen(rv_continuous):
         cdf_values : array_like
             CDF evaluated at `x`.
         """
-        return super().cdf(x, *args, **kwargs)
+        return super().cdf(x, mu, rho, *args, **kwargs)
 
     def _rvs(self, mu, rho, size=None, random_state=None):
         """
@@ -283,10 +390,11 @@ class wrapcauchy_gen(rv_continuous):
 
         Parameters
         ----------
-        rho : float
-            Shape parameter, 0 <= rho <= 1.
+
         mu : float
             Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 <= rho <= 1.
         size : int or tuple, optional
             Number of samples to generate.
         random_state : RandomState, optional
@@ -307,9 +415,7 @@ class wrapcauchy_gen(rv_continuous):
             from scipy.stats import cauchy
 
             scale = -np.log(rho)
-            samples = cauchy.rvs(
-                loc=mu, scale=scale, size=size, random_state=rng
-            )
+            samples = cauchy.rvs(loc=mu, scale=scale, size=size, random_state=rng)
             return np.mod(samples, 2 * np.pi)
 
     def fit(self, data, method="analytical", *args, **kwargs):
@@ -374,12 +480,11 @@ class wrapcauchy_gen(rv_continuous):
             return mu, rho
         else:
             raise ValueError(
-                "Invalid method. Supported methods are 'analytical' and "
-                "'numerical'."
+                "Invalid method. Supported methods are 'analytical' and " "'numerical'."
             )
 
 
-wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
+wrapcauchy = wrapcauchy_gen(a=0, b=2 * np.pi, name="wrapcauchy")
 
 
 class vonmises_gen(rv_continuous):
@@ -419,10 +524,10 @@ class vonmises_gen(rv_continuous):
 
     Parameters
     ----------
-    kappa : float
-        The concentration parameter of the distribution (kappa > 0).
     mu : float
         The mean direction of the distribution (0 <= mu <= 2*pi).
+    kappa : float
+        The concentration parameter of the distribution (kappa > 0).
 
     Returns
     -------
@@ -441,7 +546,7 @@ class vonmises_gen(rv_continuous):
     def _pdf(self, x, mu, kappa):
         return np.exp(kappa * np.cos(x - mu)) / (2 * np.pi * i0(kappa))
 
-    def pdf(self, x, *args, **kwargs):
+    def pdf(self, x, mu, kappa, *args, **kwargs):
         """
         Probability density function of the Von Mises distribution.
 
@@ -449,22 +554,22 @@ class vonmises_gen(rv_continuous):
         ----------
         x : array_like
             Points at which to evaluate the probability density function.
-        kappa : float
-            The concentration parameter of the distribution (kappa > 0).
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
 
         Returns
         -------
         pdf_values : array_like
             Probability density function evaluated at `x`.
         """
-        return super().pdf(x, *args, **kwargs)
+        return super().pdf(x, mu, kappa, *args, **kwargs)
 
     def _logpdf(self, x, mu, kappa):
         return kappa * np.cos(x - mu) - np.log(2 * np.pi * i0(kappa))
 
-    def logpdf(self, x, *args, **kwargs):
+    def logpdf(self, x, mu, kappa, *args, **kwargs):
         """
         Logarithm of the probability density function of the Von Mises
         distribution.
@@ -473,17 +578,17 @@ class vonmises_gen(rv_continuous):
         ----------
         x : array_like
             Points at which to evaluate the logarithm of the probability density function.
-        kappa : float
-            The concentration parameter of the distribution (kappa > 0).
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
 
         Returns
         -------
         logpdf_values : array_like
             Logarithm of the probability density function evaluated at `x`.
         """
-        return super().logpdf(x, *args, **kwargs)
+        return super().logpdf(x, mu, kappa, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa):
         @np.vectorize
@@ -493,7 +598,7 @@ class vonmises_gen(rv_continuous):
 
         return _cdf_single(x, mu, kappa)
 
-    def cdf(self, x, *args, **kwargs):
+    def cdf(self, x, mu, kappa, *args, **kwargs):
         """
         Cumulative distribution function of the Von Mises distribution.
 
@@ -501,19 +606,19 @@ class vonmises_gen(rv_continuous):
         ----------
         x : array_like
             Points at which to evaluate the cumulative distribution function.
-        kappa : float
-            The concentration parameter of the distribution (kappa > 0).
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
 
         Returns
         -------
         cdf_values : array_like
             Cumulative distribution function evaluated at `x`.
         """
-        return super().cdf(x, *args, **kwargs)
+        return super().cdf(x, mu, kappa, *args, **kwargs)
 
-    def ppf(self, q, *args, **kwargs):
+    def ppf(self, q, mu, kappa, *args, **kwargs):
         """
         Percent-point function (inverse of the CDF) of the Von Mises distribution.
 
@@ -521,17 +626,17 @@ class vonmises_gen(rv_continuous):
         ----------
         q : array_like
             Quantiles to evaluate.
-        kappa : float
-            The concentration parameter of the distribution (kappa > 0).
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
+        kappa : float
+            The concentration parameter of the distribution (kappa > 0).
 
         Returns
         -------
         ppf_values : array_like
             Values at the given quantiles.
         """
-        return super().ppf(q, *args, **kwargs)
+        return super().ppf(q, mu, kappa, *args, **kwargs)
 
     def _rvs(self, mu, kappa, size=None, random_state=None):
         # Use the random_state attribute or a new default random generator
@@ -767,7 +872,7 @@ class vonmises_gen(rv_continuous):
             )
 
 
-vonmises = vonmises_gen(name="vonmises")
+vonmises = vonmises_gen(a=0, b=2 * np.pi, name="vonmises")
 
 
 class jonespewsey_gen(rv_continuous):
@@ -788,11 +893,7 @@ class jonespewsey_gen(rv_continuous):
     """
 
     def _validate_params(self, mu, kappa, psi):
-        return (
-            (0 <= mu <= np.pi * 2)
-            and (kappa >= 0)
-            and (-np.inf <= psi <= np.inf)
-        )
+        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
 
     def _argcheck(self, mu, kappa, psi):
         if self._validate_params(mu, kappa, psi):
@@ -807,11 +908,7 @@ class jonespewsey_gen(rv_continuous):
             return 1 / (2 * np.pi)
         else:
             if np.isclose(np.abs(psi), 0).all():
-                return (
-                    1
-                    / (2 * np.pi * i0(kappa))
-                    * np.exp(kappa * np.cos(x - mu))
-                )
+                return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
             else:
                 return _kernel_jonespewsey(x, mu, kappa, psi) / self._c
 
@@ -836,7 +933,7 @@ class jonespewsey_gen(rv_continuous):
             return _cdf_single(x, mu, kappa, psi)
 
 
-jonespewsey = jonespewsey_gen(name="jonespewsey")
+jonespewsey = jonespewsey_gen(a=0, b=2 * np.pi, name="jonespewsey")
 
 ####################################
 ## Helper Functions: Jones-Pewsey ##
@@ -856,9 +953,9 @@ def _c_jonespewsey(mu, kappa, psi):
         if np.isclose(np.abs(psi), 0).all():
             return 1 / (2 * np.pi * i0(kappa))
         else:
-            c = quad_vec(
-                _kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi)
-            )[0]
+            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi))[
+                0
+            ]
     return c
 
 
@@ -904,7 +1001,7 @@ class vonmises_ext_gen(rv_continuous):
         return _cdf_single(x, mu, kappa, nu)
 
 
-vonmises_ext = vonmises_ext_gen(name="vonmises_ext")
+vonmises_ext = vonmises_ext_gen(a=0, b=2 * np.pi, name="vonmises_ext")
 
 ###########################################
 ## Helper Functions: extended von Mises  ##
@@ -985,7 +1082,7 @@ class jonespewsey_sineskewed_gen(rv_continuous):
 
 
 jonespewsey_sineskewed = jonespewsey_sineskewed_gen(
-    name="jonespewsey_sineskewed"
+    a=0, b=2 * np.pi, name="jonespewsey_sineskewed"
 )
 
 ##########################
@@ -1036,7 +1133,9 @@ class jonespewsey_asymext_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, psi, nu)
 
 
-jonespewsey_asymext = jonespewsey_asymext_gen(name="jonespewsey_asymext")
+jonespewsey_asymext = jonespewsey_asymext_gen(
+    a=0, b=2 * np.pi, name="jonespewsey_asymext"
+)
 
 
 def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
@@ -1104,9 +1203,7 @@ class inverse_batschelet_gen(rv_continuous):
         if np.isclose(lmbd, -1).all():
             return self._c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
-            return self._c * np.exp(
-                kappa * np.cos(self.con1 * arg1 + self.con2 * arg2)
-            )
+            return self._c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
         @np.vectorize
@@ -1116,7 +1213,7 @@ class inverse_batschelet_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, nu, lmbd)
 
 
-inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
+inverse_batschelet = inverse_batschelet_gen(a=0, b=2 * np.pi, name="inverse_batschelet")
 
 
 ##########################################

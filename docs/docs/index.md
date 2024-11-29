@@ -1,3 +1,5 @@
+![logo](./images/logo.png)
+
 # pycircstat2: Circular Statistics with Python
 
 A rework(-in-progress) of [pycircstat](https://github.com/circstat/pycircstat).
