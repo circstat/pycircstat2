@@ -231,12 +231,61 @@ class cartwright_gen(rv_continuous):
             / (np.pi * gamma(1 + 2 / zeta))
         )
 
+    def pdf(self, x, mu, zeta, *args, **kwargs):
+        r"""
+        Probability density function of the Cartwright distribution.
+
+        $$
+        f(\theta) = \frac{2^{- 1+1/\zeta} \Gamma^2(1 + 1/\zeta)}{\pi \Gamma(1 + 2/\zeta)} (1 + \cos(\theta - \mu))^{1/\zeta}
+        $$
+
+        , where $\Gamma$ is the gamma function.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        zeta : float
+            Shape parameter, zeta > 0.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+
+        return super().pdf(x, mu, zeta, *args, **kwargs)
+
     def _cdf(self, x, mu, zeta):
         @np.vectorize
         def _cdf_single(x, mu, zeta):
             return quad(self._pdf, a=0, b=x, args=(mu, zeta))
 
         return _cdf_single(x, mu, zeta)
+
+    def cdf(self, x, mu, zeta, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Cartwright distribution.
+
+        No closed-form solution is available, so the CDF is computed numerically.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        zeta : float
+            Shape parameter, zeta > 0.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, mu, zeta, *args, **kwargs)
 
 
 cartwright = cartwright_gen(a=0, b=2 * np.pi, name="cartwright")
@@ -274,12 +323,60 @@ class wrapnorm_gen(rv_continuous):
             * np.sum([rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0)
         ) / (2 * np.pi)
 
+    def pdf(self, x, mu, rho, *args, **kwargs):
+        r"""
+        Probability density function of the Wrapped Normal distribution.
+
+        $$
+        f(\theta) = \frac{1}{2\pi} \left(1 + 2\sum_{p=1}^{\infty} \rho^{p^2} \cos(p(\theta - \mu))\right)
+        $$
+
+        , here we approximate the infinite sum by summing the first 30 terms.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Shape parameter, 0 < rho <= 1.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, mu, rho, *args, **kwargs)
+
     def _cdf(self, x, mu, rho):
         @np.vectorize
         def _cdf_single(x, mu, rho):
             return quad(self._pdf, a=0, b=x, args=(mu, rho))
 
         return _cdf_single(x, mu, rho)
+
+    def cdf(self, x, mu, rho, *args, **kwargs):
+        """
+        Cumulative distribution function of the Wrapped Normal distribution.
+
+        No closed-form solution is available, so the CDF is computed numerically.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Shape parameter, 0 < rho <= 1.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, mu, rho, *args, **kwargs)
 
 
 wrapnorm = wrapnorm_gen(a=0, b=2 * np.pi, name="wrapped_normal")
@@ -314,8 +411,12 @@ class wrapcauchy_gen(rv_continuous):
         return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
 
     def pdf(self, x, mu, rho, *args, **kwargs):
-        """
+        r"""
         Probability density function of the Wrapped Cauchy distribution.
+
+        $$
+        f(\theta) = \frac{1 - \rho^2}{2\pi(1 + \rho^2 - 2\rho \cos(\theta - \mu))}
+        $$
 
         Parameters
         ----------
@@ -367,6 +468,8 @@ class wrapcauchy_gen(rv_continuous):
     def cdf(self, x, mu, rho, *args, **kwargs):
         """
         Cumulative distribution function of the Wrapped Cauchy distribution.
+
+        No closed-form solution is available, so the CDF is computed numerically.
 
         Parameters
         ----------
@@ -547,8 +650,12 @@ class vonmises_gen(rv_continuous):
         return np.exp(kappa * np.cos(x - mu)) / (2 * np.pi * i0(kappa))
 
     def pdf(self, x, mu, kappa, *args, **kwargs):
-        """
+        r"""
         Probability density function of the Von Mises distribution.
+
+        $$
+        f(\theta) = \frac{e^{\kappa \cos(\theta - \mu)}}{2\pi I_0(\kappa)}
+        $$
 
         Parameters
         ----------
@@ -599,8 +706,14 @@ class vonmises_gen(rv_continuous):
         return _cdf_single(x, mu, kappa)
 
     def cdf(self, x, mu, kappa, *args, **kwargs):
-        """
+        r"""
         Cumulative distribution function of the Von Mises distribution.
+
+        $$
+        F(\theta) = \frac{1}{2 \pi I_0(\kappa)}\int_{0}^{\theta} e^{\kappa \cos(\theta - \mu)} dx
+        $$
+
+        No closed-form solution is available, so the CDF is computed numerically.
 
         Parameters
         ----------
@@ -816,11 +929,13 @@ class vonmises_gen(rv_continuous):
 
         Examples
         --------
-        # Analytical fitting
+        ```python
+        # MLE fitting using analytical solution
         mu, kappa = vonmises.fit(data, method="analytical")
 
-        # Numerical fitting using L-BFGS-B
+        # MLE fitting with numerical method using L-BFGS-B
         mu, kappa = vonmises.fit(data, method="L-BFGS-B")
+        ```
         """
 
         # Validate the fitting method
@@ -897,7 +1012,9 @@ class jonespewsey_gen(rv_continuous):
 
     def _argcheck(self, mu, kappa, psi):
         if self._validate_params(mu, kappa, psi):
-            self._c = _c_jonespewsey(mu, kappa, psi)
+            self._c = _c_jonespewsey(
+                mu, kappa, psi
+            )  # Precompute the normalizing constant
             return True
         else:
             return False
@@ -911,6 +1028,32 @@ class jonespewsey_gen(rv_continuous):
                 return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
             else:
                 return _kernel_jonespewsey(x, mu, kappa, psi) / self._c
+
+    def pdf(self, x, mu, kappa, psi, *args, **kwargs):
+        r"""
+        Probability density function of the Jones-Pewsey distribution.
+
+        $$
+        f(\theta) = \frac{(\cosh(\kappa \psi) + \sinh(\kappa \psi) \cos(\theta - \mu))^{1/\psi}}{2\pi \cosh(\kappa \pi)}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        kappa : float
+            Concentration parameter, kappa >= 0.
+        psi : float
+            Skewness parameter, -∞ <= psi <= ∞.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, mu, kappa, psi, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, psi):
         def vonmises_pdf(x, mu, kappa, psi, c):
@@ -956,7 +1099,7 @@ def _c_jonespewsey(mu, kappa, psi):
             c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi))[
                 0
             ]
-    return c
+            return c
 
 
 #########################
