@@ -1,6 +1,12 @@
 import numpy as np
 
-from pycircstat2.utils import angrange, angular_distance, data2rad, rad2data, time2float
+from pycircstat2.utils import (
+    angrange,
+    angular_distance,
+    data2rad,
+    rad2data,
+    time2float,
+)
 
 
 def test_data2rad():
@@ -28,11 +34,21 @@ def test_rad2data():
 def test_angrange():
 
     np.testing.assert_almost_equal(np.rad2deg(angrange(rad=np.deg2rad(0))), 0)
-    np.testing.assert_almost_equal(np.rad2deg(angrange(rad=np.deg2rad(90))), 90)
-    np.testing.assert_almost_equal(np.rad2deg(angrange(rad=np.deg2rad(180))), 180)
-    np.testing.assert_almost_equal(np.rad2deg(angrange(rad=np.deg2rad(360))), 0)
-    np.testing.assert_almost_equal(np.rad2deg(angrange(rad=np.deg2rad(361))), 1)
-    np.testing.assert_almost_equal(np.rad2deg(angrange(rad=np.deg2rad(-1))), 359)
+    np.testing.assert_almost_equal(
+        np.rad2deg(angrange(rad=np.deg2rad(90))), 90
+    )
+    np.testing.assert_almost_equal(
+        np.rad2deg(angrange(rad=np.deg2rad(180))), 180
+    )
+    np.testing.assert_almost_equal(
+        np.rad2deg(angrange(rad=np.deg2rad(360))), 0
+    )
+    np.testing.assert_almost_equal(
+        np.rad2deg(angrange(rad=np.deg2rad(361))), 1
+    )
+    np.testing.assert_almost_equal(
+        np.rad2deg(angrange(rad=np.deg2rad(-1))), 359
+    )
 
 
 def test_time2float():
@@ -43,11 +59,20 @@ def test_time2float():
 def test_angular_distance():
 
     np.testing.assert_almost_equal(
-        np.rad2deg(angular_distance(a=np.deg2rad(95), b=np.deg2rad(120))).round(3), 25
+        np.rad2deg(
+            angular_distance(a=np.deg2rad(95), b=np.deg2rad(120))
+        ).round(3),
+        25,
     )
     np.testing.assert_almost_equal(
-        np.rad2deg(angular_distance(a=np.deg2rad(340), b=np.deg2rad(30))).round(3), 50
+        np.rad2deg(
+            angular_distance(a=np.deg2rad(340), b=np.deg2rad(30))
+        ).round(3),
+        50,
     )
     np.testing.assert_almost_equal(
-        np.rad2deg(angular_distance(a=np.deg2rad(190), b=np.deg2rad(5))).round(3), 175
+        np.rad2deg(angular_distance(a=np.deg2rad(190), b=np.deg2rad(5))).round(
+            3
+        ),
+        175,
     )

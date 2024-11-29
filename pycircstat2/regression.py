@@ -52,7 +52,9 @@ class lm:
         self.W = W = np.eye(n) if weights is None else np.diag(weights)
 
         # model degree of freedom
-        self.df_model = self.p - 1 if "Intercept" in self.column_names else self.p
+        self.df_model = (
+            self.p - 1 if "Intercept" in self.column_names else self.p
+        )
 
         # residual degrees of freedom (n - p)
         self.df_residuals = (
@@ -66,11 +68,13 @@ class lm:
         ##############
 
         if method == "nll":
-            bhat, self.sigma, self.XtX, self.Xty, self.loss = self.compute_bhat(
-                X, y, W, "nll"
+            bhat, self.sigma, self.XtX, self.Xty, self.loss = (
+                self.compute_bhat(X, y, W, "nll")
             )
         elif method == "sse":
-            bhat, self.XtX, self.Xty, self.loss = self.compute_bhat(X, y, W, "sse")
+            bhat, self.XtX, self.Xty, self.loss = self.compute_bhat(
+                X, y, W, "sse"
+            )
         else:
             bhat, self.XtX, self.Xty = self.compute_bhat(X, y, W, method)
 
@@ -84,7 +88,9 @@ class lm:
 
         # compute residuals ϵ̂
         residuals = y - yhat
-        self.residuals = pd.DataFrame(residuals[:, None], columns=["residuals"])
+        self.residuals = pd.DataFrame(
+            residuals[:, None], columns=["residuals"]
+        )
 
         # compute residual sum of squares (RSS)
         self.rss = np.squeeze(residuals.T @ residuals)
@@ -103,7 +109,9 @@ class lm:
         se_bhat, V_bhat = self.compute_se_bhat()
         self.V_bhat = V_bhat
         self.se_bhat = pd.DataFrame(
-            se_bhat.reshape(1, -1), columns=self.column_names, index=["Std. Error"]
+            se_bhat.reshape(1, -1),
+            columns=self.column_names,
+            index=["Std. Error"],
         )
 
         # compute confidence interval for β̂
@@ -174,7 +182,10 @@ class lm:
         se_bhat = self.se_bhat.values.T
         bhat = self.bhat.values.T
         ci_bhat = (
-            t.ppf(1 - alpha / 2, self.df_residuals) * se_bhat * np.array([-1, 1]) + bhat
+            t.ppf(1 - alpha / 2, self.df_residuals)
+            * se_bhat
+            * np.array([-1, 1])
+            + bhat
         )
         ci_bhat = pd.DataFrame(
             ci_bhat,
@@ -195,7 +206,9 @@ class lm:
                 residuals, size=len(residuals), replace=True
             )
             y_star = X @ bhat + residuals_star[:, None]
-            bhat_star = self.compute_bhat(X, y_star.flatten(), W, return_ss=False)
+            bhat_star = self.compute_bhat(
+                X, y_star.flatten(), W, return_ss=False
+            )
             bhat_stars[i] = bhat_star
 
         ci_bhat_bootstrap = np.quantile(
@@ -206,7 +219,9 @@ class lm:
             index=self.column_names,
             columns=[f"CI[{alpha/2*100}%]", f"CI[{100-alpha/2*100}%]"],
         )
-        self.bhat_bootstrap = pd.DataFrame(bhat_stars, columns=self.column_names)
+        self.bhat_bootstrap = pd.DataFrame(
+            bhat_stars, columns=self.column_names
+        )
 
         return ci_bhat_bootstrap
 
@@ -291,14 +306,18 @@ class lm:
 
         t_values = self.bhat.values / self.se_bhat.values
 
-        return pd.DataFrame(t_values, columns=self.column_names, index=["t values"])
+        return pd.DataFrame(
+            t_values, columns=self.column_names, index=["t values"]
+        )
 
     def compute_p_values(self):
         # compute p values of model coefficients with scipy.stats.t.sf
         # H0: βi==0
         # H1: βi!=0
         p_values = 2 * t.sf(np.abs(self.t_values.values), self.df_residuals)
-        return pd.DataFrame(p_values, columns=self.column_names, index=["Pr(>|t|)"])
+        return pd.DataFrame(
+            p_values, columns=self.column_names, index=["Pr(>|t|)"]
+        )
 
     def compute_goodness_of_fit(self):
 
@@ -317,16 +336,21 @@ class lm:
             # Eq: r2 = 1 - RSS / TSS = 1 -  sum((ŷ - yi)**2) / sum((y)**2)
             r_squared = (1 - self.rss / tss).squeeze()
             # Eq: r2adj = 1 - (1 - r2) * n / df_residuals
-            r_squared_adjusted = 1 - (1 - r_squared) * self.n / (self.df_residuals)
+            r_squared_adjusted = 1 - (1 - r_squared) * self.n / (
+                self.df_residuals
+            )
 
         return tss, r_squared, r_squared_adjusted
 
     def compute_fstats(self):
         if self.df_model != 0:
             fstats = np.squeeze(
-                ((self.tss - self.rss) / self.df_model) / (self.rss / self.df_residuals)
+                ((self.tss - self.rss) / self.df_model)
+                / (self.rss / self.df_residuals)
             )
-            f_p_value = f.sf(fstats, self.df_model, self.df_residuals).squeeze()
+            f_p_value = f.sf(
+                fstats, self.df_model, self.df_residuals
+            ).squeeze()
         else:
             fstats, f_p_value = None, None
         return fstats, f_p_value
@@ -357,7 +381,13 @@ class lm:
 
         sig = significance_code(self.p_values.values.T)
         res = pd.concat(
-            [self.bhat, self.se_bhat, self.ci_bhat.T, self.t_values, self.p_values],
+            [
+                self.bhat,
+                self.se_bhat,
+                self.ci_bhat.T,
+                self.t_values,
+                self.p_values,
+            ],
             axis=0,
         ).T.round(digits)
 
@@ -366,7 +396,9 @@ class lm:
 
         docstring += res.to_string()
         docstring += "\n---"
-        docstring += "\nSignif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1"
+        docstring += (
+            "\nSignif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1"
+        )
 
         docstring += f"\n\nn = {self.n}, p = {self.p}, Residual SE = {np.sqrt(self.sigma_squared):.3f} on {self.df_residuals} DF\n"
         docstring += f"R-Squared = {self.r_squared:.4f}, adjusted R-Squared = {self.r_squared_adjusted:.4f}\n"
@@ -378,13 +410,15 @@ class lm:
 
         if cor is True:
 
-            docstring += f"\n\nCorrelation of Coefficients:\n"
+            docstring += "\n\nCorrelation of Coefficients:\n"
             if "Intercept" in self.column_names:
                 docstring += (
                     self.X.drop("Intercept", axis=1)
                     .corr()
                     .to_string(
-                        formatters={col: "{:.2f}".format for col in self.X.columns}
+                        formatters={
+                            col: "{:.2f}".format for col in self.X.columns
+                        }
                     )
                 )
             else:
@@ -396,7 +430,6 @@ class lm:
 
 
 class LCRegression(lm):
-
     """Linear~Circular Regression.
 
     Basically, it's fitting a circle on the surface of a cylinder.
@@ -416,13 +449,18 @@ class LCRegression(lm):
         method: str = "qr",
     ):
 
-        super().__init__(formula=formula, data=data, weights=weights, method=method)
+        super().__init__(
+            formula=formula, data=data, weights=weights, method=method
+        )
 
     def plot(
-        self, Xnew=None, ax=None, interval=False, cylinder=False, feature_name="θ"
+        self,
+        Xnew=None,
+        ax=None,
+        interval=False,
+        cylinder=False,
+        feature_name="θ",
     ):
-
-        from mpl_toolkits.mplot3d import Axes3D
 
         if ax is None:
             fig = plt.figure()
@@ -565,7 +603,6 @@ def _qr(X: np.array, y: np.array, W: np.array, return_ss: bool = True):
 
 
 def _nll(X, y):
-
     """
     Negative log-likelihood.
     """
@@ -588,7 +625,6 @@ def _nll(X, y):
 
 
 def _sse(X, y):
-
     """
     Sum squared error.
     """
@@ -617,9 +653,9 @@ def AIC(*ms):
     df = [m.p + 1 for m in ms]
     formuli = [m.formula for m in ms]
 
-    df = pd.DataFrame.from_dict({"formula": formuli, "df": df, "AIC": aic}).set_index(
-        "formula"
-    )
+    df = pd.DataFrame.from_dict(
+        {"formula": formuli, "df": df, "AIC": aic}
+    ).set_index("formula")
 
     print(df.to_string(formatters={"AIC": "{:.2f}".format}))
 

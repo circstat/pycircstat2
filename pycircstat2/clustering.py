@@ -22,7 +22,9 @@ class MoVM:
         random_seed: int = 2046,
         threshold: float = 1e-16,
     ):
-        self.burnin = burnin  # wait untill burinin step of iterations for convergence
+        self.burnin = (
+            burnin  # wait untill burinin step of iterations for convergence
+        )
         self.threshold = threshold  # convergence threshold
         self.n_clusters = n_clusters  # number of clusters to estimate
         self.n_iters = n_iters  # maximum number of iterations for EM
@@ -37,8 +39,12 @@ class MoVM:
         n_clusters_init: int,
     ):
         n = len(x)  # number of samples
-        p = np.ones(n_clusters_init) / n_clusters_init  # initial cluster probability
-        z = np.random.choice(np.arange(n_clusters_init), size=n)  # initial labels
+        p = (
+            np.ones(n_clusters_init) / n_clusters_init
+        )  # initial cluster probability
+        z = np.random.choice(
+            np.arange(n_clusters_init), size=n
+        )  # initial labels
         m, r = map(
             np.array,
             zip(*[circ_mean_and_r(x[z == i]) for i in range(n_clusters_init)]),
@@ -73,7 +79,10 @@ class MoVM:
             gamma_normed = gamma / np.sum(gamma, axis=0)
 
             # M step
-            p = np.sum(gamma_normed, axis=1) / np.sum(gamma_normed, axis=1).sum()
+            p = (
+                np.sum(gamma_normed, axis=1)
+                / np.sum(gamma_normed, axis=1).sum()
+            )
             m, r = map(
                 np.array,
                 zip(
@@ -83,7 +92,9 @@ class MoVM:
                     ]
                 ),
             )
-            kappa = np.array([circ_kappa(r=r[i]) for i in range(self.n_clusters)])
+            kappa = np.array(
+                [circ_kappa(r=r[i]) for i in range(self.n_clusters)]
+            )
 
             nLL = self.compute_nLL(gamma)
             self.nLL[i] = nLL
@@ -105,7 +116,9 @@ class MoVM:
                 break
         else:
             if verbose:
-                print(f"Reached max iter {self.n_iters}. Final nLL = {nLL:.3f}\n")
+                print(
+                    f"Reached max iter {self.n_iters}. Final nLL = {nLL:.3f}\n"
+                )
 
         # save results
         self.m = m  # cluster means
@@ -166,6 +179,8 @@ class MoVM:
     def predict(self, x: np.ndarray):
         x_rad = x if self.unit == "radian" else data2rad(x, self.n_intervals)
 
-        gamma = self.compute_gamma(x_rad=x_rad, p=self.p, m=self.m, kappa=self.kappa)
+        gamma = self.compute_gamma(
+            x_rad=x_rad, p=self.p, m=self.m, kappa=self.kappa
+        )
 
         return gamma.argmax(axis=0)

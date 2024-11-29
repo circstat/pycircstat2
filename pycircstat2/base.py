@@ -108,10 +108,16 @@ class Circular:
 
         self.n_clusters_max = n_clusters_max
         self.kwargs_median = kwargs_median = {
-            **{"method": "deviation", "return_average": True, "average_method": "all"},
+            **{
+                "method": "deviation",
+                "return_average": True,
+                "average_method": "all",
+            },
             **kwargs.pop("kwargs_median", {}),
         }
-        self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop("kwargs_mean_ci", None)
+        self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop(
+            "kwargs_mean_ci", None
+        )
 
         # data
         self.data = data = np.array(data) if isinstance(data, list) else data
@@ -124,7 +130,9 @@ class Circular:
                 self.grouped = grouped = False
                 self.bin_size = bin_size = 0.0
             else:  # grouped data
-                assert len(w) == len(alpha), "`w` and `data` must be the same length."
+                assert len(w) == len(
+                    alpha
+                ), "`w` and `data` must be the same length."
                 assert len(w) == len(
                     np.arange(0, 2 * np.pi, 2 * np.pi / len(w))
                 ), "Grouped data should included empty bins."
@@ -143,7 +151,9 @@ class Circular:
             self.w = w
             self.alpha_lb = alpha_lb = alpha[:-1]  # bin lower bound
             self.alpha_ub = alpha_ub = alpha[1:]  # bin upper bound
-            self.alpha = alpha = 0.5 * (alpha[:-1] + alpha[1:])  # get bin centers
+            self.alpha = alpha = 0.5 * (
+                alpha[:-1] + alpha[1:]
+            )  # get bin centers
             self.grouped = grouped = True
             self.bin_size = bin_size = np.diff(alpha).min()
 
@@ -154,7 +164,9 @@ class Circular:
         self.mean, self.r = (mean, r) = circ_mean_and_r(alpha=alpha, w=w)
 
         # z-score and p-value from rayleigh test for angular mean
-        self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(n=n, r=r)
+        self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(
+            n=n, r=r
+        )
 
         # Rayleigh's R
         self.R = n * r
@@ -229,13 +241,18 @@ class Circular:
         if n_clusters_max > 1:
             for k in range(1, n_clusters_max + 1):
                 m = MoVM(
-                    n_clusters=k, n_intervals=n_intervals, unit="radian", random_seed=0
+                    n_clusters=k,
+                    n_intervals=n_intervals,
+                    unit="radian",
+                    random_seed=0,
                 )
                 m.fit(np.repeat(alpha, w))
                 self.mixtures.append(m)
             self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
             if not np.isnan(self.mixtures_BIC).all():
-                self.mixture_opt = self.mixtures[np.nanargmin(self.mixtures_BIC)]
+                self.mixture_opt = self.mixtures[
+                    np.nanargmin(self.mixtures_BIC)
+                ]
             else:
                 self.mixture_opt = None
 

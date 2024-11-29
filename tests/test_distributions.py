@@ -17,7 +17,9 @@ from pycircstat2.distributions import (
 
 def test_circularuniform():
 
-    np.testing.assert_approx_equal(circularuniform.cdf(2), 0.3183, significant=5)
+    np.testing.assert_approx_equal(
+        circularuniform.cdf(2), 0.3183, significant=5
+    )
     np.testing.assert_approx_equal(circularuniform.ppf(1 / np.pi), 2)
 
 

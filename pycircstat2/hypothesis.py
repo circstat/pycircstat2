@@ -4,12 +4,18 @@ from typing import Union
 import numpy as np
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
-from .descriptive import circ_kappa, circ_mean_and_r, circ_mean_ci, circ_median, circ_r
+from .descriptive import (
+    circ_kappa,
+    circ_mean_and_r,
+    circ_mean_ci,
+    circ_median,
+    circ_r,
+)
 from .utils import angrange, angular_distance, significance_code
 
-#####################
-## One-Sample Test ##
-#####################
+###################
+# One-Sample Test #
+###################
 
 
 def rayleigh_test(
@@ -73,7 +79,9 @@ def rayleigh_test(
 
     R = n * r
     z = R**2 / n  # eq(27.2)
-    pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
+    pval = np.exp(
+        np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n)
+    )  # eq(27.4)
 
     if verbose:
         print("Rayleigh's Test of Uniformity")
@@ -207,8 +215,8 @@ def V_test(
     if verbose:
         print("Modified Rayleigh's Test of Uniformity")
         print("--------------------------------------")
-        print(f"H0: ρ = 0")
-        print(f"HA: ρ ≠ 0 and μ = {angle:.5f} rad")
+        print("H0: ρ = 0")
+        print("HA: ρ ≠ 0 and μ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {V:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -352,8 +360,8 @@ def omnibus_test(
     if verbose:
         print('Hodges-Ajne ("omnibus") Test for Uniformity')
         print("-------------------------------------------")
-        print(f"H0: uniform")
-        print(f"HA: not unifrom")
+        print("H0: uniform")
+        print("HA: not unifrom")
         print("")
         print(f"Test Statistics: {A:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -404,7 +412,7 @@ def batschelet_test(
     if verbose:
         print("Batschelet Test for Uniformity")
         print("------------------------------")
-        print(f"H0: uniform")
+        print("H0: uniform")
         print(f"HA: not unifrom but concentrated around θ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {C}")
@@ -517,8 +525,8 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
     if verbose:
         print("The Watson-Williams Test for multiple samples")
         print("---------------------------------------------")
-        print(f"H0: all samples are from populations with the same angle.")
-        print(f"HA: all samples are not from populations with the same angle.")
+        print("H0: all samples are from populations with the same angle.")
+        print("HA: all samples are not from populations with the same angle.")
         print("")
         print(f"Test Statistics: {F:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -569,7 +577,9 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
             [np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)]
         )
         indices = np.hstack([0, indices, len(alpha)])
-        freq_cumsum = rankdata(np.repeat(circ.alpha, circ.w), method="max") / circ.n
+        freq_cumsum = (
+            rankdata(np.repeat(circ.alpha, circ.w), method="max") / circ.n
+        )
         freq_cumsum = np.hstack([0, freq_cumsum])
 
         tiles = np.diff(indices)
@@ -596,8 +606,10 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
     if verbose:
         print("Watson's U2 Test for two samples")
         print("---------------------------------------------")
-        print(f"H0: The two samples are from populations with the same angle.")
-        print(f"HA: The two samples are not from populations with the same angle.")
+        print("H0: The two samples are from populations with the same angle.")
+        print(
+            "HA: The two samples are not from populations with the same angle."
+        )
         print("")
         print(f"Test Statistics: {U2:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -641,7 +653,12 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
 
     def get_circrank(alpha, circ, N):
         rank_of_direction = (
-            np.squeeze([np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)])
+            np.squeeze(
+                [
+                    np.where(alpha == a)[0]
+                    for a in np.repeat(circ.alpha, circ.w)
+                ]
+            )
             + 1
         )
         circ_rank = 2 * np.pi / N * rank_of_direction
@@ -675,8 +692,8 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
     if verbose:
         print("The Wheeler and Watson Two/Multi-Sample Test")
         print("---------------------------------------------")
-        print(f"H0: All samples are from populations with the same angle.")
-        print(f"HA: All samples are not from populations with the same angle.")
+        print("H0: All samples are from populations with the same angle.")
+        print("HA: All samples are not from populations with the same angle.")
         print("")
         print(f"Test Statistics: {W:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -717,7 +734,9 @@ def wallraff_test(circs: list, angle=float, verbose: bool = False):
 
     angles = np.ones(len(circs)) * angle if isinstance(angle, float) else angle
     ns = [c.n for c in circs]
-    ad = [angular_distance(a=c.alpha, b=angles[i]) for (i, c) in enumerate(circs)]
+    ad = [
+        angular_distance(a=c.alpha, b=angles[i]) for (i, c) in enumerate(circs)
+    ]
 
     rs = rankdata(np.hstack(ad))
 
@@ -748,7 +767,10 @@ def wallraff_test(circs: list, angle=float, verbose: bool = False):
 
 
 def kuiper_test(
-    alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046, verbose: bool = False
+    alpha: np.ndarray,
+    n_simulation: int = 9999,
+    seed: int = 2046,
+    verbose: bool = False,
 ) -> tuple:
     """
     Kuiper's test for Circular Uniformity.
@@ -810,7 +832,9 @@ def kuiper_test(
         pval = np.sum(b1 - b2)
     else:
         np.random.seed(seed)
-        x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
+        x = np.sort(
+            np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0
+        )
         Vs = np.array(([compute_V(x[:, i])[0] for i in range(n_simulation)]))
         pval = (np.sum(Vs > Vo) + 1) / (n_simulation + 1)
 
@@ -825,7 +849,10 @@ def kuiper_test(
 
 
 def watson_test(
-    alpha: np.ndarray, n_simulation: int = 9999, seed: int = 2046, verbose: bool = False
+    alpha: np.ndarray,
+    n_simulation: int = 9999,
+    seed: int = 2046,
+    verbose: bool = False,
 ) -> tuple:
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
@@ -875,10 +902,12 @@ def watson_test(
         i = np.arange(1, n + 1)
 
         u = alpha / 2 / np.pi
-        u2 = u**2
-        iu = i * u
+        # u2 = u**2
+        # iu = i * u
 
-        U2 = np.sum(((u - (i - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (12 * n)
+        U2 = np.sum(((u - (i - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (
+            12 * n
+        )
         return U2
 
     n = len(alpha)
@@ -889,7 +918,9 @@ def watson_test(
         pval = 2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o))
     else:
         np.random.seed(seed)
-        x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
+        x = np.sort(
+            np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0
+        )
         U2s = np.array(([compute_U2(x[:, i]) for i in range(n_simulation)]))
         pval = (np.sum(U2s > U2o) + 1) / (n_simulation + 1)
 
@@ -971,7 +1002,9 @@ def rao_spacing_test(
             [
                 compute_U(
                     angrange(
-                        np.floor(np.random.uniform(low=0, high=2 * np.pi, size=n))
+                        np.floor(
+                            np.random.uniform(low=0, high=2 * np.pi, size=n)
+                        )
                         * m
                         / (2 * np.pi)
                         * 2

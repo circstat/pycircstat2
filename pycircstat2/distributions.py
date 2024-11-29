@@ -38,9 +38,9 @@ OPTIMIZERS = [
     "trust-krylov",
 ]
 
-###########################
-## Symmetric Distribtion ##
-###########################
+############################
+## Symmetric Distribtions ##
+############################
 
 
 class circularuniform_gen(rv_continuous):
@@ -160,7 +160,9 @@ class wrapnorm_gen(rv_continuous):
         return (
             1
             + 2
-            * np.sum([rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0)
+            * np.sum(
+                [rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0
+            )
         ) / (2 * np.pi)
 
     def _cdf(self, x, mu, rho):
@@ -200,7 +202,9 @@ class wrapcauchy_gen(rv_continuous):
         return 0 <= mu <= np.pi * 2 and 0 < rho <= 1
 
     def _pdf(self, x, mu, rho):
-        return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
+        return (1 - rho**2) / (
+            2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu))
+        )
 
     def pdf(self, x, *args, **kwargs):
         """
@@ -303,7 +307,9 @@ class wrapcauchy_gen(rv_continuous):
             from scipy.stats import cauchy
 
             scale = -np.log(rho)
-            samples = cauchy.rvs(loc=mu, scale=scale, size=size, random_state=rng)
+            samples = cauchy.rvs(
+                loc=mu, scale=scale, size=size, random_state=rng
+            )
             return np.mod(samples, 2 * np.pi)
 
     def fit(self, data, method="analytical", *args, **kwargs):
@@ -368,7 +374,8 @@ class wrapcauchy_gen(rv_continuous):
             return mu, rho
         else:
             raise ValueError(
-                "Invalid method. Supported methods are 'analytical' and 'numerical'."
+                "Invalid method. Supported methods are 'analytical' and "
+                "'numerical'."
             )
 
 
@@ -459,7 +466,8 @@ class vonmises_gen(rv_continuous):
 
     def logpdf(self, x, *args, **kwargs):
         """
-        Logarithm of the probability density function of the Von Mises distribution.
+        Logarithm of the probability density function of the Von Mises
+        distribution.
 
         Parameters
         ----------
@@ -780,7 +788,11 @@ class jonespewsey_gen(rv_continuous):
     """
 
     def _validate_params(self, mu, kappa, psi):
-        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
+        return (
+            (0 <= mu <= np.pi * 2)
+            and (kappa >= 0)
+            and (-np.inf <= psi <= np.inf)
+        )
 
     def _argcheck(self, mu, kappa, psi):
         if self._validate_params(mu, kappa, psi):
@@ -795,7 +807,11 @@ class jonespewsey_gen(rv_continuous):
             return 1 / (2 * np.pi)
         else:
             if np.isclose(np.abs(psi), 0).all():
-                return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
+                return (
+                    1
+                    / (2 * np.pi * i0(kappa))
+                    * np.exp(kappa * np.cos(x - mu))
+                )
             else:
                 return _kernel_jonespewsey(x, mu, kappa, psi) / self._c
 
@@ -840,9 +856,9 @@ def _c_jonespewsey(mu, kappa, psi):
         if np.isclose(np.abs(psi), 0).all():
             return 1 / (2 * np.pi * i0(kappa))
         else:
-            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi))[
-                0
-            ]
+            c = quad_vec(
+                _kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi)
+            )[0]
     return c
 
 
@@ -968,7 +984,9 @@ class jonespewsey_sineskewed_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, psi, lmbd)
 
 
-jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed")
+jonespewsey_sineskewed = jonespewsey_sineskewed_gen(
+    name="jonespewsey_sineskewed"
+)
 
 ##########################
 ## Asymmetric Extention ##
@@ -1033,7 +1051,10 @@ def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
 
 def _c_jonespewsey_asymext(xi, kappa, psi, nu):
     c = quad_vec(
-        _kernel_jonespewsey_asymext, a=-np.pi, b=np.pi, args=(xi, kappa, psi, nu)
+        _kernel_jonespewsey_asymext,
+        a=-np.pi,
+        b=np.pi,
+        args=(xi, kappa, psi, nu),
     )[0]
     return c
 
@@ -1083,7 +1104,9 @@ class inverse_batschelet_gen(rv_continuous):
         if np.isclose(lmbd, -1).all():
             return self._c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
-            return self._c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
+            return self._c * np.exp(
+                kappa * np.cos(self.con1 * arg1 + self.con2 * arg2)
+            )
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
         @np.vectorize

@@ -64,7 +64,10 @@ def aacorr(
         else:
             # jackknife test (Fingleton, 1989)
             n = len(a)
-            raas = [_corr(np.delete(a, i), np.delete(b, i), strict) for i in range(n)]
+            raas = [
+                _corr(np.delete(a, i), np.delete(b, i), strict)
+                for i in range(n)
+            ]
             m_raas = np.mean(raas)
             s2_raas = np.var(raas, ddof=1)
             z = norm.ppf(0.975)
@@ -194,7 +197,9 @@ def _aacorr_np(
     r1 = (
         np.sum(np.cos(C * rank_diff)) ** 2 + np.sum(np.sin(C * rank_diff)) ** 2
     ) / n**2
-    r2 = (np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2) / n**2
+    r2 = (
+        np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2
+    ) / n**2
 
     return r1 - r2
 

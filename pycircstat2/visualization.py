@@ -3,7 +3,6 @@ import numpy as np
 from matplotlib import ticker
 
 from pycircstat2.descriptive import (
-    circ_mean,
     compute_smooth_params,
     nonparametric_density_estimation,
 )
@@ -26,7 +25,7 @@ def circ_plot(
     bins = kwargs.pop("bins", 12)
 
     plot_counts = kwargs.pop("plot_counts", False)
-    plot_rlabel = kwargs.pop("plot_rlabel", False)
+    # plot_rlabel = kwargs.pop("plot_rlabel", False)
     plot_grid = kwargs.pop("plot_grid", True)
     plot_spine = kwargs.pop("plot_spine", False)
     plot_axis = kwargs.pop("plot_axis", True)
@@ -70,7 +69,9 @@ def circ_plot(
     # check axes
     if ax is None:
         fig, ax = plt.subplots(
-            figsize=figsize, subplot_kw={"projection": projection}, layout="constrained"
+            figsize=figsize,
+            subplot_kw={"projection": projection},
+            layout="constrained",
         )
 
     # plot
@@ -83,18 +84,24 @@ def circ_plot(
         if outward:
             radii = np.hstack(
                 [
-                    r_max_scatter + 0.05 + np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
+                    r_max_scatter
+                    + 0.05
+                    + np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
                     for f in counts
                 ]
             )
         else:
             radii = np.hstack(
                 [
-                    r_max_scatter - 0.05 - np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
+                    r_max_scatter
+                    - 0.05
+                    - np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
                     for f in counts
                 ]
             )
-        ax.scatter(alpha, radii, color=marker_color, marker=marker, s=marker_size)
+        ax.scatter(
+            alpha, radii, color=marker_color, marker=marker, s=marker_size
+        )
 
         # plot density
         if plot_density:  # and not np.isclose(circ_data.r, 0):
@@ -173,10 +180,10 @@ def circ_plot(
 
                 angle = rotation = beta[i].round(3)
                 if angle >= np.pi / 2 and angle < 3 * np.pi / 2:
-                    alignment = "right"
+                    # alignment = "right"
                     rotation = rotation + np.pi
-                else:
-                    alignment = "left"
+                # else:
+                #     alignment = "left"
 
                 if v != 0:
                     ax.text(
@@ -220,7 +227,9 @@ def circ_plot(
         if circ_data.mean_lb < circ_data.mean_ub:
             x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub, num=50)
         else:
-            x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub + 2 * np.pi, num=50)
+            x1 = np.linspace(
+                circ_data.mean_lb, circ_data.mean_ub + 2 * np.pi, num=50
+            )
 
         # plot arc
         ax.plot(

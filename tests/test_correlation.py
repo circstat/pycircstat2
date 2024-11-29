@@ -13,7 +13,7 @@ def test_aacorr():
 
     raa, reject = aacorr(a, b, test=True, method="fl")
 
-    assert reject == True
+    assert reject
     np.testing.assert_approx_equal(raa, 0.8945, significant=4)
 
     # Example 27.22 (Zar, 2010)
@@ -21,7 +21,7 @@ def test_aacorr():
     a = Circular(data=d_ex22_ch27["evening"].values)
     b = Circular(data=d_ex22_ch27["morning"].values)
     raa, reject = aacorr(a, b, test=True, method="nonparametric")
-    assert reject == False
+    assert not reject
 
 
 def test_alcorr():

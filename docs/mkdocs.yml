@@ -6,8 +6,7 @@ theme:
         - content.code.copy
         - content.tabs.link
         - content.mathjax
-    toc:
-        title: true
+
 plugins:
     - search
     - mkdocstrings:
@@ -16,6 +15,8 @@ plugins:
                   options:
                       show_source: true
                       docstring_style: "numpy"
+                      show_symbol_type_toc: true
+                      show_root_toc_entry: true
 
 nav:
     - Home: index.md
@@ -29,7 +30,8 @@ nav:
 markdown_extensions:
     - pymdownx.arithmatex:
           generic: true
-
+    - toc:
+          toc_depth: 2
 extra_javascript:
     - javascripts/mathjax.js
     - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
