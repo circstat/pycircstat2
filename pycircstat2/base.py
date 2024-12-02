@@ -19,63 +19,128 @@ from .hypothesis import rayleigh_test
 from .utils import data2rad, rad2data, significance_code
 from .visualization import circ_plot
 
-__names__ = ["Circular"]
-
-# Proposal: Automatic circular data analaysis pipeline
-#
-# Circstat(data)
-# |-> MoVM (BIC-based clustering)
-# |     |-> Single Cluster
-# |     |       | -> Cicular(data)
-# |     |-> Multiple Clusters
-# |     |       | -> Two Clusters: if means are 180 degree seperated
-# |     |       |       | -> Axial(data) (TODO)
-# |     |       | -> Multiple Clusters:
-# |     |       |       | -> list of Circular(data_cluster)
-# |     |       |               | -> MoMeans(list of Circular)
-# |     |       |       | -> Circular(data) (aggregate no matter what)
-
-
-class CircStat:
-    """
-    An automatic pipeline for circular data analysis.
-    """
-
-    pass
+__names__ = ["Circular", "Axial"]
 
 
 class Circular:
-    """
-    An Object to hold one set of circular data.
-    Simple descriptive statistics and hypothesis testing were
-    computed automatically when data are loaded.
+    r"""
+    Circular Data Analysis Object.
+
+    This class encapsulates circular data and provides tools for descriptive statistics,
+    hypothesis testing, and visualization. It automatically computes key circular
+    statistics and tests when the data are loaded.
 
     Parameters
     ----------
-    data: np.array (n, )
-        Raw data.
+    data : array-like (n,)
+        The raw circular data, typically in degrees, radians, or other angular units.
 
-    w: np.array (n, ) or None
-        Frequencies, or weights. Default is None.
+    w : array-like (n,) or None, optional
+        Frequencies or weights for the data points. If None, all data points are treated equally.
+        Default is None.
 
-    bins: int, np.array (n+1, ) or None
-        Bin edges for binning raw data.
+    bins : int, array-like (n+1,) or None, optional
+        Number of bins or bin edges to group the data. If None, the data is not binned.
+        Default is None.
 
-    unit: str
-        Unit of the data.
+    unit : str, optional
+        Unit of the input data. Must be one of {"degree", "radian", "hour"}.
+        Default is "degree".
 
-    k: int
-        Number of intervel. For converting raw data
-        into radian `alpha = data2rad(data, k)`.
+    n_intervals : int, float, or None, optional
+        Number of intervals in a full cycle. If None, the value is inferred based on the unit:
 
-    kwargs_median: dict
-        A dictionary with additional keyword argument
-        for computing median.
-        `median = circ_median(alpha, w, kwargs_median)`
+        - 360 for degrees,
+        - \(2\pi\) for radians,
+        - 24 for hours.
+
+        Custom intervals require explicit input.
+        Default is None.
+
+    n_clusters_max : int, optional
+        Maximum number of clusters to test for a mixture of von Mises distributions.
+        Default is 1.
+
+    kwargs : dict, optional
+        Additional keyword arguments to customize the computation of statistics such as the median.
+
+    Attributes
+    ----------
+    n : int
+        Total sample size, including weights.
+
+    mean : float
+        Angular mean in radians.
+
+    mean_ci : tuple of float
+        Confidence interval for the angular mean, if applicable.
+
+    median : float
+        Angular median in radians.
+
+    median_ci : tuple of float
+        Confidence interval for the angular median, if computed.
+
+    r : float
+        Resultant vector length, measuring data concentration (0 to 1).
+
+    kappa : float
+        Concentration parameter, measuring data sharpness.
+
+    s : float
+        Angular deviation, measuring data dispersion.
+
+    skewness : float
+        Circular skewness of the data.
+
+    kurtosis : float
+        Circular kurtosis of the data.
+
+    R : float
+        Rayleigh's R statistic, derived from the resultant vector length.
+
+    mixtures : list
+        Mixture models of von Mises distributions fitted to the data (if `n_clusters_max > 1`).
+
+    Methods
+    -------
+    summary()
+        Returns a detailed summary of the computed statistics.
+
+    plot(ax=None, kind=None, **kwargs)
+        Visualizes the circular data, including histograms and other representations.
+
+    Notes
+    -----
+    - Angular data is automatically converted to radians for internal computations.
+    - Data can be grouped or ungrouped. Ungrouped data is handled by assigning equal weights.
+    - The Rayleigh test for angular mean is computed, with p-values indicating significance.
+    - Confidence intervals for the angular mean are approximated using either bootstrap
+      or dispersion methods, depending on the sample size and significance.
 
     References
     ----------
-    - Chapter 26 of Biostatistical Analysis, Fifth Edition, Jerrold H. Zar. (2010)
+    - Zar, J. H. (2010). Biostatistical Analysis (5th Edition). Pearson.
+    - Fisher, N. I. (1995). Statistical Analysis of Circular Data. Cambridge University Press.
+
+    Examples
+    --------
+    1. Basic Usage:
+
+        ```
+        data = [30, 60, 90, 120, 150]
+        circ = Circular(data, unit="degree")
+        print(circ.summary())
+        ```
+
+    2. Grouped Data:
+
+        ```
+        data = [0, 30, 60, 90]
+        weights = [1, 2, 3, 4]
+        circ = Circular(data, w=weights, unit="degree")
+        print(circ.summary())
+        ```
     """
 
     def __init__(
@@ -115,9 +180,7 @@ class Circular:
             },
             **kwargs.pop("kwargs_median", {}),
         }
-        self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop(
-            "kwargs_mean_ci", None
-        )
+        self.kwargs_mean_ci = kwargs_mean_ci = kwargs.pop("kwargs_mean_ci", None)
 
         # data
         self.data = data = np.array(data) if isinstance(data, list) else data
@@ -130,9 +193,7 @@ class Circular:
                 self.grouped = grouped = False
                 self.bin_size = bin_size = 0.0
             else:  # grouped data
-                assert len(w) == len(
-                    alpha
-                ), "`w` and `data` must be the same length."
+                assert len(w) == len(alpha), "`w` and `data` must be the same length."
                 assert len(w) == len(
                     np.arange(0, 2 * np.pi, 2 * np.pi / len(w))
                 ), "Grouped data should included empty bins."
@@ -151,9 +212,7 @@ class Circular:
             self.w = w
             self.alpha_lb = alpha_lb = alpha[:-1]  # bin lower bound
             self.alpha_ub = alpha_ub = alpha[1:]  # bin upper bound
-            self.alpha = alpha = 0.5 * (
-                alpha[:-1] + alpha[1:]
-            )  # get bin centers
+            self.alpha = alpha = 0.5 * (alpha[:-1] + alpha[1:])  # get bin centers
             self.grouped = grouped = True
             self.bin_size = bin_size = np.diff(alpha).min()
 
@@ -164,9 +223,7 @@ class Circular:
         self.mean, self.r = (mean, r) = circ_mean_and_r(alpha=alpha, w=w)
 
         # z-score and p-value from rayleigh test for angular mean
-        self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(
-            n=n, r=r
-        )
+        self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(n=n, r=r)
 
         # Rayleigh's R
         self.R = n * r
@@ -250,9 +307,7 @@ class Circular:
                 self.mixtures.append(m)
             self.mixtures_BIC = [m.compute_BIC() for m in self.mixtures]
             if not np.isnan(self.mixtures_BIC).all():
-                self.mixture_opt = self.mixtures[
-                    np.nanargmin(self.mixtures_BIC)
-                ]
+                self.mixture_opt = self.mixtures[np.nanargmin(self.mixtures_BIC)]
             else:
                 self.mixture_opt = None
 
@@ -312,13 +367,139 @@ class Circular:
         return self.__repr__()
 
     def summary(self):
-        """
-        Summary of basis statistcs.
+        r"""
+        Summary of basic statistics for circular data.
+
+        This method generates a textual summary of the key descriptive and inferential
+        statistics computed for the circular data. It provides information about
+        the data type, concentration, dispersion, and more.
+
+        The summary includes the following components:
+
+        1. **Grouping**:
+
+            Indicates whether the data is grouped (binned) or ungrouped.
+
+        2. **Unimodality**:
+
+            For models with mixtures of von Mises distributions, it specifies whether
+        the data is unimodal or multimodal, along with the number of clusters if applicable.
+
+        3. **Data Characteristics**:
+
+            - The unit of measurement (e.g., degrees, radians, hours).
+            - Total sample size, including weights if provided.
+
+        4. **Angular Mean**:
+
+            - The angular mean, with its corresponding p-value from the Rayleigh test.
+            - The confidence interval (CI) for the angular mean, if available.
+
+        5. **Angular Median**:
+
+            - The angular median, representing the central tendency.
+            - The confidence interval (CI) for the angular median, if applicable.
+
+        6. **Measures of Dispersion**:
+
+            - Angular deviation (\(s\)): A measure of spread in circular data.
+            - Circular standard deviation (\(s_0\)): An alternative dispersion measure.
+
+        7. **Measures of Concentration**:
+
+            - Resultant vector length (\(r\)): A measure of data concentration, ranging from 0 (uniform) to 1 (highly concentrated).
+            - Concentration parameter (\(\kappa\)): Indicates sharpness or clustering of the data.
+
+        8. **Higher-Order Statistics**:
+
+            - Circular skewness: A measure of asymmetry.
+            - Circular kurtosis: A measure of peakedness or flatness relative to a uniform distribution.
+
+        9. **Significance Codes**:
+
+            - A guide to interpret the p-values of statistical tests.
+
+        10. **Methods**:
+
+            - The method used for calculating the angular median.
+            - The method used for estimating confidence intervals for the angular mean.
         """
 
         return self.__repr__()
 
     def plot(self, ax=None, kind=None, **kwargs):
+        """
+        Visualize circular data.
+
+        This method provides various visualization options for circular data, including scatter
+        plots, density plots, and rose diagrams. It is a wrapper around the `circ_plot` function.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes._axes.Axes, optional
+            The matplotlib Axes object where the plot will be drawn. If None, a new Axes object
+            is created. Default is None.
+
+        kind : str or None, optional
+            Deprecated. Use `kwargs` for customizing specific plot types instead. Default is None.
+
+        **kwargs : dict, optional
+            Additional parameters for customizing the plot. Examples include:
+
+            - `outward` (bool): Whether scatter points radiate outward. Default is True.
+            - `figsize` (tuple): Size of the figure. Default is (5, 5).
+            - `projection` (str): Projection type, typically "polar". Default is "polar".
+            - `marker` (str): Marker style for scatter points. Default is "o".
+            - `marker_color` (str): Color of scatter points. Default is "black".
+            - `marker_size` (int): Size of scatter points. Default is 10.
+            - `bins` (int): Number of bins for the rose diagram. Default is 12.
+            - `plot_density` (bool): Whether to plot density estimation. Default is True.
+            - `plot_rose` (bool): Whether to plot a rose diagram. Default is True.
+            - `plot_mean` (bool): Whether to plot the angular mean. Default is True.
+            - `plot_mean_ci` (bool): Whether to plot confidence intervals for the angular mean. Default is True.
+            - `plot_median` (bool): Whether to plot the angular median. Default is True.
+            - `plot_median_ci` (bool): Whether to plot confidence intervals for the angular median. Default is True.
+            - `zero_location` (str): Zero location on the polar plot ("N", "E", "S", "W"). Default is "N".
+            - `clockwise` (int): Direction of the polar axis (-1 for clockwise, 1 for counterclockwise). Default is -1.
+            - `r_max_scatter` (float): Maximum radius for scatter points. Default is 1.
+            - `rticks` (list): Radial ticks for the polar plot. Default is [0, 1].
+            - `rlim_max` (float): Maximum radius for the plot. Default is None.
+
+        Returns
+        -------
+        ax : matplotlib.axes._axes.Axes
+            The matplotlib Axes object containing the plot.
+
+        Notes
+        -----
+        - This method supports both grouped and ungrouped data.
+        - Density estimation can be performed using either nonparametric methods or mixtures
+        of von Mises distributions.
+        - The rose diagram represents grouped data as a histogram over angular bins.
+        - Confidence intervals for the mean and median are plotted as arcs on the circle.
+
+        Examples
+        --------
+        1. Basic scatter plot:
+
+            ```
+            data = [30, 60, 90, 120, 150]
+            circ = Circular(data, unit="degree")
+            circ.plot(marker_color="blue", marker_size=15)
+            ```
+
+        2. Rose diagram with density:
+
+            ```
+            circ.plot(plot_rose=True, plot_density=True, bins=18)
+            ```
+
+        3. Customized plot with radial grid and legend:
+
+            ```
+            circ.plot(plot_grid=True, plot_spine=True, plot_mean=True)
+            ```
+        """
         ax = circ_plot(self, ax=ax, **kwargs)
 
 

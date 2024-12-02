@@ -1046,7 +1046,7 @@ class jonespewsey_gen(rv_continuous):
         kappa : float
             Concentration parameter, kappa >= 0.
         psi : float
-            Skewness parameter, -∞ <= psi <= ∞.
+            Shape parameter, -∞ <= psi <= ∞.
 
         Returns
         -------
@@ -1108,7 +1108,11 @@ def _c_jonespewsey(mu, kappa, psi):
 
 
 class vonmises_ext_gen(rv_continuous):
-    """Flat-topped von Mises Distribution
+    r"""Flat-topped von Mises Distribution
+
+    The Flat-topped von Mises distribution is a modification of the von Mises distribution
+    that allows for more flexible peak shapes, including flattened or sharper tops, depending
+    on the value of the shape parameter \(\nu\).
 
     Methods
     -------
@@ -1135,6 +1139,49 @@ class vonmises_ext_gen(rv_continuous):
 
     def _pdf(self, x, mu, kappa, nu):
         return self._c * _kernel_vmext(x, mu, kappa, nu)
+
+    def pdf(self, x, mu, kappa, nu, *args, **kwargs):
+        r"""
+        Probability density function of the Flat-topped von Mises distribution.
+
+        $$
+        f(\theta) = c \exp(\kappa \cos(\theta - \mu + \nu \sin(\theta - \mu)))
+        $$
+
+        , where `c` is the normalizing constant:
+
+        $$
+        c = \frac{1}{\int_{-\pi}^{\pi} \exp(\kappa \cos(\theta - \mu + \nu \sin(\theta - \mu))) d\theta}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the PDF, defined on the interval \([0, 2\pi)\).
+        mu : float
+            Location parameter, \(0 \leq \mu \leq 2\pi\). This is the mean direction when \(\nu = 0\).
+        kappa : float
+            Concentration parameter, \(\kappa \geq 0\). Higher values indicate a sharper peak around \(\mu\).
+        nu : float
+            Shape parameter, \(-1 \leq \nu \leq 1\). Controls the flattening or sharpening of the peak:
+            - \(\nu > 0\): sharper peaks.
+            - \(\nu < 0\): flatter peaks.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Values of the probability density function at the specified points.
+
+
+        Notes
+        -----
+        - The normalization constant \(c\) is computed numerically, as the integral generally
+        does not have a closed-form solution.
+        - Special cases:
+            - When \(\nu = 0\), the distribution reduces to the standard von Mises distribution.
+            - When \(\kappa = 0\), the distribution becomes uniform on \([0, 2\pi)\).
+        """
+        return super().pdf(x, mu, kappa, nu, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, nu):
         @np.vectorize
@@ -1167,6 +1214,9 @@ def _c_vmext(mu, kappa, nu):
 
 class jonespewsey_sineskewed_gen(rv_continuous):
     """Sine-Skewed Jones-Pewsey Distribution
+
+    The Sine-Skewed Jones-Pewsey distribution is a circular distribution defined on \([0, 2\pi)\)
+    that extends the Jones-Pewsey family by incorporating a sine-based skewness adjustment.
 
     Methods
     -------
@@ -1216,6 +1266,36 @@ class jonespewsey_sineskewed_gen(rv_continuous):
                     / self._c
                 )
 
+    def pdf(self, x, xi, kappa, psi, lmbd, *args, **kwargs):
+        r"""
+        Probability density function of the Sine-Skewed Jones-Pewsey distribution.
+
+        $$
+        f(\theta) = \frac{(\cosh(\kappa \psi) + \sinh(\kappa \psi) \cos(\theta - \xi))^{1/\psi}}{2\pi \cosh(\kappa \pi)}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        xi : float
+            Direction parameter (generally not the mean), 0 <= ξ <= 2*pi.
+        kappa : float
+            Concentration parameter, κ >= 0. Higher values indicate a sharper peak.
+        psi : float
+            Shape parameter, -∞ <= ψ <= ∞. When ψ=-1, the distribution reduces to the wrapped Cauchy,
+            when ψ=0, von Mises, and when ψ=1, cardioid.
+        lmbd : float
+            Skewness parameter, -1 < λ < 1. Controls the asymmetry introduced by the sine-skewing.
+
+        Returns
+        -------
+        pdf_values: float
+            Values of the probability density function at the specified points.
+        """
+
+        return super().pdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
+
     def _cdf(self, x, xi, kappa, psi, lmbd):
         @np.vectorize
         def _cdf_single(x, xi, kappa, psi, lmbd):
@@ -1234,7 +1314,11 @@ jonespewsey_sineskewed = jonespewsey_sineskewed_gen(
 
 
 class jonespewsey_asymext_gen(rv_continuous):
-    """Asymmetric Extended Jones-Pewsey Distribution
+    r"""Asymmetric Extended Jones-Pewsey Distribution
+
+    This distribution is an extension of the Jones-Pewsey family, incorporating asymmetry
+    through a secondary parameter \(\nu\). It is defined on the circular domain \([0, 2\pi)\).
+
 
     Methods
     -------
@@ -1267,6 +1351,59 @@ class jonespewsey_asymext_gen(rv_continuous):
 
     def _pdf(self, x, xi, kappa, psi, nu):
         return _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu) / self._c
+
+    def pdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
+        r"""
+        Probability density function (PDF) of the Asymmetric Extended Jones-Pewsey distribution.
+
+        The PDF is given by:
+
+        $$
+        f(\theta) = \frac{k(\theta; \xi, \kappa, \psi, \nu)}{c}
+        $$
+
+        where \(k(\theta; \xi, \kappa, \psi, \nu)\) is the kernel function defined as:
+
+        $$
+        k(\theta; \xi, \kappa, \psi, \nu) =
+        \begin{cases}
+        \exp\left(\kappa \cos(\theta - \xi + \nu \cos(\theta - \xi))\right) & \text{if } \psi = 0 \\
+        \left[\cosh(\kappa \psi) + \sinh(\kappa \psi) \cos(\theta - \xi + \nu \cos(\theta - \xi))\right]^{1/\psi} & \text{if } \psi \neq 0
+        \end{cases}
+        $$
+
+        and \(c\) is the normalization constant:
+
+        $$
+        c = \int_{-\pi}^{\pi} k(\theta; \xi, \kappa, \psi, \nu) \, d\theta
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the PDF, defined on the interval \([0, 2\pi)\).
+        xi : float
+            Direction parameter, \(0 \leq \xi \leq 2\pi\). This typically represents the mode of the distribution.
+        kappa : float
+            Concentration parameter, \(\kappa \geq 0\). Higher values result in a sharper peak around \(\xi\).
+        psi : float
+            Shape parameter, \(-\infty \leq \psi \leq \infty\). When \(\psi = 0\), the distribution reduces to a simpler von Mises-like form.
+        nu : float
+            Asymmetry parameter, \(0 \leq \nu < 1\). Introduces skewness in the circular distribution.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Values of the probability density function at the specified points.
+
+        Notes
+        -----
+        - The normalization constant \(c\) is computed numerically using integration.
+        - Special cases:
+            - When \(\psi = 0\), the kernel simplifies to the von Mises-like asymmetric form.
+            - When \(\kappa = 0\), the distribution becomes uniform on \([0, 2\pi)\).
+        """
+        return super().pdf(x, xi, kappa, psi, nu, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, nu):
         @np.vectorize
@@ -1302,7 +1439,10 @@ def _c_jonespewsey_asymext(xi, kappa, psi, nu):
 
 
 class inverse_batschelet_gen(rv_continuous):
-    """Inverse Batschelet distribution.
+    r"""Inverse Batschelet distribution.
+
+    The inverse Batschelet distribution is a flexible circular distribution that allows for
+    modeling asymmetric and peaked data. It is defined on the interval \([0, 2\pi)\).
 
     Methods
     -------
@@ -1347,6 +1487,68 @@ class inverse_batschelet_gen(rv_continuous):
             return self._c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
             return self._c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
+
+    def pdf(self, x, xi, kappa, nu, lmbd, *args, **kwargs):
+        r"""
+        Probability density function (PDF) of the inverse Batschelet distribution.
+
+        The PDF is defined as:
+
+        $$
+        f(\theta) = c \exp\left(\kappa \cos\left(a \cdot g(\theta, \nu, \xi) + b \cdot s\left(g(\theta, \nu, \xi), \lambda\right)\right)\right)
+        $$
+
+        where:
+
+        - \(a\): Weight for the angular transformation, defined as:
+
+        $$
+        a = \frac{1 - \lambda}{1 + \lambda}
+        $$
+
+        - \(b\): Weight for the skewness transformation, defined as:
+
+        $$
+        b = \frac{2 \lambda}{1 + \lambda}
+        $$
+
+        - \(g(\theta, \nu, \xi)\): Angular transformation function, which incorporates \(\nu\) and the location parameter \(\xi\):
+
+        $$
+        g(\theta, \nu, \xi) = \theta - \xi - \nu \cdot (1 + \cos(\theta - \xi))
+        $$
+
+        - \(s(z, \lambda)\): Skewness transformation function, defined as the root of the equation:
+
+        $$
+        s(z, \lambda) - 0.5 \cdot (1 + \lambda) \cdot \sin(s(z, \lambda)) = z
+        $$
+
+        - \(c\): Normalization constant ensuring the PDF integrates to 1, computed as:
+
+        $$
+        c = \frac{1}{2\pi \cdot I_0(\kappa) \cdot \left(a - b \cdot \int_{-\pi}^{\pi} \exp(\kappa \cdot \cos(z - (1 - \lambda) \cdot \sin(z) / 2)) dz\right)}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the PDF, defined on the interval \([0, 2\pi)\).
+        xi : float
+            Direction parameter, \(0 \leq \xi \leq 2\pi\). This typically represents the mode.
+        kappa : float
+            Concentration parameter, \(\kappa \geq 0\). Higher values result in sharper peaks around \(\xi\).
+        nu : float
+            Shape parameter, \(-1 \leq \nu \leq 1\). Controls asymmetry through angular transformation.
+        lmbd : float
+            Skewness parameter, \(-1 \leq \lambda \leq 1\). Controls the degree of skewness in the distribution.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Values of the probability density function at the specified points.
+        """
+        return super().pdf(x, xi, kappa, nu, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
         @np.vectorize
