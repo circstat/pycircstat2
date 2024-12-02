@@ -4,8 +4,9 @@
 
 A rework of [pycircstat](https://github.com/circstat/pycircstat).
 
-[**Installlation**](#installation) |
-[**Examples**](#examples) (
+[**Installlation**](#installation) | 
+[**API Reference**](#api-reference) |
+[**Examples**](#examples-notebooks) (
 [**Books**](#books) |
 [**Topics**](#topics)
 )
@@ -23,13 +24,21 @@ git clone https://github.com/circstat/pycircstat2
 pip install -e pycircstat2
 ```
 
-## Examples
+## API Reference
+
+The API reference is available [here](https://circstat.github.io/pycircstat2/reference/base/).
+
+## Example notbooks
+
+In the notebooks below, we reproduce examples and figures from a few textbooks on circular statistics.
 
 ### Books
 
 -   [Statistical Analysis of Circular Data](https://github.com/circstat/pycircstat2/blob/main/examples/B1-Fisher-1993.ipynb) (Fisher, 1993)
 -   [Chapter 26 and 27](https://github.com/circstat/pycircstat2/blob/main/examples/B2-Zar-2010.ipynb) from Biostatistical Analysis (Zar, 2010).
 -   [Circular Statistics in R](https://github.com/circstat/pycircstat2/blob/main/examples/B3-Pewsey-2014.ipynb) (Pewsey, et al., 2014)
+
+And a few more examples on selective topics:
 
 ### Topics
 
