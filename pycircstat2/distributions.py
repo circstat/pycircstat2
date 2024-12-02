@@ -46,6 +46,8 @@ OPTIMIZERS = [
 class circularuniform_gen(rv_continuous):
     """Continuous Circular Uniform Distribution
 
+    ![circularuniform](../images/circ-mod-circularuniform.png)
+
     Methods
     -------
     pdf(x)
@@ -131,6 +133,8 @@ circularuniform = circularuniform_gen(a=0, b=2 * np.pi, name="circularuniform")
 class cardioid_gen(rv_continuous):
     """Cardioid (cosine) Distribution
 
+    ![cardioid](../images/circ-mod-cardioid.png)
+
     Methods
     -------
     pdf(x, mu, rho)
@@ -207,6 +211,9 @@ cardioid = cardioid_gen(a=0, b=2 * np.pi, name="cardioid")
 
 class cartwright_gen(rv_continuous):
     """Cartwright's Power-of-Cosine Distribution
+
+    ![cartwright](../images/circ-mod-cartwright.png)
+
 
     Methods
     -------
@@ -293,6 +300,8 @@ cartwright = cartwright_gen(a=0, b=2 * np.pi, name="cartwright")
 
 class wrapnorm_gen(rv_continuous):
     """Wrapped Normal Distribution
+
+    ![wrapnorm](../images/circ-mod-wrapnorm.png)
 
     Methods
     -------
@@ -384,6 +393,8 @@ wrapnorm = wrapnorm_gen(a=0, b=2 * np.pi, name="wrapped_normal")
 
 class wrapcauchy_gen(rv_continuous):
     """Wrapped Cauchy Distribution.
+
+    ![wrapcauchy](../images/circ-mod-wrapcauchy.png)
 
     Methods
     -------
@@ -593,6 +604,8 @@ wrapcauchy = wrapcauchy_gen(a=0, b=2 * np.pi, name="wrapcauchy")
 class vonmises_gen(rv_continuous):
     """Von Mises Distribution
 
+    ![vonmises](../images/circ-mod-vonmises.png)
+
     Methods
     -------
     pdf(x, mu, kappa)
@@ -700,8 +713,7 @@ class vonmises_gen(rv_continuous):
     def _cdf(self, x, mu, kappa):
         @np.vectorize
         def _cdf_single(x, mu, kappa):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa))
-            return integral
+            return quad(self._pdf, a=0, b=x, args=(mu, kappa))
 
         return _cdf_single(x, mu, kappa)
 
@@ -993,6 +1005,8 @@ vonmises = vonmises_gen(a=0, b=2 * np.pi, name="vonmises")
 class jonespewsey_gen(rv_continuous):
     """Jones-Pewsey Distribution
 
+    ![jonespewsey](../images/circ-mod-jonespewsey.png)
+
     Methods
     -------
     pdf(x, mu, kappa, psi)
@@ -1112,7 +1126,9 @@ class vonmises_ext_gen(rv_continuous):
 
     The Flat-topped von Mises distribution is a modification of the von Mises distribution
     that allows for more flexible peak shapes, including flattened or sharper tops, depending
-    on the value of the shape parameter \(\nu\).
+    on the value of the shape parameter $\nu$.
+
+    ![vonmises-ext](../images/circ-mod-vonmises-ext.png)
 
     Methods
     -------
@@ -1157,15 +1173,15 @@ class vonmises_ext_gen(rv_continuous):
         Parameters
         ----------
         x : array_like
-            Points at which to evaluate the PDF, defined on the interval \([0, 2\pi)\).
+            Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
         mu : float
-            Location parameter, \(0 \leq \mu \leq 2\pi\). This is the mean direction when \(\nu = 0\).
+            Location parameter, $0 \leq \mu \leq 2\pi$. This is the mean direction when $\nu = 0$.
         kappa : float
-            Concentration parameter, \(\kappa \geq 0\). Higher values indicate a sharper peak around \(\mu\).
+            Concentration parameter, $\kappa \geq 0$. Higher values indicate a sharper peak around $\mu$.
         nu : float
-            Shape parameter, \(-1 \leq \nu \leq 1\). Controls the flattening or sharpening of the peak:
-            - \(\nu > 0\): sharper peaks.
-            - \(\nu < 0\): flatter peaks.
+            Shape parameter, $-1 \leq \nu \leq 1$. Controls the flattening or sharpening of the peak:
+            - $\nu > 0$: sharper peaks.
+            - $\nu < 0$: flatter peaks.
 
         Returns
         -------
@@ -1175,11 +1191,11 @@ class vonmises_ext_gen(rv_continuous):
 
         Notes
         -----
-        - The normalization constant \(c\) is computed numerically, as the integral generally
+        - The normalization constant $c$ is computed numerically, as the integral generally
         does not have a closed-form solution.
         - Special cases:
-            - When \(\nu = 0\), the distribution reduces to the standard von Mises distribution.
-            - When \(\kappa = 0\), the distribution becomes uniform on \([0, 2\pi)\).
+            - When $\nu = 0$, the distribution reduces to the standard von Mises distribution.
+            - When $\kappa = 0$, the distribution becomes uniform on $[0, 2\pi)$.
         """
         return super().pdf(x, mu, kappa, nu, *args, **kwargs)
 
@@ -1213,10 +1229,12 @@ def _c_vmext(mu, kappa, nu):
 
 
 class jonespewsey_sineskewed_gen(rv_continuous):
-    """Sine-Skewed Jones-Pewsey Distribution
+    r"""Sine-Skewed Jones-Pewsey Distribution
 
-    The Sine-Skewed Jones-Pewsey distribution is a circular distribution defined on \([0, 2\pi)\)
+    The Sine-Skewed Jones-Pewsey distribution is a circular distribution defined on $[0, 2\pi)$
     that extends the Jones-Pewsey family by incorporating a sine-based skewness adjustment.
+
+    ![jonespewsey-sineskewed](../images/circ-mod-jonespewsey-sineskewed.png)
 
     Methods
     -------
@@ -1317,8 +1335,9 @@ class jonespewsey_asymext_gen(rv_continuous):
     r"""Asymmetric Extended Jones-Pewsey Distribution
 
     This distribution is an extension of the Jones-Pewsey family, incorporating asymmetry
-    through a secondary parameter \(\nu\). It is defined on the circular domain \([0, 2\pi)\).
+    through a secondary parameter $\nu$. It is defined on the circular domain $[0, 2\pi)$.
 
+    ![jonespewsey-asymext](../images/circ-mod-jonespewsey-asymext.png)
 
     Methods
     -------
@@ -1362,7 +1381,7 @@ class jonespewsey_asymext_gen(rv_continuous):
         f(\theta) = \frac{k(\theta; \xi, \kappa, \psi, \nu)}{c}
         $$
 
-        where \(k(\theta; \xi, \kappa, \psi, \nu)\) is the kernel function defined as:
+        where $k(\theta; \xi, \kappa, \psi, \nu)$ is the kernel function defined as:
 
         $$
         k(\theta; \xi, \kappa, \psi, \nu) =
@@ -1372,7 +1391,7 @@ class jonespewsey_asymext_gen(rv_continuous):
         \end{cases}
         $$
 
-        and \(c\) is the normalization constant:
+        and $c$ is the normalization constant:
 
         $$
         c = \int_{-\pi}^{\pi} k(\theta; \xi, \kappa, \psi, \nu) \, d\theta
@@ -1381,15 +1400,15 @@ class jonespewsey_asymext_gen(rv_continuous):
         Parameters
         ----------
         x : array_like
-            Points at which to evaluate the PDF, defined on the interval \([0, 2\pi)\).
+            Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
         xi : float
-            Direction parameter, \(0 \leq \xi \leq 2\pi\). This typically represents the mode of the distribution.
+            Direction parameter, $0 \leq \xi \leq 2\pi$. This typically represents the mode of the distribution.
         kappa : float
-            Concentration parameter, \(\kappa \geq 0\). Higher values result in a sharper peak around \(\xi\).
+            Concentration parameter, $\kappa \geq 0$. Higher values result in a sharper peak around $\xi$.
         psi : float
-            Shape parameter, \(-\infty \leq \psi \leq \infty\). When \(\psi = 0\), the distribution reduces to a simpler von Mises-like form.
+            Shape parameter, $-\infty \leq \psi \leq \infty$. When $\psi = 0$, the distribution reduces to a simpler von Mises-like form.
         nu : float
-            Asymmetry parameter, \(0 \leq \nu < 1\). Introduces skewness in the circular distribution.
+            Asymmetry parameter, $0 \leq \nu < 1$. Introduces skewness in the circular distribution.
 
         Returns
         -------
@@ -1398,10 +1417,10 @@ class jonespewsey_asymext_gen(rv_continuous):
 
         Notes
         -----
-        - The normalization constant \(c\) is computed numerically using integration.
+        - The normalization constant $c$ is computed numerically using integration.
         - Special cases:
-            - When \(\psi = 0\), the kernel simplifies to the von Mises-like asymmetric form.
-            - When \(\kappa = 0\), the distribution becomes uniform on \([0, 2\pi)\).
+            - When $\psi = 0$, the kernel simplifies to the von Mises-like asymmetric form.
+            - When $\kappa = 0$, the distribution becomes uniform on $[0, 2\pi)$.
         """
         return super().pdf(x, xi, kappa, psi, nu, *args, **kwargs)
 
@@ -1442,7 +1461,9 @@ class inverse_batschelet_gen(rv_continuous):
     r"""Inverse Batschelet distribution.
 
     The inverse Batschelet distribution is a flexible circular distribution that allows for
-    modeling asymmetric and peaked data. It is defined on the interval \([0, 2\pi)\).
+    modeling asymmetric and peaked data. It is defined on the interval $[0, 2\pi)$.
+
+    ![inverse-batschelet](../images/circ-mod-inverse-batschelet.png)
 
     Methods
     -------
@@ -1500,31 +1521,31 @@ class inverse_batschelet_gen(rv_continuous):
 
         where:
 
-        - \(a\): Weight for the angular transformation, defined as:
+        - $a$: Weight for the angular transformation, defined as:
 
         $$
         a = \frac{1 - \lambda}{1 + \lambda}
         $$
 
-        - \(b\): Weight for the skewness transformation, defined as:
+        - $b$: Weight for the skewness transformation, defined as:
 
         $$
         b = \frac{2 \lambda}{1 + \lambda}
         $$
 
-        - \(g(\theta, \nu, \xi)\): Angular transformation function, which incorporates \(\nu\) and the location parameter \(\xi\):
+        - $g(\theta, \nu, \xi)$: Angular transformation function, which incorporates $\nu$ and the location parameter $\xi$:
 
         $$
         g(\theta, \nu, \xi) = \theta - \xi - \nu \cdot (1 + \cos(\theta - \xi))
         $$
 
-        - \(s(z, \lambda)\): Skewness transformation function, defined as the root of the equation:
+        - $s(z, \lambda)$: Skewness transformation function, defined as the root of the equation:
 
         $$
         s(z, \lambda) - 0.5 \cdot (1 + \lambda) \cdot \sin(s(z, \lambda)) = z
         $$
 
-        - \(c\): Normalization constant ensuring the PDF integrates to 1, computed as:
+        - $c$: Normalization constant ensuring the PDF integrates to 1, computed as:
 
         $$
         c = \frac{1}{2\pi \cdot I_0(\kappa) \cdot \left(a - b \cdot \int_{-\pi}^{\pi} \exp(\kappa \cdot \cos(z - (1 - \lambda) \cdot \sin(z) / 2)) dz\right)}
@@ -1533,15 +1554,15 @@ class inverse_batschelet_gen(rv_continuous):
         Parameters
         ----------
         x : array_like
-            Points at which to evaluate the PDF, defined on the interval \([0, 2\pi)\).
+            Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
         xi : float
-            Direction parameter, \(0 \leq \xi \leq 2\pi\). This typically represents the mode.
+            Direction parameter, $0 \leq \xi \leq 2\pi$. This typically represents the mode.
         kappa : float
-            Concentration parameter, \(\kappa \geq 0\). Higher values result in sharper peaks around \(\xi\).
+            Concentration parameter, $\kappa \geq 0$. Higher values result in sharper peaks around $\xi$.
         nu : float
-            Shape parameter, \(-1 \leq \nu \leq 1\). Controls asymmetry through angular transformation.
+            Shape parameter, $-1 \leq \nu \leq 1$. Controls asymmetry through angular transformation.
         lmbd : float
-            Skewness parameter, \(-1 \leq \lambda \leq 1\). Controls the degree of skewness in the distribution.
+            Skewness parameter, $-1 \leq \lambda \leq 1$. Controls the degree of skewness in the distribution.
 
         Returns
         -------

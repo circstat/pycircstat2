@@ -8,6 +8,8 @@ from pycircstat2.descriptive import (
     circ_mean_and_r,
     circ_mean_and_r_of_means,
     circ_mean_ci,
+    circ_mean_deviation,
+    circ_mean_deviation_chuncked,
     circ_median,
     circ_median_ci,
     circ_moment,
@@ -22,9 +24,7 @@ def test_circ_mean():
     # Example 26.4 (Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
     circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values)
-    m, r = circ_mean_and_r(
-        alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w
-    )
+    m, r = circ_mean_and_r(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 99, significant=1)
     np.testing.assert_approx_equal(r, 0.82522, significant=5)
@@ -34,9 +34,7 @@ def test_circ_mean():
     circ_zar_ex5_ch26 = Circular(
         data=data_zar_ex5_ch26["θ"].values, w=data_zar_ex5_ch26["w"].values
     )
-    m, r = circ_mean_and_r(
-        alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w
-    )
+    m, r = circ_mean_and_r(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 162, significant=1)
     np.testing.assert_approx_equal(r, 0.55064, significant=4)
@@ -107,9 +105,7 @@ def test_circ_median():
 
     # mallard data (mardia, 1972)
     data_mallard = load_data("mallard", source="mardia")
-    circ_mallard = Circular(
-        data=data_mallard["θ"].values, w=data_mallard["w"].values
-    )
+    circ_mallard = Circular(data=data_mallard["θ"].values, w=data_mallard["w"].values)
     median = circ_median(
         alpha=circ_mallard.alpha_ub,
         w=circ_mallard.w,
@@ -120,7 +116,27 @@ def test_circ_median():
 
 
 def test_circ_mean_deviation():
-    pass
+
+    d22 = load_data("B10", source="fisher")
+
+    d22s1 = np.deg2rad(d22[d22["set"] == 1]["θ"].values)
+    d22s2 = np.deg2rad(d22[d22["set"] == 2]["θ"].values)
+    d22s3 = np.deg2rad(d22[d22["set"] == 3]["θ"].values)
+
+    np.testing.assert_allclose(
+        circ_mean_deviation(d22s1, d22s1),
+        circ_mean_deviation_chuncked(d22s1, d22s1),
+    )
+
+    np.testing.assert_allclose(
+        circ_mean_deviation(d22s2, d22s2),
+        circ_mean_deviation_chuncked(d22s2, d22s2),
+    )
+
+    np.testing.assert_allclose(
+        circ_mean_deviation(d22s3, d22s3),
+        circ_mean_deviation_chuncked(d22s3, d22s3),
+    )
 
 
 def test_circ_mean_ci():
@@ -173,28 +189,16 @@ def test_circ_median_ci():
 
     # n is too small for proper estimation of median ci
     lb, ub, ci = circ_median_ci(median=c_ex3_s0.median, alpha=c_ex3_s0.alpha)
-    np.testing.assert_approx_equal(
-        np.rad2deg(lb.round(5)), 245.0, significant=3
-    )
-    np.testing.assert_approx_equal(
-        np.rad2deg(ub.round(5)), 315.0, significant=3
-    )
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 245.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 315.0, significant=3)
 
     lb, ub, ci = circ_median_ci(median=c_ex3_s1.median, alpha=c_ex3_s1.alpha)
-    np.testing.assert_approx_equal(
-        np.rad2deg(lb.round(5)), 229.0, significant=3
-    )
-    np.testing.assert_approx_equal(
-        np.rad2deg(ub.round(5)), 277.0, significant=3
-    )
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 277.0, significant=3)
 
     lb, ub, ci = circ_median_ci(median=c_ex3_s2.median, alpha=c_ex3_s2.alpha)
-    np.testing.assert_approx_equal(
-        np.rad2deg(lb.round(5)), 229.0, significant=3
-    )
-    np.testing.assert_approx_equal(
-        np.rad2deg(ub.round(5)), 267.0, significant=3
-    )
+    np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
+    np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 267.0, significant=3)
 
 
 def test_circ_mean_and_r_of_means():
@@ -238,9 +242,7 @@ def test_circ_moment():
 
     mp1 = circ_moment(alpha=c11.alpha, p=1, centered=False)
     u1, r1 = convert_moment(mp1)
-    np.testing.assert_approx_equal(
-        np.rad2deg(u1).round(2), 3.10, significant=2
-    )
+    np.testing.assert_approx_equal(np.rad2deg(u1).round(2), 3.10, significant=2)
     np.testing.assert_approx_equal(r1.round(2), 0.83, significant=2)
     # np.testing.assert_approx_equal(Cbar.round(2), 0.83, significant=2)
     # np.testing.assert_approx_equal(Sbar.round(2), 0.04, significant=2)
@@ -249,9 +251,7 @@ def test_circ_moment():
 
     mp2 = circ_moment(alpha=c11.alpha, p=2, centered=False)
     u2, r2 = convert_moment(mp2)
-    np.testing.assert_approx_equal(
-        np.rad2deg(u2).round(2), 0.64, significant=2
-    )
+    np.testing.assert_approx_equal(np.rad2deg(u2).round(2), 0.64, significant=2)
     np.testing.assert_approx_equal(r2.round(2), 0.67, significant=2)
     # np.testing.assert_approx_equal(Cbar.round(2), 0.67, significant=2)
     # np.testing.assert_approx_equal(Sbar.round(2), 0.01, significant=2)

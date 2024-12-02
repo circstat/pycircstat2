@@ -734,7 +734,11 @@ def _circ_median_mean_deviation(alpha: np.array) -> float:
     """
 
     # get pairwise circular mean deviation
-    angdist = circ_mean_deviation(alpha, alpha)
+    if len(alpha) > 10000:
+        angdist = circ_mean_deviation_chuncked(alpha, alpha)
+    else:
+        # get pairwise circular mean deviation
+        angdist = circ_mean_deviation(alpha, alpha)
     # data point(s) with minimal circular mean deviation is/are potential median(s);
     idx_candidates = np.where(angdist == angdist.min())[0]
     # if number of potential median is the same as the number of data point
@@ -751,7 +755,7 @@ def _circ_median_mean_deviation(alpha: np.array) -> float:
     return median
 
 
-def circ_mean_deviation(
+def circ_mean_deviation_chuncked(
     alpha: Union[np.ndarray, float, int, list],
     beta: Union[np.ndarray, float, int, list],
     chunk_size=1000,
@@ -794,43 +798,43 @@ def circ_mean_deviation(
     return result
 
 
-# def circ_mean_deviation(
-#     alpha: Union[np.ndarray, float, int, list],
-#     beta: Union[np.ndarray, float, int, list],
-# ) -> np.ndarray:
-#     r"""
-#     Circular mean deviation.
+def circ_mean_deviation(
+    alpha: Union[np.ndarray, float, int, list],
+    beta: Union[np.ndarray, float, int, list],
+) -> np.ndarray:
+    r"""
+    Circular mean deviation.
 
-#     $$
-#     \delta = \pi - \left| \pi - \left| \alpha - \beta \right| \right| / n
-#     $$
+    $$
+    \delta = \pi - \left| \pi - \left| \alpha - \beta \right| \right| / n
+    $$
 
-#     It is the mean angular distance from one data point to all others.
-#     The circular median of a set of data should be the point with minimal
-#     circular mean deviation.
+    It is the mean angular distance from one data point to all others.
+    The circular median of a set of data should be the point with minimal
+    circular mean deviation.
 
-#     Parameters
-#     ---------
-#     alpha: np.array, int or float
-#         Data in radian.
-#     beta: np.array, int or float
-#         reference angle in radian.
+    Parameters
+    ---------
+    alpha: np.array, int or float
+        Data in radian.
+    beta: np.array, int or float
+        reference angle in radian.
 
-#     Returns
-#     -------
-#     circular mean deviation: np.array
+    Returns
+    -------
+    circular mean deviation: np.array
 
-#     Note
-#     ----
-#     eq 2.32, Section 2.3.2, Fisher (1993)
-#     """
-#     if not isinstance(alpha, np.ndarray):
-#         alpha = np.array([alpha])
+    Note
+    ----
+    eq 2.32, Section 2.3.2, Fisher (1993)
+    """
+    if not isinstance(alpha, np.ndarray):
+        alpha = np.array([alpha])
 
-#     if not isinstance(beta, np.ndarray):
-#         beta = np.array([beta])
+    if not isinstance(beta, np.ndarray):
+        beta = np.array([beta])
 
-#     return (np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)).round(5)
+    return (np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)).round(5)
 
 
 def circ_mean_ci(

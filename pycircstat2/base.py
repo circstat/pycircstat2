@@ -51,7 +51,7 @@ class Circular:
         Number of intervals in a full cycle. If None, the value is inferred based on the unit:
 
         - 360 for degrees,
-        - \(2\pi\) for radians,
+        - $2\pi$ for radians,
         - 24 for hours.
 
         Custom intervals require explicit input.
@@ -273,6 +273,7 @@ class Circular:
             print(
                 "Sample size is large (n>10000), it will take a while to find the median.\nOr set `kwargs_median={'method': None}` to skip."
             )
+
         self.median = median = circ_median(
             alpha=alpha,
             w=w,
@@ -402,13 +403,13 @@ class Circular:
 
         6. **Measures of Dispersion**:
 
-            - Angular deviation (\(s\)): A measure of spread in circular data.
-            - Circular standard deviation (\(s_0\)): An alternative dispersion measure.
+            - Angular deviation ($s$): A measure of spread in circular data.
+            - Circular standard deviation ($s_0$): An alternative dispersion measure.
 
         7. **Measures of Concentration**:
 
-            - Resultant vector length (\(r\)): A measure of data concentration, ranging from 0 (uniform) to 1 (highly concentrated).
-            - Concentration parameter (\(\kappa\)): Indicates sharpness or clustering of the data.
+            - Resultant vector length ($r$): A measure of data concentration, ranging from 0 (uniform) to 1 (highly concentrated).
+            - Concentration parameter ($\kappa$): Indicates sharpness or clustering of the data.
 
         8. **Higher-Order Statistics**:
 
