@@ -1202,7 +1202,8 @@ class vonmises_ext_gen(rv_continuous):
     def _cdf(self, x, mu, kappa, nu):
         @np.vectorize
         def _cdf_single(x, mu, kappa, nu):
-            return quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
+            result, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
+            return result
 
         return _cdf_single(x, mu, kappa, nu)
 
