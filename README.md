@@ -1,9 +1,12 @@
-![logo](./misc/logo.png)
+![logo](https://raw.githubusercontent.com/circstat/pycircstat2/main/docs/docs/images/logo.png)
 
 # PyCircStat2: Circular statistics with Python
 
+[![PyPI version](https://badge.fury.io/py/pycircstat2.svg)](https://badge.fury.io/py/pycircstat2)
+
 A rework of [pycircstat](https://github.com/circstat/pycircstat).
 
+[**Key Features**](#key-features) |
 [**Installlation**](#installation) | 
 [**API Reference**](#api-reference) |
 [**Examples**](#examples-notebooks) (
@@ -11,13 +14,41 @@ A rework of [pycircstat](https://github.com/circstat/pycircstat).
 [**Topics**](#topics)
 )
 
+## Key Features
+
+- **One-Stop Circular Data Analysis Pipeline with `Circular` Class**  
+
+    The `Circular` class simplifies circular data analysis by providing automatic data transformation, descriptive statistics, hypothesis testing, and visualization tools—all in one place.  
+
+    ```python
+    from pycircstat2 import Circular
+    data = [30, 60, 90, 120, 150]
+    circ = Circular(data, unit="degree")
+    print(circ.summary())
+    circ.plot(plot_rose=True, plot_mean=True)
+    ```
+
+- **Compatibility with Legacy APIs**  
+
+  APIs for descriptive statistics and hypothesis testing follow the conventions established by the original [circstat-matlab](https://github.com/circstat/circstat-matlab) and [pycircstat](https://github.com/circstat/pycircstat), ensuring ease of use for existing users.
+
+
+- **Wide-Ranging Circular Distributions**  
+
+  The package supports a variety of circular distributions, including:  
+  - **Symmetric distributions**: Circular Uniform, Cardioid, Cartwright, Wrapped Normal, Wrapped Cauchy, von Mises (and its flat-top extension), and Jones-Pewsey.
+  - **Asymmetric distributions**: Sine-skewed Jones-Pewsey, Asymmetric Extended Jones-Pewsey, Inverse Batschelet.
+
+
 ## Installation
+
+To install the latest tagged version:
 
 ```
 pip install pycircstat2
 ```
 
-To install the development version, clone the repository and install it with `pip -e`:
+Or to install the development version, clone the repository and install it with `pip install -e`:
 
 ```
 git clone https://github.com/circstat/pycircstat2
