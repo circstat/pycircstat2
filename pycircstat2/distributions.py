@@ -127,7 +127,7 @@ class circularuniform_gen(rv_continuous):
         return super().ppf(q, *args, **kwargs)
 
 
-circularuniform = circularuniform_gen(a=0, b=2 * np.pi, name="circularuniform")
+circularuniform = circularuniform_gen(name="circularuniform")
 
 
 class cardioid_gen(rv_continuous):
@@ -206,7 +206,7 @@ class cardioid_gen(rv_continuous):
         return super().cdf(x, mu, rho, *args, **kwargs)
 
 
-cardioid = cardioid_gen(a=0, b=2 * np.pi, name="cardioid")
+cardioid = cardioid_gen(name="cardioid")
 
 
 class cartwright_gen(rv_continuous):
@@ -295,7 +295,7 @@ class cartwright_gen(rv_continuous):
         return super().cdf(x, mu, zeta, *args, **kwargs)
 
 
-cartwright = cartwright_gen(a=0, b=2 * np.pi, name="cartwright")
+cartwright = cartwright_gen(name="cartwright")
 
 
 class wrapnorm_gen(rv_continuous):
@@ -388,7 +388,7 @@ class wrapnorm_gen(rv_continuous):
         return super().cdf(x, mu, rho, *args, **kwargs)
 
 
-wrapnorm = wrapnorm_gen(a=0, b=2 * np.pi, name="wrapped_normal")
+wrapnorm = wrapnorm_gen(name="wrapped_normal")
 
 
 class wrapcauchy_gen(rv_continuous):
@@ -598,7 +598,7 @@ class wrapcauchy_gen(rv_continuous):
             )
 
 
-wrapcauchy = wrapcauchy_gen(a=0, b=2 * np.pi, name="wrapcauchy")
+wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
 
 class vonmises_gen(rv_continuous):
@@ -999,7 +999,7 @@ class vonmises_gen(rv_continuous):
             )
 
 
-vonmises = vonmises_gen(a=0, b=2 * np.pi, name="vonmises")
+vonmises = vonmises_gen(name="vonmises")
 
 
 class jonespewsey_gen(rv_continuous):
@@ -1090,7 +1090,7 @@ class jonespewsey_gen(rv_continuous):
             return _cdf_single(x, mu, kappa, psi)
 
 
-jonespewsey = jonespewsey_gen(a=0, b=2 * np.pi, name="jonespewsey")
+jonespewsey = jonespewsey_gen(name="jonespewsey")
 
 ####################################
 ## Helper Functions: Jones-Pewsey ##
@@ -1207,7 +1207,7 @@ class vonmises_ext_gen(rv_continuous):
         return _cdf_single(x, mu, kappa, nu)
 
 
-vonmises_ext = vonmises_ext_gen(a=0, b=2 * np.pi, name="vonmises_ext")
+vonmises_ext = vonmises_ext_gen(name="vonmises_ext")
 
 ###########################################
 ## Helper Functions: extended von Mises  ##
@@ -1322,9 +1322,7 @@ class jonespewsey_sineskewed_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, psi, lmbd)
 
 
-jonespewsey_sineskewed = jonespewsey_sineskewed_gen(
-    a=0, b=2 * np.pi, name="jonespewsey_sineskewed"
-)
+jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed")
 
 ##########################
 ## Asymmetric Extention ##
@@ -1432,9 +1430,7 @@ class jonespewsey_asymext_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, psi, nu)
 
 
-jonespewsey_asymext = jonespewsey_asymext_gen(
-    a=0, b=2 * np.pi, name="jonespewsey_asymext"
-)
+jonespewsey_asymext = jonespewsey_asymext_gen(name="jonespewsey_asymext")
 
 
 def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
@@ -1579,7 +1575,7 @@ class inverse_batschelet_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, nu, lmbd)
 
 
-inverse_batschelet = inverse_batschelet_gen(a=0, b=2 * np.pi, name="inverse_batschelet")
+inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
 
 
 ##########################################
