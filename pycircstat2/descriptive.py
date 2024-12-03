@@ -6,47 +6,6 @@ from scipy.stats import chi2, norm
 from .utils import angrange, is_within_circular_range
 
 
-def compute_C_and_S(
-    alpha: np.ndarray,
-    w: np.ndarray,
-    p: int = 1,
-    mean: Union[float, np.ndarray] = 0.0,
-) -> Tuple[float, float]:
-    r"""
-    Compute the intermediate values Cbar and Sbar.
-
-    $$
-    \displaylines{
-    \bar{C}_{p} = \frac{\sum_{i=1}^{n} w_{i} \cos(p(\alpha_{i} - \mu))}{n} \\
-    \bar{S}_{p} = \frac{\sum_{i=1}^{n} w_{i} \sin(p(\alpha_{i} - \mu))}{n}
-    }
-    $$
-
-    Parameters
-    ----------
-    alpha: np.ndarray
-        Angles in radian.
-    w: np.ndarray
-        Frequencies or weights.
-    p: int, optional
-        Order of the moment (default is 1, for the first moment).
-    mean: float, optional
-        Mean angle (μ) to center the computation (default is 0.0).
-
-    Returns
-    -------
-    Cbar: float
-        Weighted mean cosine for the given moment.
-    Sbar: float
-        Weighted mean sine for the given moment.
-    """
-    n = np.sum(w)
-    Cbar = np.sum(w * np.cos(p * (alpha - mean))) / n
-    Sbar = np.sum(w * np.sin(p * (alpha - mean))) / n
-
-    return Cbar, Sbar
-
-
 def circ_r(
     alpha: Union[np.ndarray, None] = None,
     w: Union[np.ndarray, None] = None,
@@ -187,6 +146,52 @@ def circ_mean_and_r(
         return angrange(m), r
 
 
+def circ_mean_and_r_of_means(
+    circs: Union[list, None] = None,
+    ms: Union[np.ndarray, None] = None,
+    rs: Union[np.ndarray, None] = None,
+) -> Tuple[float, float]:
+    """The Mean of a set of Mean Angles
+
+    Parameters
+    ----------
+    circs: list
+        a list of Circular Objects
+
+    ms: np.array (n, )
+        a set of mean angles in radian
+
+    rs: np.array (n, )
+        a set of mean resultant vecotr lengths
+
+    Returns
+    -------
+    m: float
+        mean of means in radian
+
+    r: float
+        mean of mean resultant vector lengths
+
+    """
+
+    if circs is None:
+        assert isinstance(ms, np.ndarray) and isinstance(
+            rs, np.ndarray
+        ), "If `circs` is None, then `ms` and `rs` are needed."
+    else:
+        ms, rs = map(np.array, zip(*[(circ.mean, circ.r) for circ in circs]))
+
+    X = np.mean(np.cos(ms) * rs)
+    Y = np.mean(np.sin(ms) * rs)
+    r = np.sqrt(X**2 + Y**2)
+    C = X / r
+    S = Y / r
+
+    m = angrange(np.arctan2(S, C))
+
+    return m, r
+
+
 def circ_moment(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
@@ -232,32 +237,6 @@ def circ_moment(
     Cbar, Sbar = compute_C_and_S(alpha, w, p, mean)
 
     return Cbar + 1j * Sbar
-
-
-def convert_moment(
-    mp: complex,
-) -> Tuple[float, float]:
-    """
-    Convert complex moment to polar coordinates.
-
-    Parameters
-    ----------
-    mp: complex
-        Complex moment
-
-    Returns
-    -------
-    u: float
-        Angle in radian
-    r: float
-        Magnitude
-
-    """
-
-    u = angrange(np.angle(mp))
-    r = np.abs(mp)
-
-    return u, r
 
 
 def circ_dispersion(
@@ -1126,48 +1105,6 @@ def _circ_mean_ci_bootstrap(alpha, B=2000, ci=0.95):
     return lb, ub
 
 
-def compute_hdi(samples, ci=0.95):
-    """
-    Compute the Highest Density Interval (HDI) for circular data.
-
-    Parameters
-    ----------
-    samples : np.ndarray
-        Bootstrap samples of the circular mean in radians.
-    ci : float, optional
-        Credible interval (default is 0.95 for 95% HDI).
-
-    Returns
-    -------
-    hdi : tuple
-        Lower and upper bounds of the HDI in radians.
-    """
-    # Wrap samples to [0, 2π) for circular consistency
-    wrapped_samples = angrange(samples)
-
-    # Sort the samples
-    sorted_samples = np.sort(wrapped_samples)
-
-    # Number of samples in the HDI
-    n_samples = len(sorted_samples)
-    interval_idx = int(np.floor(ci * n_samples))
-    if interval_idx == 0:
-        raise ValueError("Insufficient data to compute HDI.")
-
-    # Find the shortest interval
-    hdi_width = np.inf
-    hdi_bounds = (None, None)
-    for i in range(n_samples - interval_idx):
-        lower = sorted_samples[i]
-        upper = sorted_samples[i + interval_idx]
-        width = angrange(upper - lower)  # Handle wrapping for circularity
-        if width < hdi_width:
-            hdi_width = width
-            hdi_bounds = (lower, upper)
-
-    return hdi_bounds
-
-
 def _circ_mean_resample(alpha, z0, v0):
     """
     Implementation of Section 8.3.5 (Fisher, 1993, P210)
@@ -1394,6 +1331,120 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
     return kappa
 
 
+#########################
+# Convinience functions #
+#########################
+
+
+def convert_moment(
+    mp: complex,
+) -> Tuple[float, float]:
+    """
+    Convert complex moment to polar coordinates.
+
+    Parameters
+    ----------
+    mp: complex
+        Complex moment
+
+    Returns
+    -------
+    u: float
+        Angle in radian
+    r: float
+        Magnitude
+
+    """
+
+    u = angrange(np.angle(mp))
+    r = np.abs(mp)
+
+    return u, r
+
+
+def compute_C_and_S(
+    alpha: np.ndarray,
+    w: np.ndarray,
+    p: int = 1,
+    mean: Union[float, np.ndarray] = 0.0,
+) -> Tuple[float, float]:
+    r"""
+    Compute the intermediate values Cbar and Sbar.
+
+    $$
+    \displaylines{
+    \bar{C}_{p} = \frac{\sum_{i=1}^{n} w_{i} \cos(p(\alpha_{i} - \mu))}{n} \\
+    \bar{S}_{p} = \frac{\sum_{i=1}^{n} w_{i} \sin(p(\alpha_{i} - \mu))}{n}
+    }
+    $$
+
+    Parameters
+    ----------
+    alpha: np.ndarray
+        Angles in radian.
+    w: np.ndarray
+        Frequencies or weights.
+    p: int, optional
+        Order of the moment (default is 1, for the first moment).
+    mean: float, optional
+        Mean angle (μ) to center the computation (default is 0.0).
+
+    Returns
+    -------
+    Cbar: float
+        Weighted mean cosine for the given moment.
+    Sbar: float
+        Weighted mean sine for the given moment.
+    """
+    n = np.sum(w)
+    Cbar = np.sum(w * np.cos(p * (alpha - mean))) / n
+    Sbar = np.sum(w * np.sin(p * (alpha - mean))) / n
+
+    return Cbar, Sbar
+
+
+def compute_hdi(samples, ci=0.95):
+    """
+    Compute the Highest Density Interval (HDI) for circular data.
+
+    Parameters
+    ----------
+    samples : np.ndarray
+        Bootstrap samples of the circular mean in radians.
+    ci : float, optional
+        Credible interval (default is 0.95 for 95% HDI).
+
+    Returns
+    -------
+    hdi : tuple
+        Lower and upper bounds of the HDI in radians.
+    """
+    # Wrap samples to [0, 2π) for circular consistency
+    wrapped_samples = angrange(samples)
+
+    # Sort the samples
+    sorted_samples = np.sort(wrapped_samples)
+
+    # Number of samples in the HDI
+    n_samples = len(sorted_samples)
+    interval_idx = int(np.floor(ci * n_samples))
+    if interval_idx == 0:
+        raise ValueError("Insufficient data to compute HDI.")
+
+    # Find the shortest interval
+    hdi_width = np.inf
+    hdi_bounds = (None, None)
+    for i in range(n_samples - interval_idx):
+        lower = sorted_samples[i]
+        upper = sorted_samples[i + interval_idx]
+        width = angrange(upper - lower)  # Handle wrapping for circularity
+        if width < hdi_width:
+            hdi_width = width
+            hdi_bounds = (lower, upper)
+
+    return hdi_bounds
+
+
 def compute_smooth_params(r: float, n: int) -> float:
     """
     Parameters
@@ -1462,49 +1513,3 @@ def nonparametric_density_estimation(
     f = radius * np.sqrt(1 + np.pi * f) - radius
 
     return x, f
-
-
-def circ_mean_and_r_of_means(
-    circs: Union[list, None] = None,
-    ms: Union[np.ndarray, None] = None,
-    rs: Union[np.ndarray, None] = None,
-) -> Tuple[float, float]:
-    """The Mean of a set of Mean Angles
-
-    Parameters
-    ----------
-    circs: list
-        a list of Circular Objects
-
-    ms: np.array (n, )
-        a set of mean angles in radian
-
-    rs: np.array (n, )
-        a set of mean resultant vecotr lengths
-
-    Returns
-    -------
-    m: float
-        mean of means in radian
-
-    r: float
-        mean of mean resultant vector lengths
-
-    """
-
-    if circs is None:
-        assert isinstance(ms, np.ndarray) and isinstance(
-            rs, np.ndarray
-        ), "If `circs` is None, then `ms` and `rs` are needed."
-    else:
-        ms, rs = map(np.array, zip(*[(circ.mean, circ.r) for circ in circs]))
-
-    X = np.mean(np.cos(ms) * rs)
-    Y = np.mean(np.sin(ms) * rs)
-    r = np.sqrt(X**2 + Y**2)
-    C = X / r
-    S = Y / r
-
-    m = angrange(np.arctan2(S, C))
-
-    return m, r
