@@ -125,22 +125,23 @@ class Circular:
 
     Examples
     --------
-    1. Basic Usage:
 
-        ```
-        data = [30, 60, 90, 120, 150]
-        circ = Circular(data, unit="degree")
-        print(circ.summary())
-        ```
+    #### Basic Usage
 
-    2. Grouped Data:
+    ```python
+    data = [30, 60, 90, 120, 150]
+    circ = Circular(data, unit="degree")
+    print(circ.summary())
+    ```
 
-        ```
-        data = [0, 30, 60, 90]
-        weights = [1, 2, 3, 4]
-        circ = Circular(data, w=weights, unit="degree")
-        print(circ.summary())
-        ```
+    #### Grouped Data
+
+    ```python
+    data = [0, 30, 60, 90]
+    weights = [1, 2, 3, 4]
+    circ = Circular(data, w=weights, unit="degree")
+    print(circ.summary())
+    ```
     """
 
     def __init__(
@@ -481,25 +482,25 @@ class Circular:
 
         Examples
         --------
-        1. Basic scatter plot:
+        #### Basic scatter plot
 
-            ```
-            data = [30, 60, 90, 120, 150]
-            circ = Circular(data, unit="degree")
-            circ.plot(marker_color="blue", marker_size=15)
-            ```
+        ```
+        data = [30, 60, 90, 120, 150]
+        circ = Circular(data, unit="degree")
+        circ.plot(marker_color="blue", marker_size=15)
+        ```
 
-        2. Rose diagram with density:
+        #### Rose diagram with density
 
-            ```
-            circ.plot(plot_rose=True, plot_density=True, bins=18)
-            ```
+        ```
+        circ.plot(plot_rose=True, plot_density=True, bins=18)
+        ```
 
-        3. Customized plot with radial grid and legend:
+        #### Customized plot with radial grid and legend
 
-            ```
-            circ.plot(plot_grid=True, plot_spine=True, plot_mean=True)
-            ```
+        ```
+        circ.plot(plot_grid=True, plot_spine=True, plot_mean=True)
+        ```
         """
         ax = circ_plot(self, ax=ax, **kwargs)
 
