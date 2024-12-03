@@ -1,1 +1,2 @@
 include pycircstat2/data/**/*.*
+include pycircstat2/misc/logo.png
