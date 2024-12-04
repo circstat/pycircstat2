@@ -130,6 +130,67 @@ class circularuniform_gen(rv_continuous):
 circularuniform = circularuniform_gen(name="circularuniform")
 
 
+class triangular_gen(rv_continuous):
+    """Triangular Distribution
+
+    ![triangular](../images/circ-mod-triangular.png)
+
+    Methods
+    -------
+    pdf(x, rho)
+        Probability density function.
+
+    cdf(x, rho)
+        Cumulative distribution function.
+
+    Notes
+    -----
+    Implementation based on Section 2.2.3 of Jammalamadaka & SenGupta (2001)
+    """
+
+    def _argcheck(self, rho):
+        return 0 <= rho <= 4 / np.pi**2
+
+    def _pdf(self, x, rho):
+        return (
+            (4 - np.pi**2.0 * rho + 2.0 * np.pi * rho * np.abs(np.pi - x)) / 8.0 / np.pi
+        )
+
+    def pdf(self, x, rho, *args, **kwargs):
+        r"""
+        Probability density function of the Triangular distribution.
+
+        $$
+        f(\theta) = \frac{4 - \pi^2 \rho + 2\pi \rho |\pi - \theta|}{8\pi}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        rho : float
+            Concentratio parameter, 0 <= rho <= 4/pi^2.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+
+        return super().pdf(x, rho, *args, **kwargs)
+
+    def _cdf(self, x, rho):
+        @np.vectorize
+        def _cdf_single(x, rho):
+            integral, _ = quad(self._pdf, a=0, b=x, args=(rho))
+            return integral
+
+        return _cdf_single(x, rho)
+
+
+triangular = triangular_gen(name="triangular")
+
+
 class cardioid_gen(rv_continuous):
     """Cardioid (cosine) Distribution
 
@@ -268,7 +329,8 @@ class cartwright_gen(rv_continuous):
     def _cdf(self, x, mu, zeta):
         @np.vectorize
         def _cdf_single(x, mu, zeta):
-            return quad(self._pdf, a=0, b=x, args=(mu, zeta))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, zeta))
+            return integral
 
         return _cdf_single(x, mu, zeta)
 
@@ -361,7 +423,8 @@ class wrapnorm_gen(rv_continuous):
     def _cdf(self, x, mu, rho):
         @np.vectorize
         def _cdf_single(x, mu, rho):
-            return quad(self._pdf, a=0, b=x, args=(mu, rho))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, rho))
+            return integral
 
         return _cdf_single(x, mu, rho)
 
@@ -713,7 +776,8 @@ class vonmises_gen(rv_continuous):
     def _cdf(self, x, mu, kappa):
         @np.vectorize
         def _cdf_single(x, mu, kappa):
-            return quad(self._pdf, a=0, b=x, args=(mu, kappa))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa))
+            return integral
 
         return _cdf_single(x, mu, kappa)
 
@@ -1078,14 +1142,16 @@ class jonespewsey_gen(rv_continuous):
 
             @np.vectorize
             def _cdf_single(x, mu, kappa, psi, c):
-                return quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, c))
+                integral, _ = quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, c))
+                return integral
 
             return _cdf_single(x, mu, kappa, psi, c)
         else:
 
             @np.vectorize
             def _cdf_single(x, mu, kappa, psi):
-                return quad(self._pdf, a=0, b=x, args=(mu, kappa, psi))
+                integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, psi))
+                return integral
 
             return _cdf_single(x, mu, kappa, psi)
 
@@ -1202,8 +1268,8 @@ class vonmises_ext_gen(rv_continuous):
     def _cdf(self, x, mu, kappa, nu):
         @np.vectorize
         def _cdf_single(x, mu, kappa, nu):
-            result, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
-            return result
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
+            return integral
 
         return _cdf_single(x, mu, kappa, nu)
 
@@ -1318,7 +1384,8 @@ class jonespewsey_sineskewed_gen(rv_continuous):
     def _cdf(self, x, xi, kappa, psi, lmbd):
         @np.vectorize
         def _cdf_single(x, xi, kappa, psi, lmbd):
-            return quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, lmbd))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, lmbd))
+            return integral
 
         return _cdf_single(x, xi, kappa, psi, lmbd)
 
@@ -1426,7 +1493,8 @@ class jonespewsey_asymext_gen(rv_continuous):
     def _cdf(self, x, xi, kappa, psi, nu):
         @np.vectorize
         def _cdf_single(x, xi, kappa, psi, nu):
-            return quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, nu))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, nu))
+            return integral
 
         return _cdf_single(x, xi, kappa, psi, nu)
 
@@ -1571,7 +1639,8 @@ class inverse_batschelet_gen(rv_continuous):
     def _cdf(self, x, xi, kappa, nu, lmbd):
         @np.vectorize
         def _cdf_single(x, xi, kappa, nu, lmbd):
-            return quad(self._pdf, a=0, b=x, args=(xi, kappa, nu, lmbd))
+            integral, _ = quad(self._pdf, a=0, b=x, args=(xi, kappa, nu, lmbd))
+            return integral
 
         return _cdf_single(x, xi, kappa, nu, lmbd)
 
