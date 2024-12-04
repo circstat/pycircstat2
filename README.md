@@ -9,7 +9,7 @@ A rework of [pycircstat](https://github.com/circstat/pycircstat).
 [**Key Features**](#key-features) |
 [**Installlation**](#installation) | 
 [**API Reference**](#api-reference) |
-[**Examples**](#examples-notebooks) (
+[**Examples**](#example-notebooks) (
 [**Books**](#books) |
 [**Topics**](#topics)
 )
@@ -59,7 +59,7 @@ pip install -e pycircstat2
 
 The API reference is available [here](https://circstat.github.io/pycircstat2/reference/base/).
 
-## Example notbooks
+## Example notebooks
 
 In the notebooks below, we reproduce examples and figures from a few textbooks on circular statistics.
 
