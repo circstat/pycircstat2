@@ -6,10 +6,10 @@ from pycircstat2.distributions import (
     circularuniform,
     inverse_batschelet,
     jonespewsey,
-    jonespewsey_asymext,
+    jonespewsey_asym,
     jonespewsey_sineskewed,
     vonmises,
-    vonmises_ext,
+    vonmises_flattopped,
     wrapcauchy,
     wrapnorm,
 )
@@ -17,9 +17,7 @@ from pycircstat2.distributions import (
 
 def test_circularuniform():
 
-    np.testing.assert_approx_equal(
-        circularuniform.cdf(2), 0.3183, significant=5
-    )
+    np.testing.assert_approx_equal(circularuniform.cdf(2), 0.3183, significant=5)
     np.testing.assert_approx_equal(circularuniform.ppf(1 / np.pi), 2)
 
 
@@ -111,9 +109,9 @@ def test_jonespewsey():
     )
 
 
-def test_vonmises_ext():
+def test_vonmises_flattopped():
 
-    vme = vonmises_ext(kappa=2, nu=-0.5, mu=np.pi / 2)
+    vme = vonmises_flattopped(kappa=2, nu=-0.5, mu=np.pi / 2)
     np.testing.assert_approx_equal(
         vme.cdf(x=3 * np.pi / 4).round(4),
         0.7120,
@@ -142,9 +140,9 @@ def test_jonespewsey_sineskewed():
     )
 
 
-def test_jonespewsey_asymext():
+def test_jonespewsey_asym():
 
-    jpa = jonespewsey_asymext(kappa=2, psi=-1, nu=0.75, xi=np.pi / 2)
+    jpa = jonespewsey_asym(kappa=2, psi=-1, nu=0.75, xi=np.pi / 2)
     np.testing.assert_approx_equal(
         jpa.cdf(x=np.pi / 2).round(4),
         0.7535,

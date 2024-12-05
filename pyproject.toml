@@ -22,7 +22,6 @@ dev = [
     "black",
     "isort",
     "jupyter",
-    "neuron",
     "pytest",
 ]
 

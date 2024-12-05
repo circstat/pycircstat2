@@ -14,9 +14,9 @@ __all__ = [
     "wrapcauchy",
     "vonmises",
     "jonespewsey",
-    "vonmises_ext",
+    "vonmises_flattopped",
     "jonespewsey_sineskewed",
-    "jonespewsey_asymext",
+    "jonespewsey_asym",
     "inverse_batschelet",
 ]
 
@@ -1066,6 +1066,109 @@ class vonmises_gen(rv_continuous):
 vonmises = vonmises_gen(name="vonmises")
 
 
+class vonmises_flattopped_gen(rv_continuous):
+    r"""Flat-topped von Mises Distribution
+
+    The Flat-topped von Mises distribution is a modification of the von Mises distribution
+    that allows for more flexible peak shapes, including flattened or sharper tops, depending
+    on the value of the shape parameter $\nu$.
+
+    ![vonmises-ext](../images/circ-mod-vonmises-flat-topped.png)
+
+    Methods
+    -------
+    pdf(x, mu, kappa, nu)
+        Probability density function.
+
+    cdf(x, mu, kappa, nu)
+        Cumulative distribution function.
+
+    Note
+    ----
+    Implementation based on Section 4.3.10 of Pewsey et al. (2014)
+    """
+
+    def _validate_params(self, mu, kappa, nu):
+        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-1 <= nu <= 1)
+
+    def _argcheck(self, mu, kappa, nu):
+        if self._validate_params(mu, kappa, nu):
+            self._c = _c_vmft(mu, kappa, nu)
+            return True
+        else:
+            return False
+
+    def _pdf(self, x, mu, kappa, nu):
+        return self._c * _kernel_vmft(x, mu, kappa, nu)
+
+    def pdf(self, x, mu, kappa, nu, *args, **kwargs):
+        r"""
+        Probability density function of the Flat-topped von Mises distribution.
+
+        $$
+        f(\theta) = c \exp(\kappa \cos(\theta - \mu + \nu \sin(\theta - \mu)))
+        $$
+
+        , where `c` is the normalizing constant:
+
+        $$
+        c = \frac{1}{\int_{-\pi}^{\pi} \exp(\kappa \cos(\theta - \mu + \nu \sin(\theta - \mu))) d\theta}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
+        mu : float
+            Location parameter, $0 \leq \mu \leq 2\pi$. This is the mean direction when $\nu = 0$.
+        kappa : float
+            Concentration parameter, $\kappa \geq 0$. Higher values indicate a sharper peak around $\mu$.
+        nu : float
+            Shape parameter, $-1 \leq \nu \leq 1$. Controls the flattening or sharpening of the peak:
+            - $\nu > 0$: sharper peaks.
+            - $\nu < 0$: flatter peaks.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Values of the probability density function at the specified points.
+
+
+        Notes
+        -----
+        - The normalization constant $c$ is computed numerically, as the integral generally
+        does not have a closed-form solution.
+        - Special cases:
+            - When $\nu = 0$, the distribution reduces to the standard von Mises distribution.
+            - When $\kappa = 0$, the distribution becomes uniform on $[0, 2\pi)$.
+        """
+        return super().pdf(x, mu, kappa, nu, *args, **kwargs)
+
+    def _cdf(self, x, mu, kappa, nu):
+        @np.vectorize
+        def _cdf_single(x, mu, kappa, nu):
+            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
+            return integral
+
+        return _cdf_single(x, mu, kappa, nu)
+
+
+vonmises_flattopped = vonmises_flattopped_gen(name="vonmises_flattopped")
+
+##############################################
+## Helper Functions: Flat-topped von Mises  ##
+##############################################
+
+
+def _kernel_vmft(x, mu, kappa, nu):
+    return np.exp(kappa * np.cos(x - mu + nu * np.sin(x - mu)))
+
+
+def _c_vmft(mu, kappa, nu):
+    c = 1 / quad_vec(_kernel_vmft, a=-np.pi, b=np.pi, args=(mu, kappa, nu))[0]
+    return c
+
+
 class jonespewsey_gen(rv_continuous):
     """Jones-Pewsey Distribution
 
@@ -1182,114 +1285,6 @@ def _c_jonespewsey(mu, kappa, psi):
             return c
 
 
-#########################
-## Symmetric Extention ##
-#########################
-
-
-class vonmises_ext_gen(rv_continuous):
-    r"""Flat-topped von Mises Distribution
-
-    The Flat-topped von Mises distribution is a modification of the von Mises distribution
-    that allows for more flexible peak shapes, including flattened or sharper tops, depending
-    on the value of the shape parameter $\nu$.
-
-    ![vonmises-ext](../images/circ-mod-vonmises-ext.png)
-
-    Methods
-    -------
-    pdf(x, mu, kappa, nu)
-        Probability density function.
-
-    cdf(x, mu, kappa, nu)
-        Cumulative distribution function.
-
-    Note
-    ----
-    Implementation based on Section 4.3.10 of Pewsey et al. (2014)
-    """
-
-    def _validate_params(self, mu, kappa, nu):
-        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-1 <= nu <= 1)
-
-    def _argcheck(self, mu, kappa, nu):
-        if self._validate_params(mu, kappa, nu):
-            self._c = _c_vmext(mu, kappa, nu)
-            return True
-        else:
-            return False
-
-    def _pdf(self, x, mu, kappa, nu):
-        return self._c * _kernel_vmext(x, mu, kappa, nu)
-
-    def pdf(self, x, mu, kappa, nu, *args, **kwargs):
-        r"""
-        Probability density function of the Flat-topped von Mises distribution.
-
-        $$
-        f(\theta) = c \exp(\kappa \cos(\theta - \mu + \nu \sin(\theta - \mu)))
-        $$
-
-        , where `c` is the normalizing constant:
-
-        $$
-        c = \frac{1}{\int_{-\pi}^{\pi} \exp(\kappa \cos(\theta - \mu + \nu \sin(\theta - \mu))) d\theta}
-        $$
-
-        Parameters
-        ----------
-        x : array_like
-            Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
-        mu : float
-            Location parameter, $0 \leq \mu \leq 2\pi$. This is the mean direction when $\nu = 0$.
-        kappa : float
-            Concentration parameter, $\kappa \geq 0$. Higher values indicate a sharper peak around $\mu$.
-        nu : float
-            Shape parameter, $-1 \leq \nu \leq 1$. Controls the flattening or sharpening of the peak:
-            - $\nu > 0$: sharper peaks.
-            - $\nu < 0$: flatter peaks.
-
-        Returns
-        -------
-        pdf_values : array_like
-            Values of the probability density function at the specified points.
-
-
-        Notes
-        -----
-        - The normalization constant $c$ is computed numerically, as the integral generally
-        does not have a closed-form solution.
-        - Special cases:
-            - When $\nu = 0$, the distribution reduces to the standard von Mises distribution.
-            - When $\kappa = 0$, the distribution becomes uniform on $[0, 2\pi)$.
-        """
-        return super().pdf(x, mu, kappa, nu, *args, **kwargs)
-
-    def _cdf(self, x, mu, kappa, nu):
-        @np.vectorize
-        def _cdf_single(x, mu, kappa, nu):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
-            return integral
-
-        return _cdf_single(x, mu, kappa, nu)
-
-
-vonmises_ext = vonmises_ext_gen(name="vonmises_ext")
-
-###########################################
-## Helper Functions: extended von Mises  ##
-###########################################
-
-
-def _kernel_vmext(x, mu, kappa, nu):
-    return np.exp(kappa * np.cos(x - mu + nu * np.sin(x - mu)))
-
-
-def _c_vmext(mu, kappa, nu):
-    c = 1 / quad_vec(_kernel_vmext, a=-np.pi, b=np.pi, args=(mu, kappa, nu))[0]
-    return c
-
-
 ###########################
 ## Sine-Skewed Extention ##
 ###########################
@@ -1397,13 +1392,13 @@ jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed
 ##########################
 
 
-class jonespewsey_asymext_gen(rv_continuous):
+class jonespewsey_asym_gen(rv_continuous):
     r"""Asymmetric Extended Jones-Pewsey Distribution
 
     This distribution is an extension of the Jones-Pewsey family, incorporating asymmetry
     through a secondary parameter $\nu$. It is defined on the circular domain $[0, 2\pi)$.
 
-    ![jonespewsey-asymext](../images/circ-mod-jonespewsey-asymext.png)
+    ![jonespewsey-asymext](../images/circ-mod-jonespewsey-asym.png)
 
     Methods
     -------
@@ -1429,13 +1424,13 @@ class jonespewsey_asymext_gen(rv_continuous):
 
     def _argcheck(self, xi, kappa, psi, nu):
         if self._validate_params(xi, kappa, psi, nu):
-            self._c = _c_jonespewsey_asymext(xi, kappa, psi, nu)
+            self._c = _c_jonespewsey_asym(xi, kappa, psi, nu)
             return True
         else:
             return False
 
     def _pdf(self, x, xi, kappa, psi, nu):
-        return _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu) / self._c
+        return _kernel_jonespewsey_asym(x, xi, kappa, psi, nu) / self._c
 
     def pdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
         r"""
@@ -1499,10 +1494,10 @@ class jonespewsey_asymext_gen(rv_continuous):
         return _cdf_single(x, xi, kappa, psi, nu)
 
 
-jonespewsey_asymext = jonespewsey_asymext_gen(name="jonespewsey_asymext")
+jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
 
 
-def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
+def _kernel_jonespewsey_asym(x, xi, kappa, psi, nu):
     if np.isclose(np.abs(psi), 0).all():
         return np.exp(kappa * np.cos(x - xi + nu * np.cos(x - xi)))
     else:
@@ -1512,9 +1507,9 @@ def _kernel_jonespewsey_asymext(x, xi, kappa, psi, nu):
         ) ** (1 / psi)
 
 
-def _c_jonespewsey_asymext(xi, kappa, psi, nu):
+def _c_jonespewsey_asym(xi, kappa, psi, nu):
     c = quad_vec(
-        _kernel_jonespewsey_asymext,
+        _kernel_jonespewsey_asym,
         a=-np.pi,
         b=np.pi,
         args=(xi, kappa, psi, nu),
