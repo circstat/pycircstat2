@@ -18,6 +18,7 @@ __all__ = [
     "jonespewsey_sineskewed",
     "jonespewsey_asym",
     "inverse_batschelet",
+    "wrapstable",
 ]
 
 
@@ -1699,3 +1700,113 @@ def _c_invbatschelet(kappa, lmbd):
 
         c = 1 / (mult * (con1 - con2 * intval))
     return c
+
+
+class wrapstable_gen(rv_continuous):
+    r"""
+    Wrapped Stable Distribution
+
+    - is symmetric around $\delta$ when $\beta = 0$, and to be skewed to the right (left) if $\beta > 0$ ($\beta < 0$).
+    - can be reduced to
+        - the wrapped normal distribution when $\alpha = 2, \beta = 0$.
+        - the wrapped Cauchy distribution when $\alpha = 1, \beta = 0$.
+        - the wrappd Lévy distribution when $\alpha = 1/2, \beta = 1$
+
+    ![wrapstable](../images/circ-mod-wrapstable.png)
+
+    References
+    ----------
+    - Pewsey, A. (2008). The wrapped stable family of distributions as a flexible model for circular data. Computational Statistics & Data Analysis, 52(3), 1516-1523.
+    """
+
+    def _validate_params(self, delta, alpha, beta, gamma):
+        return (
+            (0 <= delta <= np.pi * 2)
+            and (0 < alpha <= 2)
+            and (-1 < beta < 1)
+            and (gamma > 0)
+        )
+
+    def _argcheck(self, delta, alpha, beta, gamma):
+        if self._validate_params(delta, alpha, beta, gamma):
+            return True
+        else:
+            return False
+
+    def _pdf(self, x, delta, alpha, beta, gamma):
+
+        def rho_p(p, alpha, gamma):
+            return np.exp(-((gamma * p) ** alpha))
+
+        def mu_p(p, alpha, beta, gamma, delta):
+            if np.all(alpha == 1):
+                mu = delta * p - 2 * beta * gamma * p * np.log(gamma * p) / np.pi
+            else:
+                mu = delta * p + beta * np.tan(np.pi * alpha / 2) * (
+                    (gamma * p) ** alpha - gamma * p
+                )
+            return mu
+
+        series_sum = 0
+        for p in np.arange(1, 150):
+            rho = rho_p(p, alpha, gamma)
+            mu = mu_p(p, alpha, beta, gamma, delta)
+            series_sum += rho * np.cos(p * x - mu)
+
+        pdf_values = 1 / (2 * np.pi) * (1 + 2 * series_sum)
+
+        return pdf_values
+
+    def pdf(self, x, delta, alpha, beta, gamma, *args, **kwargs):
+        r"""
+        Probability density function of the Wrapped Stable distribution.
+
+        $$
+        f(\theta) = \frac{1}{2\pi} \left[1 + 2 \sum_{p=1}^{\infty} \rho_p \cos\left(p(\theta - \mu_p)\right)\right]
+        $$
+
+        , where $\rho_p$ is the $p$th mean resultant length and $\mu_p$ is the $p$th mean direction:
+
+        $$
+        \rho_p = \exp\left(-(\gamma p)^\alpha\right)
+        $$
+
+        $$
+        \mu_p = 
+        \begin{cases}
+            \delta p + \beta \tan\left(\frac{\pi \alpha}{2}\right) \left((\gamma p)^\alpha - \gamma p\right), & \alpha \neq 1 \\
+            \delta p - \beta \frac{2}{\pi} \log(\gamma p), & \text{if } \alpha = 1
+        \end{cases}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
+        delta : float
+            Location parameter, $0 \leq \delta \leq 2\pi$. This is the mean direction of the distribution.
+        alpha : float
+            Stability parameter, $0 < \alpha \leq 2$. Higher values indicate heavier tails.
+        beta : float
+            Skewness parameter, $-1 < \beta < 1$. Controls the asymmetry of the distribution.
+        gamma : float
+            Scale parameter, $\gamma > 0$. Scales the distribution.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Values of the probability density function at the specified points.
+        """
+        return super().pdf(x, delta, alpha, beta, gamma, *args, **kwargs)
+
+    def _cdf(self, x, delta, alpha, beta, gamma):
+
+        @np.vectorize
+        def _cdf_single(x, delta, alpha, beta, gamma):
+            integral, _ = quad(self._pdf, a=0, b=x, args=(delta, alpha, beta, gamma))
+            return integral
+
+        return _cdf_single(x, delta, alpha, beta, gamma)
+
+
+wrapstable = wrapstable_gen(name="wrapstable")

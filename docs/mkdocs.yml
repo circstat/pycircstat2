@@ -2,7 +2,7 @@ site_name: pycircstat2
 theme:
     name: material
     features:
-        - navigation.instant
+        - navigation.sections
         - content.code.copy
         - content.tabs.link
         - content.mathjax
