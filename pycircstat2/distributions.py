@@ -386,7 +386,7 @@ class wrapnorm_gen(rv_continuous):
     """
 
     def _argcheck(self, mu, rho):
-        return 0 <= mu <= np.pi * 2 and 0 < rho <= 1
+        return 0 <= mu <= np.pi * 2 and 0 < rho < 1
 
     def _pdf(self, x, mu, rho):
         return (
