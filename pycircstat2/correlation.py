@@ -23,8 +23,31 @@ def aacorr(
     test: bool = False,
     strict: bool = True,
 ) -> Union[float, CorrelationResult]:
-    """
+    r"""
     Angular-Angular / Spherical Correlation.
+
+    Three methods are available:
+
+    - 'fl' (Fisher & Lee, 1983): T-linear association. The correlation coefficient
+
+    $$
+    r = \frac{\sum_{i=1}^{n-1}\sum_{j=i+1}^{n} \sin(a_{ij}) \sin(b_{ij})}{\sqrt{\sum_{i=1}^{n-1}\sum_{j=i+1}^{n} \sin^2(a_{ij}) \sum_{i=1}^{n-1}\sum_{j=i+1}^{n} \sin^2(b_{ij})}}
+    $$
+
+    - 'js' (Jammalamadaka & SenGupta, 2001)
+
+    $$
+    r = \frac{\sum \sin(a_i - \bar{a}) \sin(b_i - \bar{b})}{\sqrt{\sum \sin^2(a_i - \bar{a}) \sum \sin^2(b_i - \bar{b})}}
+    $$
+
+    - 'nonparametric'
+
+    $$
+    r = \frac{\sum \cos(C \cdot \text{rankdiff})^2 + \sum \sin(C \cdot \text{rankdiff})^2}{n^2} - \frac{\sum \cos(C \cdot \text{ranksum})^2 + \sum \sin(C \cdot \text{ranksum})^2}{n^2}
+    $$
+
+    , where $C = 2\pi / n$ and $\text{rankdiff} = \text{rank}_a - \text{rank}_b$ and $\text{ranksum} = \text{rank}_a + \text{rank}_b$.
+
 
     Parameters
     ----------
@@ -33,7 +56,8 @@ def aacorr(
     b: Circular or np.ndarray
         Angles in radian
     method: str
-        - 'fl' (Fisher & Lee, 1983)
+        - 'fl' (Fisher & Lee, 1983): T-linear association. The correlation coefficient
+          is computed as:
         - 'js' (Jammalamadaka & SenGupta, 2001)
         - 'nonparametric'
     test: bool
@@ -232,9 +256,16 @@ def alcorr(
     a: Union[Type[Circular], np.ndarray],
     x: np.ndarray,
 ) -> CorrelationResult:
-    """Angular-Linear / Cylindrical Correlation based on Mardia (1972).
+    r"""Angular-Linear / Cylindrical Correlation based on Mardia (1972).
 
     Also known as Linear-circular or C-linear association (Fisher, 1993).
+
+    $$
+    r = \sqrt{\frac{r_{xc}^2 + r_{xs}^2 - 2r_{xc}r_{xs}r_{cs}}{1 - r_{cs}^2}}
+    $$
+
+    where $r_{xc}$, $r_{xs}$, and $r_{cs}$ are the correlation coefficients between
+    $\cos(a)$ and $x$, $x$ and $\sin(a)$, and $\sin(a)$ and $\cos(a)$, respectively.
 
     Parameters
     ----------
