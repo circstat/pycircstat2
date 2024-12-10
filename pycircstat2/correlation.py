@@ -1,4 +1,4 @@
-from typing import Type, Union
+from typing import Literal, Type, Union
 
 import numpy as np
 from scipy.stats import chi2, norm, rankdata
@@ -13,7 +13,7 @@ def aacorr(
     method: str = "fl",
     test: bool = False,
     strict: bool = True,
-) -> tuple:
+) -> Union[float, tuple[float, bool]]:
     """
     Angular-Angular Correlation.
 
@@ -31,7 +31,7 @@ def aacorr(
         Return significant test results.
     strict: bool
         Strict mode. If True, raise an error when mean direction is
-        not significant. Only for Jammalamadaka & SenGupta (2001)
+        not significant. Only for method="js" (Jammalamadaka & SenGupta, 2001).
 
     Returns
     -------
@@ -64,10 +64,7 @@ def aacorr(
         else:
             # jackknife test (Fingleton, 1989)
             n = len(a)
-            raas = [
-                _corr(np.delete(a, i), np.delete(b, i), strict)
-                for i in range(n)
-            ]
+            raas = [_corr(np.delete(a, i), np.delete(b, i), strict) for i in range(n)]
             m_raas = np.mean(raas)
             s2_raas = np.var(raas, ddof=1)
             z = norm.ppf(0.975)
@@ -154,7 +151,7 @@ def _aacorr_js(
         a_mean = a.mean
         a = a.alpha
     else:
-        a_mean = circ_mean(a)[0]
+        a_mean = circ_mean(a)
 
     if isinstance(b, Circular):
         if strict:
@@ -162,7 +159,7 @@ def _aacorr_js(
         b_mean = b.mean
         b = b.alpha
     else:
-        b_mean = circ_mean(b)[0]
+        b_mean = circ_mean(b)
 
     abar = a - a_mean
     bbar = b - b_mean
@@ -197,9 +194,7 @@ def _aacorr_np(
     r1 = (
         np.sum(np.cos(C * rank_diff)) ** 2 + np.sum(np.sin(C * rank_diff)) ** 2
     ) / n**2
-    r2 = (
-        np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2
-    ) / n**2
+    r2 = (np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2) / n**2
 
     return r1 - r2
 
@@ -207,7 +202,7 @@ def _aacorr_np(
 def alcorr(
     a: Union[Type[Circular], np.ndarray],
     x: np.ndarray,
-) -> float:
+) -> tuple[float, float]:
     """Angular-Linear Correlation based on Mardia (1972)
 
     Parameters
