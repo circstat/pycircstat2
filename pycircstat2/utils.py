@@ -10,7 +10,7 @@ def data2rad(
     data: Union[np.ndarray, float, int],
     k: Union[float, int] = 360,  # number of intervals in the full cycle
 ) -> Union[np.ndarray, float]:  # eq(26.1), zar 2010
-    r"""Convert data measured on a circular scale to 
+    r"""Convert data measured on a circular scale to
     corresponding angular directions.
 
     $$ \alpha = \frac{2\pi \times \mathrm{data}}{k} $$
@@ -52,9 +52,7 @@ def angrange(rad: Union[np.ndarray, float, int]) -> Union[np.ndarray, float]:
     return ((rad % (2 * np.pi)) + 2 * np.pi) % (2 * np.pi)
 
 
-def angular_distance(
-    a: Union[np.ndarray, list, float], b: float
-) -> np.ndarray:
+def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
     """Angular distance between two angles.
 
     Parameters
@@ -104,7 +102,7 @@ def load_data(
     print_meta: bool = False,
     return_meta: bool = False,
 ) -> Union[pd.DataFrame, tuple]:
-    __source__ = ["fisher", "zar", "mardia", "pewsey"]
+    __source__ = ["fisher", "zar", "mardia", "pewsey", "jammalamadaka"]
 
     # check source
     if source not in __source__:

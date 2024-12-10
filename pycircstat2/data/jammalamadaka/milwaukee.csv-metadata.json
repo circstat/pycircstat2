@@ -1,0 +1,17 @@
+{
+    "Description": "Measurements on wind direction at 6:00 am and 12:00 noon (denoted by θ and φ, respectively), on each of 21 consecutive days, at a weather station in Milwaukee.",
+    "Source": "Johnson and Wehrly, 1977",
+    "Examples": "Jammalamadaka & SenGupta (2001) Example 8.1",
+    "Columns": {
+        "θ": {
+            "name": "θ",
+            "type": "vectors",
+            "unit": "degree"
+        },
+        "ψ": {
+            "name": "ψ",
+            "type": "vectors",
+            "unit": "degree"
+        }
+    }
+}

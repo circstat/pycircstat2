@@ -1,4 +1,5 @@
-from typing import Literal, Type, Union
+from dataclasses import dataclass
+from typing import Optional, Type, Union
 
 import numpy as np
 from scipy.stats import chi2, norm, rankdata
@@ -7,15 +8,23 @@ from .base import Circular
 from .descriptive import circ_mean
 
 
+@dataclass
+class CorrelationResult:
+    r: float
+    p_value: Optional[float] = None
+    reject_null: Optional[bool] = None
+    test_stat: Optional[float] = None
+
+
 def aacorr(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
     method: str = "fl",
     test: bool = False,
     strict: bool = True,
-) -> Union[float, tuple[float, bool]]:
+) -> Union[float, CorrelationResult]:
     """
-    Angular-Angular Correlation.
+    Angular-Angular / Spherical Correlation.
 
     Parameters
     ----------
@@ -24,8 +33,8 @@ def aacorr(
     b: Circular or np.ndarray
         Angles in radian
     method: str
-        - 'fl' (Fisher & Lee)
-        - 'js' (Jammalamadaka & SenGupta)
+        - 'fl' (Fisher & Lee, 1983)
+        - 'js' (Jammalamadaka & SenGupta, 2001)
         - 'nonparametric'
     test: bool
         Return significant test results.
@@ -47,43 +56,26 @@ def aacorr(
         _corr = _aacorr_js
     elif method == "nonparametric":
         _corr = _aacorr_np
+    else:
+        raise ValueError("Invalid method. Choose from 'fl', 'js', 'nonparametric'.")
 
-    r = _corr(a, b, strict)
+    result = _corr(a, b, test, strict)
 
     if test:
-        if isinstance(a, Circular):
-            a = a.alpha
-        if isinstance(b, Circular):
-            b = b.alpha
-        assert len(a) == len(b), "`a` and `b` must be the same length."
-
-        if method == "nonparametric":
-            # assuming α=0.05, critical values from P661, Zar, 2010
-            n = len(a)
-            reject = (n - 1) * r > 2.99 + 2.16 / n
-        else:
-            # jackknife test (Fingleton, 1989)
-            n = len(a)
-            raas = [_corr(np.delete(a, i), np.delete(b, i), strict) for i in range(n)]
-            m_raas = np.mean(raas)
-            s2_raas = np.var(raas, ddof=1)
-            z = norm.ppf(0.975)
-            lb = n * r - (n - 1) * m_raas - z * np.sqrt(s2_raas / n)
-            ub = n * r - (n - 1) * m_raas + z * np.sqrt(s2_raas / n)
-
-            reject = ~(lb <= 0 <= ub)
-
-        return r, reject
+        return result
     else:
-        return r
+        return result.r
 
 
 def _aacorr_fl(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
-    stric: bool,
-) -> float:
+    test: bool,
+    strict: bool,
+) -> CorrelationResult:
     """Angular-Angular Correlation based on Fisher & Lee (1983)
+
+    Also known as Circular-Circular or T-linear association (Fisher, 1993).
 
     Parameters
     ----------
@@ -94,8 +86,7 @@ def _aacorr_fl(
 
     Returns
     -------
-    raa: float
-        correlation coefficient.
+    CorrelationResult
 
     References
     ----------
@@ -108,20 +99,40 @@ def _aacorr_fl(
         b = b.alpha
     assert len(a) == len(b), "`a` and `b` must be the same length."
 
-    aij = np.triu(a[:, None] - a).flatten()
-    bij = np.triu(b[:, None] - b).flatten()
-    num = np.sum(np.sin(aij) * np.sin(bij))
-    den = np.sqrt(np.sum(np.sin(aij) ** 2) * np.sum(np.sin(bij) ** 2))
-    raa = num / den
+    def _corr(a, b):
+        aij = np.triu(a[:, None] - a).flatten()
+        bij = np.triu(b[:, None] - b).flatten()
+        num = np.sum(np.sin(aij) * np.sin(bij))
+        den = np.sqrt(np.sum(np.sin(aij) ** 2) * np.sum(np.sin(bij) ** 2))
+        raa = num / den
+        return raa
 
-    return raa
+    r = _corr(a, b)
+
+    if test:
+        # jackknife test (Fingleton, 1989)
+        # compute raa an additional n times, each time leaving out one pair of observations
+        n = len(a)
+        raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
+        m_raas = np.mean(raas)
+        s2_raas = np.var(raas, ddof=1)
+        z = norm.ppf(0.975)
+        lb = n * r - (n - 1) * m_raas - z * np.sqrt(s2_raas / n)
+        ub = n * r - (n - 1) * m_raas + z * np.sqrt(s2_raas / n)
+
+        reject = ~(lb <= 0 <= ub)
+
+        return CorrelationResult(r=r, reject_null=reject)
+    else:
+        return CorrelationResult(r=r)
 
 
 def _aacorr_js(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
+    test: bool,
     strict: bool,
-) -> float:
+) -> CorrelationResult:
     """Implementation of Angular-Angular Correlation
     in R.Circular.
 
@@ -163,18 +174,32 @@ def _aacorr_js(
 
     abar = a - a_mean
     bbar = b - b_mean
-    num = np.sum(np.sin(abar) * np.sin(bbar))
-    den = np.sqrt(np.sum(np.sin(abar) ** 2) * np.sum(np.sin(bbar) ** 2))
+    Sa = np.sin(abar)
+    Sb = np.sin(bbar)
+    num = np.sum(Sa * Sb)
+    den = np.sqrt(np.sum(Sa**2) * np.sum(Sb**2))
 
-    raa = num / den
-    return raa
+    r = num / den
+
+    if test:
+        n = len(a)
+        l20 = np.mean(Sa**2)
+        l02 = np.mean(Sb**2)
+        l22 = np.mean(Sa**2 * Sb**2)
+        test_stat = np.sqrt(n) * np.sqrt(l20 * l02 / l22) * r
+        p_val = 2 * (1 - norm.cdf(np.abs(test_stat)))
+
+        return CorrelationResult(r=r, p_value=p_val, test_stat=test_stat)
+    else:
+        return CorrelationResult(r=r)
 
 
 def _aacorr_np(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
+    test: bool,
     strict: bool,
-) -> float:
+) -> CorrelationResult:
     """Nonparametric angular-angular correlation."""
 
     if isinstance(a, Circular):
@@ -196,14 +221,20 @@ def _aacorr_np(
     ) / n**2
     r2 = (np.sum(np.cos(C * rank_sum)) ** 2 + np.sum(np.sin(C * rank_sum)) ** 2) / n**2
 
-    return r1 - r2
+    r = r1 - r2
+
+    n = len(a)
+    reject = (n - 1) * r > 2.99 + 2.16 / n
+    return CorrelationResult(r=r, reject_null=reject)
 
 
 def alcorr(
     a: Union[Type[Circular], np.ndarray],
     x: np.ndarray,
-) -> tuple[float, float]:
-    """Angular-Linear Correlation based on Mardia (1972)
+) -> CorrelationResult:
+    """Angular-Linear / Cylindrical Correlation based on Mardia (1972).
+
+    Also known as Linear-circular or C-linear association (Fisher, 1993).
 
     Parameters
     ----------
@@ -235,8 +266,8 @@ def alcorr(
 
     num = rxc**2 + rxs**2 - 2 * rxc * rxs * rcs
     den = 1 - rcs**2
-    ral = np.sqrt(num / den)
+    r = np.sqrt(num / den)
 
-    pval = 1 - chi2(df=2).cdf(n * ral**2)
+    pval = 1 - chi2(df=2).cdf(n * r**2)
 
-    return ral, pval
+    return CorrelationResult(r=r, p_value=pval)
