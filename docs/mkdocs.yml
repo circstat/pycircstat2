@@ -25,8 +25,9 @@ nav:
           - Circular Data Base: reference/base.md
           - Descriptive Statistics: reference/descriptive.md
           - Hypothesis Testing: reference/hypothesis.md
-          - Angular Correlation: reference/correlation.md
-          - Circular Distributions: reference/distributions.md
+          - Correlation: reference/correlation.md
+          - Regression: reference/regression.md
+          - Distributions: reference/distributions.md
           - Utilities: reference/utils.md
 
 markdown_extensions:
