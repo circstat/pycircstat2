@@ -3,7 +3,7 @@ from typing import Tuple, Union
 import numpy as np
 from scipy.stats import chi2, norm
 
-from .utils import angrange, is_within_circular_range
+from .utils import angmod, is_within_circular_range
 
 
 def circ_r(
@@ -101,7 +101,7 @@ def circ_mean(
     else:
         m = np.arctan2(Sbar, Cbar)
 
-    return angrange(m)
+    return angmod(m)
 
 
 def circ_mean_and_r(
@@ -143,7 +143,7 @@ def circ_mean_and_r(
     else:
         m = np.arctan2(Sbar, Cbar)
 
-        return angrange(m), r
+        return angmod(m), r
 
 
 def circ_mean_and_r_of_means(
@@ -187,7 +187,7 @@ def circ_mean_and_r_of_means(
     C = X / r
     S = Y / r
 
-    m = angrange(np.arctan2(S, C))
+    m = angmod(np.arctan2(S, C))
 
     return m, r
 
@@ -611,7 +611,7 @@ def circ_median(
                 f"Average method `{average_method}` is not supported.\nTry `all` or `unique`."
             )
 
-    return angrange(median)
+    return angmod(median)
 
 
 def _circ_median_grouped(
@@ -624,7 +624,7 @@ def _circ_median_grouped(
 
     # median for grouped data operated on upper bound of bins
     alpha_ub = alpha + bin_size / 2
-    alpha_rotated = angrange(alpha_ub[:, None] - alpha_ub)
+    alpha_rotated = angmod(alpha_ub[:, None] - alpha_ub)
     right = np.logical_and(alpha_rotated >= 0.0, alpha_rotated <= np.round(np.pi, 5))
     halfcircle_right = np.array(
         [np.sum(np.roll(w, -1)[right[:, i]]) for i in range(len(alpha))]
@@ -674,7 +674,7 @@ def _circ_median_grouped(
 
 def _circ_median_count(alpha: np.ndarray) -> float:
     n = len(alpha)
-    alpha_rotated = angrange((alpha[:, None] - alpha)).round(5)
+    alpha_rotated = angmod((alpha[:, None] - alpha)).round(5)
 
     # count number of points on the right (0, 180), excluding the boundaries
     right = np.logical_and(alpha_rotated > 0.0, alpha_rotated < np.round(np.pi, 5)).sum(
@@ -916,7 +916,7 @@ def circ_mean_ci(
             f"Method `{method}` for `circ_mean_ci` is not supported.\nTry `dispersion`, `approximate` or `bootstrap`"
         )
 
-    return angrange(lb), angrange(ub)
+    return angmod(lb), angmod(ub)
 
 
 def _circ_mean_ci_dispersion(
@@ -1141,7 +1141,7 @@ def _circ_mean_resample(alpha, z0, v0):
 
     m = np.arctan2(Sbar, Cbar)
 
-    return angrange(m)
+    return angmod(m)
 
 
 def circ_median_ci(
@@ -1264,7 +1264,7 @@ def circ_median_ci(
     else:
         lower, upper = np.nan, np.nan
 
-    return (angrange(lower), angrange(upper), ci)
+    return (angmod(lower), angmod(upper), ci)
 
 
 def circ_kappa(r: float, n: Union[int, None] = None) -> float:
@@ -1356,7 +1356,7 @@ def convert_moment(
 
     """
 
-    u = angrange(np.angle(mp))
+    u = angmod(np.angle(mp))
     r = np.abs(mp)
 
     return u, r
@@ -1420,7 +1420,7 @@ def compute_hdi(samples, ci=0.95):
         Lower and upper bounds of the HDI in radians.
     """
     # Wrap samples to [0, 2π) for circular consistency
-    wrapped_samples = angrange(samples)
+    wrapped_samples = angmod(samples)
 
     # Sort the samples
     sorted_samples = np.sort(wrapped_samples)
@@ -1437,7 +1437,7 @@ def compute_hdi(samples, ci=0.95):
     for i in range(n_samples - interval_idx):
         lower = sorted_samples[i]
         upper = sorted_samples[i + interval_idx]
-        width = angrange(upper - lower)  # Handle wrapping for circularity
+        width = angmod(upper - lower)  # Handle wrapping for circularity
         if width < hdi_width:
             hdi_width = width
             hdi_bounds = (lower, upper)

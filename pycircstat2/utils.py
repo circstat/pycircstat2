@@ -48,8 +48,40 @@ def time2float(x: Union[np.ndarray, list, str], sep: str = ":") -> np.ndarray:
     return t2f(x, sep)
 
 
-def angrange(rad: Union[np.ndarray, float, int]) -> Union[np.ndarray, float]:
-    return ((rad % (2 * np.pi)) + 2 * np.pi) % (2 * np.pi)
+def angmod(
+    rad: Union[np.ndarray, float, int], bounds: list = [0, 2 * np.pi]
+) -> Union[np.ndarray, float]:
+    """
+    Normalize angles to a specified range.
+
+    Parameters:
+    -----------
+    rad : Union[np.ndarray, float, int]
+        An angle or array of angles in radians.
+    bounds : list, optional
+        A list or tuple of two values [min, max] defining the target range. Default is [0, 2π).
+
+    Returns:
+    --------
+    Union[np.ndarray, float]
+        The normalized angle(s), constrained to the specified range.
+    """
+    if len(bounds) != 2 or bounds[0] >= bounds[1]:
+        raise ValueError(
+            "bounds must be a list or tuple with two values [min, max] where min < max."
+        )
+
+    bound_min, bound_max = bounds
+    bound_span = bound_max - bound_min
+    result = ((rad - bound_min) % bound_span + bound_span) % bound_span + bound_min
+
+    # Adjust values equal to bound_max to bound_min for consistency
+    if isinstance(result, np.ndarray):
+        result[result == bound_max] = bound_min
+    elif result == bound_max:
+        result = bound_min
+
+    return result
 
 
 def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
@@ -75,7 +107,7 @@ def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
 
     a = np.array(a) if type(a) is list else a
 
-    c = angrange(a - b)
+    c = angmod(a - b)
     d = 2 * np.pi - c
     e = np.min([c, d], axis=0)
 
