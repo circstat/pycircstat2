@@ -148,14 +148,15 @@ class CLRegression:
 
         while diff > self.tol:
             iter_count += 1
-            residual = y - 2 * np.arctan(X @ beta)
-            S = np.sum(np.sin(residual)) / n
-            C = np.sum(np.cos(residual)) / n
+            raw_deviation = y - 2 * np.arctan(X @ beta)
+            S = np.sum(np.sin(raw_deviation)) / n
+            C = np.sum(np.cos(raw_deviation)) / n
             R = np.sqrt(S**2 + C**2)
             mu = np.arctan2(S, C)
             kappa = self._A1inv(R)
 
-            u = kappa * np.sin(residual - mu)
+            residual = raw_deviation - mu
+            u = kappa * np.sin(residual)
             D = 2 * X / (1 + (X @ beta) ** 2)[:, None]
 
             A = np.eye(n) * (kappa * self._A1(kappa))
@@ -166,12 +167,12 @@ class CLRegression:
 
             if self.verbose:
                 log_likelihood = -n * np.log(i0(kappa)) + kappa * np.sum(
-                    np.cos(residual - mu)
+                    np.cos(residual)
                 )
                 print(f"Iteration {iter_count}: Log-Likelihood = {log_likelihood:.5f}")
 
-        residual = y - 2 * np.arctan(X @ beta)
-        log_likelihood = -n * np.log(i0(kappa)) + kappa * np.sum(np.cos(residual - mu))
+        residual = y - mu - 2 * np.arctan(X @ beta)
+        log_likelihood = -n * np.log(i0(kappa)) + kappa * np.sum(np.cos(residual))
 
         # Standard errors
         D = 2 * X / (1 + (X @ beta) ** 2)[:, None]
@@ -188,6 +189,11 @@ class CLRegression:
 
         t_values = beta / se_beta
         p_values = 2 * (1 - norm.cdf(np.abs(t_values)))
+
+        # Store results
+        self.coef_ = beta
+        self.intercept_ = mu  # conceptually, mu is the intercept
+        self.residuals_ = residual
 
         return {
             "beta": beta,
@@ -255,6 +261,12 @@ class CLRegression:
         print(
             f"  kappa: {self.result['kappa']:.{digits}f} ({self.result['se_kappa']:.{digits}f})\n"
         )
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """
+        Predict circular response values for new predictor values.
+        """
+        return self.intercept_ + 2 * np.arctan(X @ self.coef_)
 
 
 class LCRegression:
