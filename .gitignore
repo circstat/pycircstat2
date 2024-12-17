@@ -1,5 +1,6 @@
 .ipynb_checkpoints/
 .pytest_cache
+.python-version
 .DS_Store
 .coverage
 .vscode
@@ -7,6 +8,8 @@
 
 *.egg-info
 */__pycache__
+
+uv.lock
 
 dev/
 dist/
