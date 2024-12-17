@@ -161,7 +161,6 @@ class CLRegression:
                 R = np.sqrt(S**2 + C**2)
                 kappa = self._A1inv(R)
                 mu = np.arctan2(S, C)
-                residuals = theta - mu
 
                 # Step 2: Update beta
                 G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
@@ -172,7 +171,7 @@ class CLRegression:
 
                 # Log-likelihood
                 log_likelihood = -n * np.log(i0(kappa)) + kappa * np.sum(
-                    np.cos(residuals)
+                    np.cos(raw_deviation - mu)
                 )
 
             elif self.model_type == "kappa":
