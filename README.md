@@ -35,7 +35,7 @@ A rework of [pycircstat](https://github.com/circstat/pycircstat).
 
 - **Wide-Ranging Circular Distributions**  
 
-  The package supports a variety of circular distributions, including:  
+  The package supports a variety of circular distributions, including but not limited to:  
   - **Symmetric distributions**: Circular Uniform, Cardioid, Cartwright, Wrapped Normal, Wrapped Cauchy, von Mises (and its flat-top extension), and Jones-Pewsey.
   - **Asymmetric distributions**: Sine-skewed Jones-Pewsey, Asymmetric Extended Jones-Pewsey, Inverse Batschelet.
 
