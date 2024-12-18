@@ -3,15 +3,17 @@
     "Source": "Johnson and Wehrly, 1977",
     "Examples": "Jammalamadaka & SenGupta (2001) Example 8.1",
     "Columns": {
-        "θ": {
-            "name": "θ",
+        "theta": {
+            "name": "theta",
             "type": "vectors",
-            "unit": "degree"
+            "unit": "degree",
+            "notes": "wind direction at 6am"
         },
-        "ψ": {
-            "name": "ψ",
+        "psi": {
+            "name": "psi",
             "type": "vectors",
-            "unit": "degree"
+            "unit": "degree",
+            "notes": "wind direction at noon"
         }
     }
 }

@@ -32,10 +32,10 @@ def test_aacorr():
 
     # test Jammalamadaka & SenGupta, 2001
     d_milwaukee = load_data("milwaukee", source="jammalamadaka")
-    theta = np.deg2rad(d_milwaukee["θ"].values)
-    phi = np.deg2rad(d_milwaukee["φ"].values)
+    theta = np.deg2rad(d_milwaukee["theta"].values)
+    psi = np.deg2rad(d_milwaukee["psi"].values)
 
-    res = aacorr(theta, phi, test=True, method="js")
+    res = aacorr(theta, psi, test=True, method="js")
     np.testing.assert_approx_equal(res.r, 0.2704648, significant=4)
     np.testing.assert_approx_equal(res.test_stat, 1.214025, significant=4)
     np.testing.assert_approx_equal(res.p_value, 0.2247383, significant=4)

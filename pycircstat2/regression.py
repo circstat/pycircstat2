@@ -2,12 +2,13 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from scipy.linalg import lstsq
 from scipy.special import i0, i1
-from scipy.stats import norm
+from scipy.stats import chi2, norm
 
 from .utils import significance_code
 
-__all__ = ["CLRegression", "LCRegression", "CCRegression"]
+__all__ = ["CLRegression", "CCRegression"]
 
 
 class CLRegression:
@@ -66,7 +67,7 @@ class CLRegression:
 
     Methods
     -------
-    summary(digits=3)
+    summary()
         Print a summary of the regression results.
 
 
@@ -522,9 +523,207 @@ class CLRegression:
         print("p-values are approximated using the normal distribution.\n")
 
 
-class LCRegression:
-    pass
-
-
 class CCRegression:
-    pass
+    """
+    Circular-Circular Regression.
+
+    Fits a circular response to circular predictors using a specified order of harmonics.
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        A numpy array of circular response values in radians.
+    x : np.ndarray
+        A numpy array of circular predictor values in radians.
+    order : int, optional
+        Order of harmonics to include in the model (default is 1).
+    level : float, optional
+        Significance level for testing higher-order terms (default is 0.05).
+
+    Attributes
+    ----------
+    rho : float
+        Circular correlation coefficient.
+    fitted : np.ndarray
+        Fitted values of the circular response in radians.
+    residuals : np.ndarray
+        Residuals of the circular response in radians.
+    coefficients : dict
+        Coefficients of the cos and sin terms for each harmonic order.
+    p_values : np.ndarray
+        P-values for higher-order terms.
+    message : str
+        Message indicating the significance of higher-order terms.
+
+    Methods
+    -------
+    summary()
+        Print a summary of the regression results.
+
+
+    Notes
+    -----
+    The implementation is ported from the `lm.circular.cc` in the `circular` R package.
+
+    References
+    ----------
+    - Jammalamadaka, S. R., & Sengupta, A. (2001) Topics in Circular Statistics. World Scientific.
+    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2014) Circular Statistics in R. Oxford University Press.
+    """
+
+    def __init__(
+        self,
+        formula: Optional[str] = None,
+        data: Optional[pd.DataFrame] = None,
+        theta: Optional[np.ndarray] = None,
+        x: Optional[np.ndarray] = None,
+        order: int = 1,
+        level: float = 0.05,
+    ):
+        if formula and data is not None:
+            self.theta, self.x, self.feature_names = self._parse_formula(formula, data)
+        elif theta is not None and x is not None:
+            self.theta = self._validate_input(theta)
+            self.x = self._validate_input(x)
+            if self.x.ndim == 1:
+                self.x = self.x[:, None]
+            self.feature_names = [f"x{i}" for i in range(self.x.shape[1])]
+        else:
+            raise ValueError("Provide either a formula + data or theta and x.")
+
+        self.order = order
+        self.level = level
+
+        # Fit the model
+        self.result = self._fit()
+
+    @staticmethod
+    def _validate_input(arr: np.ndarray) -> np.ndarray:
+        """
+        Validate input array and ensure it is in radians.
+        """
+        if not isinstance(arr, np.ndarray):
+            raise ValueError("Input must be a numpy array.")
+        return arr % (2 * np.pi)
+
+    def _parse_formula(
+        self, formula: str, data: pd.DataFrame
+    ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        theta_col, x_cols = formula.split("~")
+        theta = data[theta_col.strip()].to_numpy()
+        x_cols = [col.strip() for col in x_cols.split("+")]
+        X = data[x_cols].to_numpy()
+        return theta, X, x_cols
+
+    def _fit(self):
+        n = self.x.shape[0]
+        order = self.order
+
+        # Create harmonic terms
+        order_matrix = np.arange(1, order + 1)
+        cos_x = np.cos(self.x * order_matrix)
+        sin_x = np.sin(self.x * order_matrix)
+
+        # Linear models for cos(theta) and sin(theta)
+        Y_cos = np.cos(self.theta)
+        Y_sin = np.sin(self.theta)
+
+        X = np.column_stack([np.ones(n), cos_x, sin_x])
+        beta_cos, _, _, _ = lstsq(X, Y_cos)
+        beta_sin, _, _, _ = lstsq(X, Y_sin)
+
+        # Fitted values
+        cos_fit = X @ beta_cos
+        sin_fit = X @ beta_sin
+        fitted = np.arctan2(sin_fit, cos_fit) % (2 * np.pi)
+
+        # Residuals
+        residuals = (self.theta - fitted) % (2 * np.pi)
+
+        # Circular correlation coefficient
+        rho = np.sqrt(np.mean(cos_fit**2) + np.mean(sin_fit**2))
+
+        # Test higher-order terms
+        higher_order_cos = np.cos((order + 1) * self.x)
+        higher_order_sin = np.sin((order + 1) * self.x)
+
+        # Projection matrix for the current model
+        M = X @ np.linalg.inv(X.T @ X) @ X.T
+        W = np.column_stack([higher_order_cos, higher_order_sin])
+        H = W.T @ (np.eye(n) - M) @ W
+        H_inv = np.linalg.inv(H)
+        N = W @ H_inv @ W.T
+
+        residual_cos = (np.eye(n) - M) @ Y_cos
+        residual_sin = (np.eye(n) - M) @ Y_sin
+
+        T1 = (
+            (n - (2 * order + 1))
+            * (residual_cos.T @ N @ residual_cos)
+            / (residual_cos.T @ residual_cos)
+        )
+        T2 = (
+            (n - (2 * order + 1))
+            * (residual_sin.T @ N @ residual_sin)
+            / (residual_sin.T @ residual_sin)
+        )
+
+        p1 = 1 - chi2.cdf(T1, 2)
+        p2 = 1 - chi2.cdf(T2, 2)
+
+        p_values = np.array([p1, p2])
+
+        # Message about higher-order terms
+        if np.all(p_values > self.level):
+            message = (
+                f"Higher-order terms are not significant at the {self.level} level."
+            )
+        else:
+            message = f"Higher-order terms are significant at the {self.level} level."
+
+        return {
+            "rho": rho,
+            "fitted": fitted,
+            "residuals": residuals,
+            "coefficients": {
+                "cos": beta_cos,
+                "sin": beta_sin,
+            },
+            "p_values": p_values,
+            "message": message,
+        }
+
+    def summary(self):
+        """
+        Print a summary of the regression results.
+        """
+        print("\nCircular-Circular Regression\n")
+        print(f"Circular Correlation Coefficient (rho): {self.result['rho']:.5f}\n")
+
+        print("Coefficients:")
+        cos_coeffs = self.result["coefficients"]["cos"]
+        sin_coeffs = self.result["coefficients"]["sin"]
+
+        # Headers
+        print(f"{'Harmonic':<12} {'Cosine Coeff':<14} {'Sine Coeff':<14}")
+
+        # Intercept
+        print(f"{'(Intercept)':<12} {cos_coeffs[0]:<14.5f} {sin_coeffs[0]:<14.5f}")
+
+        # Group harmonics: Cosine and Sine
+        for i in range(1, len(cos_coeffs)):
+            if i <= self.order:
+                print(
+                    f"{'cos.x' + str(i):<12} {cos_coeffs[i]:<14.5f} {sin_coeffs[i]:<14.5f}"
+                )
+            else:
+                print(
+                    f"{'sin.x' + str(i - self.order):<12} {cos_coeffs[i]:<14.5f} {sin_coeffs[i]:<14.5f}"
+                )
+
+        print("\nP-values for Higher-Order Terms:")
+        print(
+            f"p1: {self.result['p_values'][0]:.5f}, p2: {self.result['p_values'][1]:.5f}"
+        )
+
+        print(f"\n{self.result['message']}\n")
