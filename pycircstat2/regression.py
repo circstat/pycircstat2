@@ -475,7 +475,7 @@ class CLRegression:
                 else np.nan
             )
             print(
-                f"α{"":<5} {alpha:<12.5f} {se_alpha:<12.5f} {t_value_alpha:<10.2f} {p_value_alpha:<12.5f}{significance_code(p_value_alpha)}"
+                f"α{'':<5} {alpha:<12.5f} {se_alpha:<12.5f} {t_value_alpha:<10.2f} {p_value_alpha:<12.5f}{significance_code(p_value_alpha)}"
             )
             for i, coef in enumerate(self.result["gamma"]):
                 # Placeholder for standard error and p-values
