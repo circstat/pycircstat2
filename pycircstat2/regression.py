@@ -1,9 +1,11 @@
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from scipy.special import i0, i1, ive
+from scipy.special import i0, i1
 from scipy.stats import norm
+
+from .utils import significance_code
 
 __all__ = ["CLRegression", "LCRegression", "CCRegression"]
 
@@ -239,7 +241,7 @@ class CLRegression:
             beta, alpha, gamma = beta_new, alpha_new, gamma_new
             log_likelihood_old = log_likelihood
 
-        return {
+        result = {
             "beta": beta,
             "alpha": alpha,
             "gamma": gamma,
@@ -247,6 +249,159 @@ class CLRegression:
             "kappa": kappa,
             "log_likelihood": log_likelihood,
         }
+
+        se_result = self._compute_standard_errors(result)
+
+        result.update(se_result)
+
+        return result
+
+    def _compute_standard_errors(self, result):
+        """
+        Compute standard errors for the parameters based on the fitted model.
+        """
+        theta = self.theta
+        X = self.X
+        n = len(theta)
+        kappa = result["kappa"]
+        beta = result["beta"]
+        gamma = result["gamma"]
+        alpha = result["alpha"]
+
+        se_results = {}
+
+        if self.model_type == "mean":
+            # Mean Direction Model
+            G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
+            A = np.eye(n) * (kappa * self._A1(kappa))
+            XtAX = G.T @ A @ G
+            cov_beta = np.linalg.solve(XtAX, np.eye(XtAX.shape[0]))
+            se_beta = np.sqrt(np.diag(cov_beta))
+
+            se_mu = 1 / np.sqrt((n - X.shape[1]) * kappa * self._A1(kappa))
+            se_kappa = np.sqrt(
+                1 / (n * (1 - self._A1(kappa) ** 2 - self._A1(kappa) / kappa))
+            )
+
+            se_results.update(
+                {
+                    "se_beta": se_beta,
+                    "se_mu": se_mu,
+                    "se_kappa": se_kappa,
+                }
+            )
+
+        elif self.model_type == "kappa":
+            # Concentration Parameter Model
+            X1 = np.column_stack((np.ones(n), X))  # Add intercept
+            W = np.diag(
+                (np.exp(X1 @ np.hstack([alpha, gamma])) ** 2) * self._A1_prime(kappa)
+            )
+            XtWX = X1.T @ W @ X1
+
+            cov_gamma_alpha = np.linalg.solve(XtWX, np.eye(XtWX.shape[0]))
+
+            se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
+            se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
+
+            se_mu = 1 / np.sqrt(np.sum(kappa * self._A1(kappa)) - 0.5)
+
+            se_kappa = np.sqrt(1 / (n * self._A1_prime(kappa)))
+
+            se_results.update(
+                {
+                    "se_alpha": se_alpha,
+                    "se_gamma": se_gamma,
+                    "se_mu": se_mu,
+                    "se_kappa": se_kappa,
+                }
+            )
+
+        elif self.model_type == "mixed":
+            # Mixed Model
+            G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
+            K = np.diag(kappa * self._A1(kappa))
+            XtGKGX = G.T @ K @ G
+
+            cov_beta = np.linalg.solve(XtGKGX, np.eye(XtGKGX.shape[0]))
+            se_beta = np.sqrt(np.diag(cov_beta))
+
+            X1 = np.column_stack((np.ones(n), X))  # Add intercept
+            W_gamma = np.diag(
+                (np.exp(X1 @ np.hstack([alpha, gamma])) ** 2) * self._A1_prime(kappa)
+            )
+            XtWX_gamma = X1.T @ W_gamma @ X1
+
+            # Check positive definiteness and regularize if needed
+            eigenvalues_gamma = np.linalg.eigvals(XtWX_gamma)
+            if np.any(eigenvalues_gamma <= 0):
+                XtWX_gamma += np.eye(XtWX_gamma.shape[0]) * 1e-8
+
+            cov_gamma_alpha = np.linalg.solve(XtWX_gamma, np.eye(XtWX_gamma.shape[0]))
+            se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
+            se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
+
+            se_mu = 1 / np.sqrt(np.sum(kappa * self._A1(kappa)) - 0.5)
+            se_kappa = np.sqrt(
+                1 / (n * (1 - self._A1(kappa) ** 2 - self._A1(kappa) / kappa))
+            )
+            se_results.update(
+                {
+                    "se_beta": se_beta,
+                    "se_alpha": se_alpha,
+                    "se_gamma": se_gamma,
+                    "se_mu": se_mu,
+                    "se_kappa": se_kappa,
+                }
+            )
+
+        else:
+            raise ValueError(f"Unknown model type: {self.model_type}")
+
+        return se_results
+
+    def AIC(self):
+        """
+        Calculate Akaike Information Criterion (AIC).
+        """
+        if self.result is None:
+            raise ValueError("Model must be fitted before calculating AIC.")
+
+        log_likelihood = self.result["log_likelihood"]
+        if self.model_type == "mean":
+            n_params = len(self.result["beta"])  # Only beta
+        elif self.model_type == "kappa":
+            n_params = 1 + len(self.result["gamma"])  # alpha + gamma
+        elif self.model_type == "mixed":
+            n_params = (
+                1 + len(self.result["beta"]) + len(self.result["gamma"])
+            )  # alpha + beta + gamma
+        else:
+            raise ValueError(f"Unknown model type: {self.model_type}")
+
+        return -2 * log_likelihood + 2 * n_params
+
+    def BIC(self):
+        """
+        Calculate Bayesian Information Criterion (BIC).
+        """
+        if self.result is None:
+            raise ValueError("Model must be fitted before calculating BIC.")
+
+        log_likelihood = self.result["log_likelihood"]
+        n = len(self.theta)
+        if self.model_type == "mean":
+            n_params = len(self.result["beta"])  # Only beta
+        elif self.model_type == "kappa":
+            n_params = 1 + len(self.result["gamma"])  # alpha + gamma
+        elif self.model_type == "mixed":
+            n_params = (
+                1 + len(self.result["beta"]) + len(self.result["gamma"])
+            )  # alpha + beta + gamma
+        else:
+            raise ValueError(f"Unknown model type: {self.model_type}")
+
+        return -2 * log_likelihood + n_params * np.log(n)
 
     def predict(self, X_new):
         """
@@ -289,19 +444,19 @@ class CLRegression:
         if self.model_type in ["mean", "mixed"] and self.result["beta"] is not None:
             print("Coefficients for Mean Direction (Beta):\n")
             print(
-                f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)':<12}"
+                f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)'}"
             )
             for i, coef in enumerate(self.result["beta"]):
                 # Placeholder for standard error and p-values
-                se_beta = np.nan  # Replace with actual computation later
-                t_value = coef / se_beta if se_beta else np.nan
+                se_beta = self.result["se_beta"][i]
+                t_value = np.abs(coef / se_beta) if se_beta else np.nan
                 p_value = (
                     2 * (1 - norm.cdf(np.abs(t_value)))
                     if not np.isnan(t_value)
                     else np.nan
                 )
                 print(
-                    f"β_{i:<3} {coef:<12.5f} {se_beta:<12.5f} {t_value:<10.2f} {p_value:<12.5f}"
+                    f"β{i:<3} {coef:<12.5f} {se_beta:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value):<3}"
                 )
 
         # Coefficients for concentration parameter (Gamma)
@@ -310,9 +465,21 @@ class CLRegression:
             print(
                 f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)':<12}"
             )
+            # Report alpha as the first coefficient
+            alpha = self.result["alpha"]
+            se_alpha = self.result["se_alpha"]
+            t_value_alpha = alpha / se_alpha if se_alpha else np.nan
+            p_value_alpha = (
+                2 * (1 - norm.cdf(np.abs(t_value_alpha)))
+                if not np.isnan(t_value_alpha)
+                else np.nan
+            )
+            print(
+                f"α{"":<5} {alpha:<12.5f} {se_alpha:<12.5f} {t_value_alpha:<10.2f} {p_value_alpha:<12.5f}{significance_code(p_value_alpha)}"
+            )
             for i, coef in enumerate(self.result["gamma"]):
                 # Placeholder for standard error and p-values
-                se_gamma = np.nan  # Replace with actual computation later
+                se_gamma = self.result["se_gamma"][i]
                 t_value = coef / se_gamma if se_gamma else np.nan
                 p_value = (
                     2 * (1 - norm.cdf(np.abs(t_value)))
@@ -320,34 +487,38 @@ class CLRegression:
                     else np.nan
                 )
                 print(
-                    f"γ_{i:<3} {coef:<12.5f} {se_gamma:<12.5f} {t_value:<10.2f} {p_value:<12.5f}"
+                    f"γ{i:<5} {coef:<12.5f} {se_gamma:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value)}"
                 )
-
-        # Intercept (Alpha) for concentration
-        if self.model_type in ["kappa", "mixed"] and not np.isnan(self.result["alpha"]):
-            print("\nIntercept for Concentration (Alpha):")
-            print(f"  Estimate: {self.result['alpha']:.5f}")
 
         # Summary for mu and kappa
         print("\nSummary:")
         print("  Mean Direction (mu) in radians:")
         mu = self.result["mu"]
-        se_mu = np.nan  # Placeholder for standard error
-        print(f"    mu: {mu:.5f} (SE: {se_mu:.5f})")
+        se_mu = self.result["se_mu"]
+        print(f"    μ: {mu:.5f} (SE: {se_mu:.5f})")
 
         print("\n  Concentration Parameter (kappa):")
         kappa = self.result["kappa"]
-        se_kappa = np.nan  # Placeholder for standard error
+        se_kappa = self.result["se_kappa"]
         if isinstance(kappa, np.ndarray):
-            print(f"    kappa: {np.mean(kappa):.5f} (SE: {se_kappa:.5f})")
+            print("    Index    kappa        Std. Error")
+            for i, (k, se) in enumerate(zip(kappa, se_kappa), start=1):
+                print(f"    [{i}]    {k:>10.5f}    {se:>10.5f}")
+            print(f"    Mean:    {np.mean(kappa):.5f} (SE: {np.mean(se_kappa):.5f})")
         else:
-            print(f"    kappa: {kappa:.5f} (SE: {se_kappa:.5f})")
+            print(f"    κ: {kappa:.5f} (SE: {se_kappa:.5f})")
 
-        # Log-likelihood
-        print(f"\nLog-Likelihood: {self.result.get('log_likelihood', 'NA'):.5f}")
+        # Summary for model fit metrics
+        print("\nModel Fit Metrics:\n")
+        print(f"{'Metric':<12} {'Value':<12}")
+        log_likelihood = self.result.get("log_likelihood", float("nan"))
+        nll = -log_likelihood  # Negative log-likelihood
+        print(f"{'nLL':<12} {nll:<12.5f}")
+        print(f"{'AIC':<12} {self.AIC():<12.5f}")
+        print(f"{'BIC':<12} {self.BIC():<12.5f}")
 
         # Notes
-        print("\nSignif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1")
+        print("\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
         print("p-values are approximated using the normal distribution.\n")
 
 
