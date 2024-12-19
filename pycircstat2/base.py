@@ -1,7 +1,6 @@
 from typing import Union
 
 import numpy as np
-import pandas as pd
 
 from .clustering import MoVM
 from .descriptive import (
@@ -201,18 +200,18 @@ class Circular:
                 self.w = np.array(w) if isinstance(w, list) else w
                 self.grouped = grouped = True
                 self.bin_size = bin_size = np.diff(alpha).min()
-                self.alpha_lb = alpha_lb = alpha - bin_size / 2
-                self.alpha_ub = alpha_ub = alpha + bin_size / 2
+                self.alpha_lb = alpha - bin_size / 2
+                self.alpha_ub = alpha + bin_size / 2
 
-        ## bin data usingse np.histogram
+        # bin data usingse np.histogram
         else:
             if isinstance(bins, int) or isinstance(bins, np.ndarray):
                 w, alpha = np.histogram(
                     alpha, bins=bins, range=(0, 2 * np.pi)
                 )  # np.histogram return bin edges
             self.w = w
-            self.alpha_lb = alpha_lb = alpha[:-1]  # bin lower bound
-            self.alpha_ub = alpha_ub = alpha[1:]  # bin upper bound
+            self.alpha_lb = alpha[:-1]  # bin lower bound
+            self.alpha_ub = alpha[1:]  # bin upper bound
             self.alpha = alpha = 0.5 * (alpha[:-1] + alpha[1:])  # get bin centers
             self.grouped = grouped = True
             self.bin_size = bin_size = np.diff(alpha).min()
@@ -221,16 +220,17 @@ class Circular:
         self.n = n = np.sum(w).astype(int)
 
         # angular mean and resultant vector length
-        self.mean, self.r = (mean, r) = circ_mean_and_r(alpha=alpha, w=w)
+        self.mean, self.r = (_, r) = circ_mean_and_r(alpha=alpha, w=w)
 
         # z-score and p-value from rayleigh test for angular mean
-        self.mean_z, self.mean_pval = (mean_z, mean_pval) = rayleigh_test(n=n, r=r)
+        self.mean_test_result = rayleigh_test_result = rayleigh_test(n=n, r=r)
+        mean_pval = rayleigh_test_result.pval
 
         # Rayleigh's R
         self.R = n * r
 
         # kappa
-        self.kappa = kappa = circ_kappa(r=r, n=n)
+        self.kappa = circ_kappa(r=r, n=n)
 
         # confidence interval for angular mean
         # in practice, the equations for approximating mean ci for 8 <= n <= 12 in zar 2010
@@ -263,11 +263,11 @@ class Circular:
                 method=method_mean_ci,
             )
         else:
-            self.mean_lb, self.mean_ub = mean_lb, mean_ub = np.nan, np.nan
+            self.mean_lb, self.mean_ub = np.nan, np.nan
 
         # angular deviation, circular standard deviation, adjusted resultant vector length (if needed)
-        self.s = s = angular_std(r=r, bin_size=bin_size)
-        self.s0 = s0 = circ_std(r=r, bin_size=bin_size)
+        self.s = angular_std(r=r, bin_size=bin_size)
+        self.s0 = circ_std(r=r, bin_size=bin_size)
 
         # angular median
         if n > 10000 and kwargs_median["method"] is not None:
@@ -286,11 +286,9 @@ class Circular:
         # confidence inerval for angular median (only for ungrouped data)
         # it's unclear how to do it for grouped data.
         if not grouped and not np.isnan(median):
-            self.median_lb, self.median_ub, self.median_ci_level = (
-                median_lb,
-                median_ub,
-                median_ci_level,
-            ) = circ_median_ci(median=median, alpha=alpha)
+            self.median_lb, self.median_ub, self.median_ci_level = circ_median_ci(
+                median=median, alpha=alpha
+            )
 
         self.skewness = circ_skewness(alpha=alpha, w=w)
         self.kurtosis = circ_kurtosis(alpha=alpha, w=w)
@@ -334,9 +332,9 @@ class Circular:
         docs += f"  Sample size: {self.n}\n"
 
         if hasattr(self, "d"):
-            docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ± {rad2data(self.d, k=k):.02f} ( p={self.mean_pval:.04f} {significance_code(self.mean_pval)} ) \n"
+            docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ± {rad2data(self.d, k=k):.02f} ( p={self.mean_test_result.pval:.04f} {significance_code(self.mean_test_result.pval)} ) \n"
         else:
-            docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ( p={self.mean_pval:.04f} {significance_code(self.mean_pval)} ) \n"
+            docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ( p={self.mean_test_result.pval:.04f} {significance_code(self.mean_test_result.pval)} ) \n"
 
         if hasattr(self, "mean_lb") and not np.isnan(self.mean_lb):
             docs += f"  Angular mean CI ({self.mean_ci_level:.2f}): {rad2data(self.mean_lb, k=k):.02f} - {rad2data(self.mean_ub, k=k):.02f}\n"

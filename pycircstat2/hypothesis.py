@@ -1,5 +1,6 @@
 import math
-from typing import Union
+from dataclasses import dataclass
+from typing import Optional, Union
 
 import numpy as np
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
@@ -12,21 +13,36 @@ from .utils import angmod, angular_distance, significance_code
 ###################
 
 
+@dataclass(frozen=True)
+class RayleighTestResult:
+    r: float  # Resultant vector length
+    z: float  # Test Statistic (Rayleigh's Z)
+    pval: float  # Classical P-value
+    bootstrap_pval: Optional[float] = None  # Bootstrap P-value, if computed
+
+
 def rayleigh_test(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    r: Union[float, None] = None,
-    n: Union[int, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    r: Optional[float] = None,
+    n: Optional[int] = None,
+    B: int = 1,
     verbose: bool = False,
-) -> tuple:
-    """
+) -> RayleighTestResult:
+    r"""
     Rayleigh's Test for Circular Uniformity.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not disbutrited uniformly around the circle.
+
+    $$ z = n \cdot r^2 $$
+
+    and
+
+    $$ p = \exp(\sqrt{1 + 4n + 4(n^2 - R^2)} - (1 + 2n)) $$
 
     This method is for ungrouped data. For testing uniformity with
-    grouped data, use chisquare_test() or scipy.stats.chisquare().
+    grouped data, use `chisquare_test()` or `scipy.stats.chisquare()`.
 
     Parameters
     ----------
@@ -43,16 +59,25 @@ def rayleigh_test(
     n: int or None
         Sample size.
 
+    B: int
+        Number of bootstrap samples for p-value estimation.
+
     verbose: bool
         Print formatted results.
 
     Returns
     -------
-    z: float
-        Test Statistics (Rayleigh's Z).
+    RayleighTestResult
+        A dataclass containing:
 
-    p: float
-        P-value.
+        - r: float
+            - Resultant vector length.
+        - z: float
+            - Test statistic (Rayleigh's Z).
+        - pval: float
+            - Classical p-value based on the asymptotic formula.
+        - bootstrap_pval: float or None
+            - Bootstrap p-value (if computed, i.e., B > 1); otherwise, None.
 
     Reference
     ---------
@@ -65,15 +90,29 @@ def rayleigh_test(
         ), "If `r` is None, then `alpha` (and `w`) is needed."
         if w is None:
             w = np.ones_like(alpha)
-        n = np.sum(w)
+        n = np.sum(w, dtype=int)
         r = circ_r(alpha, w)
 
     if n is None:
         raise ValueError("Sample size `n` is missing.")
 
     R = n * r
-    z = R**2 / n  # eq(27.2)
+    z = n * r**2  # eq(27.2)
+
     pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
+
+    if B > 1:
+
+        tb = np.zeros(B)
+        for i in range(B):
+            x = np.random.normal(size=(n, 1))
+            x /= np.linalg.norm(x, axis=1, keepdims=True)  # Normalize to unit sphere
+            mb = np.sum(x, axis=0)
+            tb[i] = np.sum(mb**2) / n
+
+        bootstrap_pval = (np.sum(tb > z) + 1) / (B + 1)
+    else:
+        bootstrap_pval = None
 
     if verbose:
         print("Rayleigh's Test of Uniformity")
@@ -81,13 +120,23 @@ def rayleigh_test(
         print("H0: ρ = 0")
         print("HA: ρ ≠ 0")
         print("")
-        print(f"Test Statistics: {z:.5f}")
+        print(f"Test Statistics  (ρ | z-score): {r:.5f} | {z:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        if B > 1:
+            print(
+                f"Bootstrap P-value: {bootstrap_pval:.5f} {significance_code(bootstrap_pval)}"
+            )
 
-    return z, pval
+    return RayleighTestResult(r=r, z=z, pval=pval, bootstrap_pval=bootstrap_pval)
 
 
-def chisquare_test(w: np.ndarray, verbose=False):
+@dataclass(frozen=True)
+class ChiSquareTestResult:
+    chi2: float
+    pval: float
+
+
+def chisquare_test(w: np.ndarray, verbose: bool = False) -> ChiSquareTestResult:
     """Chi-Square Goodness of Fit for Circular data.
 
     - H0: The data in the population are distributed uniformly around the circle.
@@ -105,10 +154,13 @@ def chisquare_test(w: np.ndarray, verbose=False):
 
     Returns
     -------
-    chi2: float
-        The chi-squared test statistic.
-    pval: float
-        The p-value of the test.
+    ChiSquareTestResult
+        A dataclass containing:
+
+        - chi2: float
+            - The chi-squared test statistic.
+        - pval: float
+            - The p-value of the test.
 
     Note
     ----
@@ -130,27 +182,27 @@ def chisquare_test(w: np.ndarray, verbose=False):
         print("H0: uniform")
         print("HA: not uniform")
         print("")
-        print(f"Test Statistics: {chi2:.5f}")
+        print(f"Test Statistics (χ²): {chi2:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return chi2, pval
+    return ChiSquareTestResult(chi2=chi2, pval=pval)
 
 
 def V_test(
     angle: Union[int, float],
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    mean: float = None,
-    r: float = None,
-    n: int = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    mean: Optional[float] = None,
+    r: Optional[float] = None,
+    n: Optional[int] = None,
     verbose: bool = False,
-) -> tuple:
+) -> tuple[float, float, float]:
     """
     Modified Rayleigh Test for Uniformity versus a Specified Angle.
 
     - H0: The population is uniformly distributed around the circle (i.e., H0: ρ=0)
     - H1: The population is not uniformly distributed around the circle (i.e., H1: ρ!=0),
-        but has a mean of 90 degree.
+        but has a mean of certain degree.
 
     Parameters
     ----------
@@ -217,19 +269,19 @@ def V_test(
 
 
 def one_sample_test(
-    angle: Union[int, float] = 0,
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    lb: float = None,
-    ub: float = None,
+    angle: Union[int, float],
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    lb: Optional[float] = None,
+    ub: Optional[float] = None,
     verbose: bool = False,
 ) -> bool:
     """
-    To test wheter the population mean angle is equal to a specified value,
+    To test whether the population mean angle is equal to a specified value,
     which is achieved by observing whether the angle lies within the 95% CI.
 
-    - H0: The population has a mean of μ
-    - H1: The population mean is not μ
+    - H0: The population has a mean of μ (μ_a = μ_0)
+    - H1: The population mean is not μ (μ_a ≠ μ_0)
 
     Parameters
     ----------
@@ -297,7 +349,7 @@ def omnibus_test(
     alpha: np.ndarray,
     scale: int = 1,
     verbose: bool = False,
-) -> float:
+) -> tuple[float, float]:
     """
     A simple alternative to the Rayleigh test, aka Hodges-Ajne test,
     which does not assume sampling from a specific distribution. This
@@ -361,10 +413,10 @@ def omnibus_test(
 
 
 def batschelet_test(
-    angle: float,
+    angle: Union[int, float],
     alpha: np.ndarray,
     verbose: bool = False,
-) -> float:
+) -> tuple[float, float]:
     """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
     (for ungrouped data).
 
@@ -415,7 +467,7 @@ def batschelet_test(
 
 def symmetry_test(
     alpha: np.ndarray,
-    median: Union[int, float, None] = None,
+    median: Optional[Union[int, float]] = None,
     verbose: bool = False,
 ) -> tuple[float, float]:
     """Non-parametric test for symmetry around the median. Works by performing a
@@ -473,7 +525,7 @@ def symmetry_test(
 ###########################
 
 
-def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
+def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, float]:
     """The Watson-Williams Test for multiple samples.
 
     - H0: All samples are from populations with the same mean angle
@@ -526,7 +578,7 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple:
     return F, pval
 
 
-def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
+def watson_u2_test(circs: list, verbose: bool = False) -> tuple[float, float]:
     """Watson's U2 Test for nonparametric two-sample testing
     (with or without ties).
 
@@ -605,13 +657,13 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple:
     return U2, pval
 
 
-def wheeler_watson_test(circs: list, verbose: bool = False):
+def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, float]:
     """The Wheeler and Watson Two/Multi-Sample Test.
 
     - H0: The two samples came from the same population,
         or from two populations having the same direction.
     - H1: The two samples did not come from the same population,
-        or from two populations having the same directions.
+        or not from two populations having the same directions.
 
     Parameters
     ----------
@@ -648,7 +700,7 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
         return circ_rank
 
     N = np.sum([c.n for c in circs])
-    a, t = np.unique(
+    a, _ = np.unique(
         np.hstack([np.repeat(c.alpha, c.w) for c in circs]), return_counts=True
     )
 
@@ -684,7 +736,9 @@ def wheeler_watson_test(circs: list, verbose: bool = False):
     return W, pval
 
 
-def wallraff_test(circs: list, angle=float, verbose: bool = False):
+def wallraff_test(
+    circs: list, angle=float, verbose: bool = False
+) -> tuple[float, float]:
     """Wallraff test of angular distances / dispersion against a specified angle.
 
     Parameters
@@ -752,7 +806,7 @@ def kuiper_test(
     n_simulation: int = 9999,
     seed: int = 2046,
     verbose: bool = False,
-) -> tuple:
+) -> tuple[float, float]:
     """
     Kuiper's test for Circular Uniformity.
 
@@ -832,7 +886,7 @@ def watson_test(
     n_simulation: int = 9999,
     seed: int = 2046,
     verbose: bool = False,
-) -> tuple:
+) -> tuple[float, float]:
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
 
@@ -916,7 +970,7 @@ def rao_spacing_test(
     n_simulation: int = 9999,
     seed: int = 2046,
     verbose: bool = False,
-) -> tuple:
+) -> tuple[float, float]:
     """Simulation based Rao's spacing test.
 
     - H0: The sample data come from a population distributed uniformly around the circle.
