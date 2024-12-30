@@ -1207,7 +1207,7 @@ def circ_median_ci(
         if median.round(5) in alpha.round(5):  # don't count the median per se
             idx_ub += 1
 
-        if idx_ub > n:
+        if idx_ub >= n:
             idx_ub = idx_ub - n
 
         if idx_lb < 0:
