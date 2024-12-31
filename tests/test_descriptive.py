@@ -200,6 +200,9 @@ def test_circ_median_ci():
     np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
     np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 267.0, significant=3)
 
+    # in case of manually inputed median / alpha, out of bound needs to be handled
+    data = load_data("C1", source="corner-case")
+    np.testing.assert_(circ_median_ci(median=np.array(16), alpha=data['alpha']))
 
 def test_circ_mean_and_r_of_means():
     data = load_data("D4", source="zar")

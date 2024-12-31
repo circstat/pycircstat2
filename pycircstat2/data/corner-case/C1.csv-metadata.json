@@ -1,0 +1,13 @@
+{
+    "Title": "Synthetic data - Corner case ",
+    "Description": "Synthetic data generated to catch corner cases in the implementation of the circular statistics functions.",
+    "Type": "Vectors",
+    "Source": "",
+    "Examples": "",
+    "Columns": {
+        "time": {
+            "name": "time",
+            "type": "vectors"
+        }
+    }
+}
