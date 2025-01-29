@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from scipy.stats import chi2, norm
@@ -7,10 +7,10 @@ from .utils import angmod, is_within_circular_range
 
 
 def circ_r(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    Cbar: Union[float, None] = None,
-    Sbar: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    Cbar: Optional[float] = None,
+    Sbar: Optional[float] = None,
 ) -> float:
     r"""
     Circular mean resultant vector length (r).
@@ -54,7 +54,7 @@ def circ_r(
 
 def circ_mean(
     alpha: np.ndarray,
-    w: Union[np.ndarray, None] = None,
+    w: Optional[np.ndarray] = None,
 ) -> Union[np.ndarray, float]:
     r"""
     Circular mean (m).
@@ -106,7 +106,7 @@ def circ_mean(
 
 def circ_mean_and_r(
     alpha: np.ndarray,
-    w: Union[np.ndarray, None] = None,
+    w: Optional[np.ndarray] = None,
 ) -> Tuple[Union[float, np.ndarray], float]:
     """
     Circular mean (m) and resultant vector length (r).
@@ -148,8 +148,8 @@ def circ_mean_and_r(
 
 def circ_mean_and_r_of_means(
     circs: Union[list, None] = None,
-    ms: Union[np.ndarray, None] = None,
-    rs: Union[np.ndarray, None] = None,
+    ms: Optional[np.ndarray] = None,
+    rs: Optional[np.ndarray] = None,
 ) -> Tuple[float, float]:
     """The Mean of a set of Mean Angles
 
@@ -194,7 +194,7 @@ def circ_mean_and_r_of_means(
 
 def circ_moment(
     alpha: np.ndarray,
-    w: Union[np.ndarray, None] = None,
+    w: Optional[np.ndarray] = None,
     p: int = 1,
     mean: Union[float, np.ndarray, None] = None,
     centered: bool = False,
@@ -241,7 +241,7 @@ def circ_moment(
 
 def circ_dispersion(
     alpha: np.ndarray,
-    w: Union[np.ndarray, None] = None,
+    w: Optional[np.ndarray] = None,
     mean=None,
 ) -> float:
     r"""
@@ -281,7 +281,7 @@ def circ_dispersion(
     return dispersion
 
 
-def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float:
+def circ_skewness(alpha: np.ndarray, w: Optional[np.ndarray] = None) -> float:
     r"""
     Circular skewness, as defined by Equation 2.29 (Fisher, 1993):
 
@@ -317,7 +317,7 @@ def circ_skewness(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
     return skewness
 
 
-def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float:
+def circ_kurtosis(alpha: np.ndarray, w: Optional[np.ndarray] = None) -> float:
     r"""
     Circular kurtosis, as defined by Equation 2.30 (Fisher, 1993):
 
@@ -354,10 +354,10 @@ def circ_kurtosis(alpha: np.ndarray, w: Union[np.ndarray, None] = None) -> float
 
 
 def angular_var(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    r: Union[float, None] = None,
-    bin_size: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    r: Optional[float] = None,
+    bin_size: Optional[float] = None,
 ) -> float:
     r"""
     Angular variance
@@ -391,10 +391,10 @@ def angular_var(
 
 
 def angular_std(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    r: Union[float, None] = None,
-    bin_size: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    r: Optional[float] = None,
+    bin_size: Optional[float] = None,
 ) -> float:
     r"""
     Angular (standard) deviation
@@ -430,10 +430,10 @@ def angular_std(
 
 
 def circ_var(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    r: Union[float, None] = None,
-    bin_size: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    r: Optional[float] = None,
+    bin_size: Optional[float] = None,
 ) -> float:
     r"""
     Circular variance
@@ -494,10 +494,10 @@ def circ_var(
 
 
 def circ_std(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    r: Union[float, None] = None,
-    bin_size: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    r: Optional[float] = None,
+    bin_size: Optional[float] = None,
 ) -> tuple:
     r"""
     Circular standard deviation (s).
@@ -535,7 +535,7 @@ def circ_std(
 
 def circ_median(
     alpha: np.ndarray,
-    w: Union[np.ndarray, None] = None,
+    w: Optional[np.ndarray] = None,
     method: str = "deviation",
     return_average: bool = True,
     average_method: str = "all",
@@ -817,10 +817,10 @@ def circ_mean_deviation(
 
 
 def circ_mean_ci(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    mean: Union[float, None] = None,
-    r: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    mean: Optional[float] = None,
+    r: Optional[float] = None,
     n: Union[int, None] = None,
     ci: float = 0.95,
     method: str = "approximate",
@@ -921,8 +921,8 @@ def circ_mean_ci(
 
 def _circ_mean_ci_dispersion(
     alpha: np.ndarray,
-    w: Union[np.ndarray, None] = None,
-    mean: Union[float, None] = None,
+    w: Optional[np.ndarray] = None,
+    mean: Optional[float] = None,
     ci: float = 0.95,
 ) -> tuple[float, float]:
     r"""Confidence intervals based on circular dispersion.
@@ -978,10 +978,10 @@ def _circ_mean_ci_dispersion(
 
 
 def _circ_mean_ci_approximate(
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
-    mean: Union[float, None] = None,
-    r: Union[float, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
+    mean: Optional[float] = None,
+    r: Optional[float] = None,
     n: Union[int, None] = None,
     ci: float = 0.95,
 ) -> tuple:
@@ -1146,8 +1146,8 @@ def _circ_mean_resample(alpha, z0, v0):
 
 def circ_median_ci(
     median: float = None,
-    alpha: Union[np.ndarray, None] = None,
-    w: Union[np.ndarray, None] = None,
+    alpha: Optional[np.ndarray] = None,
+    w: Optional[np.ndarray] = None,
     method: str = "deviation",
     ci: float = 0.95,
 ) -> tuple:
@@ -1201,10 +1201,18 @@ def circ_median_ci(
 
         offset = int(1 + np.floor(0.5 * np.sqrt(n) * z))  # fisher:eq(4.19)
 
-        idx_median = np.where(alpha.round(5) < median.round(5))[0][-1]
+        # idx_median = np.where(alpha.round(5) < np.round(median, 5))[0][-1]
+        arr = np.where(alpha.round(5) < np.round(median, 5))[0]
+        if len(arr) == 0:
+            # That means median is smaller than alpha[0] (to 5 decimals).
+            # In a circular sense, the “closest index below” is alpha[-1].
+            idx_median = len(alpha) - 1
+        else:
+            idx_median = arr[-1]
+
         idx_lb = idx_median - offset + 1
         idx_ub = idx_median + offset
-        if median.round(5) in alpha.round(5):  # don't count the median per se
+        if np.round(median, 5) in alpha.round(5):  # don't count the median per se
             idx_ub += 1
 
         if idx_ub > n:

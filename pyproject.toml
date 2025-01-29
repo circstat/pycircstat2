@@ -20,9 +20,7 @@ readme = {file = "README.md", content-type = "text/markdown"}
 
 [project.optional-dependencies]
 dev = [
-    "black",
-    "isort",
-    "jupyter",
+    "ruff",
     "pytest",
 ]
 

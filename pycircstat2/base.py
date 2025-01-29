@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 
 import numpy as np
 
@@ -15,7 +15,7 @@ from .descriptive import (
     circ_std,
 )
 from .hypothesis import rayleigh_test
-from .utils import data2rad, rad2data, significance_code
+from .utils import data2rad, rad2data, rotate_data, significance_code
 from .visualization import circ_plot
 
 __names__ = ["Circular", "Axial"]
@@ -146,13 +146,14 @@ class Circular:
     def __init__(
         self,
         data: Union[np.ndarray, list],  # angle
-        w: Union[np.ndarray, list, None] = None,  # frequency
-        bins: Union[int, np.ndarray, None] = None,
+        w: Optional[Union[np.ndarray, list]] = None,  # frequency
+        bins: Optional[Union[int, np.ndarray]] = None,
         unit: str = "degree",
-        n_intervals: Union[
-            int, float, None
-        ] = None,  # number of intervals in the full cycle
+        n_intervals: Optional[Union[
+            int, float
+        ]] = None,  # number of intervals in the full cycle
         n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
+        rotate: Optional[float] = None, # in rad
         **kwargs,
     ):
         # meta
@@ -184,7 +185,7 @@ class Circular:
 
         # data
         self.data = data = np.array(data) if isinstance(data, list) else data
-        self.alpha = alpha = data2rad(data, n_intervals)
+        self.alpha = alpha = data2rad(data, n_intervals) if rotate is None else rotate_data(data2rad(data, n_intervals), rotate, unit="radian")
 
         # data preprocessing
         if bins is None:

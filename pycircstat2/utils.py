@@ -160,7 +160,7 @@ def load_data(
         return csv_data
 
 
-def is_within_circular_range(value, lb, ub):
+def is_within_circular_range(value: float, lb: float, ub: float) -> bool:
     """
     Check if a value lies within the circular range [lb, ub].
 
@@ -188,3 +188,42 @@ def is_within_circular_range(value, lb, ub):
     else:
         # Wrapping range
         return value >= lb or value <= ub
+
+def rotate_data(alpha: np.ndarray, angle: float, unit: str = "radian") -> np.ndarray:
+    """
+    Rotate a circular dataset by a given angle, supporting degrees, radians, and hours.
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Angles in the specified unit.
+    angle : float
+        Rotation angle in the specified unit.
+    unit : str, optional
+        Unit of measurement ("degree", "radian", or "hour"). Default is "radian".
+
+    Returns
+    -------
+    rotated_alpha : np.ndarray
+        Rotated angles, normalized within the unit's full cycle.
+    """
+    if unit == "degree":
+        n_intervals = 360
+    elif unit == "radian":
+        n_intervals = 2 * np.pi
+    elif unit == "hour":
+        n_intervals = 24
+    else:
+        raise ValueError("Unit must be 'degree', 'radian', or 'hour'.")
+
+    # Convert to radians for consistent computation
+    alpha_rad = data2rad(alpha, k=n_intervals)
+    angle_rad = data2rad(angle, k=n_intervals)
+
+    # Perform rotation and normalize in radians
+    rotated_alpha_rad = angmod(alpha_rad + angle_rad, bounds=[0, 2 * np.pi])
+
+    # Convert back to the original unit
+    rotated_alpha = rad2data(rotated_alpha_rad, k=n_intervals)
+
+    return rotated_alpha

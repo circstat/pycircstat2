@@ -1,6 +1,13 @@
 import numpy as np
 
-from pycircstat2.utils import angmod, angular_distance, data2rad, rad2data, time2float
+from pycircstat2.utils import (
+    angmod,
+    angular_distance,
+    data2rad,
+    rad2data,
+    rotate_data,
+    time2float,
+)
 
 
 def test_data2rad():
@@ -83,4 +90,41 @@ def test_angular_distance():
     np.testing.assert_almost_equal(
         np.rad2deg(angular_distance(a=np.deg2rad(190), b=np.deg2rad(5))).round(3),
         175,
+    )
+
+def test_rotate_data():
+    # Test case 1: Rotating angles in radians
+    alpha = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2])
+    rotated = rotate_data(alpha, np.pi / 4, unit="radian")
+    expected = np.array([np.pi / 4, 3 * np.pi / 4, 5 * np.pi / 4, 7 * np.pi / 4])
+    np.testing.assert_allclose(rotated, expected, atol=1e-6)
+
+    # Test case 2: Rotating angles in degrees
+    alpha_deg = np.array([0., 90., 180., 270.])
+    rotated_deg = rotate_data(alpha_deg, 45, unit="degree")
+    expected_deg = np.array([45., 135., 225., 315.])
+    np.testing.assert_allclose(rotated_deg, expected_deg, atol=1e-6)
+
+    # Test case 3: Rotating angles in hours
+    alpha_hour = np.array([0., 6., 12., 18.])
+    rotated_hour = rotate_data(alpha_hour, 3, unit="hour")
+    expected_hour = np.array([3., 9., 15., 21.])
+    np.testing.assert_allclose(rotated_hour, expected_hour, atol=1e-6)
+
+    # Test case 4: Rotation that wraps around the cycle
+    rotated_wrap = rotate_data(np.array([350.]), 20, unit="degree")
+    expected_wrap = np.array([10])
+    np.testing.assert_allclose(rotated_wrap, expected_wrap, atol=1e-6)
+
+    rotated_wrap_hour = rotate_data(np.array([22.]), 5, unit="hour")
+    expected_wrap_hour = np.array([3.])
+    np.testing.assert_allclose(rotated_wrap_hour, expected_wrap_hour, atol=1e-6)
+
+    # Test case 5: Rotating an empty array should return an empty array
+    np.testing.assert_array_equal(rotate_data(np.array([]), 45., unit="degree"), np.array([]))
+
+    # Test case 6: Rotating by 0 should return the same values
+    alpha_no_rotation = np.array([10., 50., 120.])
+    np.testing.assert_allclose(
+        rotate_data(alpha_no_rotation, 0, unit="degree"), alpha_no_rotation
     )
