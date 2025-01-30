@@ -7,6 +7,7 @@ from scipy.special import comb
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
 from .descriptive import (
+    circ_dist,
     circ_kappa,
     circ_mean_and_r,
     circ_mean_ci,
@@ -1107,3 +1108,54 @@ def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
     p_value = np.sum(sequence)
 
     return range_stat, p_value
+
+
+def binomial_test(alpha: np.ndarray, md: float) -> float:
+    """
+    Perform the binomial test for the median direction of circular data.
+
+    This test evaluates whether the population median angle is equal to a specified value.
+
+    - **H0**: The population has median angle `md`.
+    - **H1**: The population does not have median angle `md`.
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Sample of angles in radians.
+    md : float
+        Hypothesized median angle.
+
+    Returns
+    -------
+    pval : float
+        p-value of the test (small values suggest rejecting H0).
+
+    References
+    ----------
+    Zar, J. H. (2010). Biostatistical Analysis. Section 27.4.
+    """
+    from scipy.stats import binom
+
+    alpha = np.asarray(alpha)
+
+    if np.ndim(md) != 0:
+        raise ValueError("The median (md) must be a single scalar value.")
+
+    n = len(alpha)
+
+    # Compute circular differences from hypothesized median
+    d = circ_dist(alpha, md)
+
+    # Count the number of angles on each side of the hypothesized median
+    n1 = np.sum(d < 0)
+    n2 = np.sum(d > 0)
+
+    # Compute p-value using binomial test
+    n_min = min(n1, n2)
+    n_max = max(n1, n2)
+
+    # Binomial p-value
+    pval = binom.cdf(n_min, n, 0.5) + (1 - binom.cdf(n_max - 1, n, 0.5))
+
+    return pval

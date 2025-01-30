@@ -1,0 +1,68 @@
+
+
+#### 1. Descriptive Statistics
+
+| Feature                     | CircStat (MATLAB)  | PyCircStat (Python)       | CircStats (R) | circular (R)      | PyCircStat2 (Python) |
+| --------------------------- | ------------------ | ------------------------- | ------------- | ----------------- | -------------------- |
+| Circular Mean               | `circ_mean(alpha)` | `mean(alpha)`             | `circ.mean`   | `mean.circular`   | `circ_mean`          |
+| Circular Mean CI            | `circ_confmean`    | `mean(alpha, ci=95)`      |               |                   | `circ_mean_ci`       |
+| Circular Moment             | `circ_moment`      | `moment`                  |               |                   | `circ_moment`        |
+| Resultant Vector Length     | `circ_r`           | `resultant_vector_length` | -             | `rho.circular`    | `circ_r`             |
+| Circular Variance           | `circ_var`         | `var`                     | `circ.var`    | `var.circular`    | `circ_var`           |
+| Circular Standard Deviation | `circ_std`         | `std`                     | `circ.sd`     | `sd.circular`     | `circ_std`           |
+| Angular Variance            | `circ_var`         | `avar`                    |               |                   | `angular_var`        |
+| Angular Standard Deviation  | `circ_std`         | `astd`                    |               |                   | `angular_std`        |
+| Circular Median             | `circ_median`      | `median`                  | `circ.median` | `median.circular` | `circ_median`        |
+| Circular Median CI          | -                  | -                         |               |                   | `circ_median_ci`     |
+| Circular Skewness           | `circ_skewness`    | `skewness`                |               |                   |                      |
+| Circular Kurtosis           | `circ_kurtosis`    | `kurtoisis`               |               |                   |                      |
+| Circular Dispersion         | -                  | -                         | -             | -                 | `circ_dispersion`    |
+| Circular Distance           | `circ_dist`        | `cdist`                   |               |                   | `circ_dist`          |
+| Pairwaise Circular Distance | `circ_dist2`       | `pairwise_cdiff`          |               |                   | `circ_pairdist`      |
+
+
+#### 2. Hypothesis Testing
+
+##### Testing Significance of the Mean Direction
+
+| Feature         | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R)   | circular (R)    | PyCircStat2 (Python) |
+| --------------- | ----------------- | ------------------- | --------------- | --------------- | -------------------- |
+| Rayleigh Test   | `circ_rtest`      | `rayleigh`          | `rayleigh.test` | `rayleigh.test` | `rayleigh_test`      |
+| V-Test          | `circ_vtest`      | `vtest`             | `v.test`        | `v.test`        | `V_test`             |
+| One-sample test | `circ_mtest`      | `mtest`             |                 |                 | `one_sample_test`    |
+
+#### Testing Significance of the Median Direction
+
+| Feature                    | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R) | PyCircStat2 (Python) |
+| -------------------------- | ----------------- | ------------------- | ------------- | ------------ | -------------------- |
+| Hodges-Ajne (omnibus) Test | `circ_otest`      | `omnibus`           |               |              | `omnibus_test`       |
+| Batschelet Test            | -                 | -                   |               |              | `batschelet_test`    |
+| Binomial Test              | `circ_medtest`    | `medtest`           |               |              | `binomial_test`      |
+
+| Feature                         | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R)          | circular (R)           | PyCircStat2 (Python)   |
+| ------------------------------- | ----------------- | ------------------- | ---------------------- | ---------------------- | ---------------------- |
+| Hodges-Ajne test (omnibus test) | `circ_otest`      | `omnibus`           |                        |                        | `omnibus_test`         |
+| Rao’s Spacing Test              | `circ_raotest`    | `raospacing`        | `rao.spacing.test`     | `rao.spacing.test`     | `rao_spacing_test`     |
+| Test Significance of median     | `circ_medtest`    | `medtest`           |                        |                        | -                      |
+| Kuiper’s Test                   | -                 | -                   | `kuiper.test`          | `kuiper.test`          | `circ_kuiper_test`     |
+| Watson-Williams Test            | `circ_wwtest`     | `watson_williams`   | `watson.williams.test` | `watson.williams.test` | `watson_williams_test` |
+| Symmetry Test around median     | `circ_symtest`    | `symtest`           |                        |                        | `symmetry_test`        |
+| Circular Range Test             | -                 | -                   | `circ_range`           |                        | `circ_range_test`      |
+
+
+#### 3. Correlation & Regression
+| Feature                       | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)   | PyCircStat2 (Python) |
+| ----------------------------- | ----------------- | ------------------- | ------------- | -------------- | -------------------- |
+| Circular-Circular Correlation | `circ_corrcc`     | `corrcc`            | `circ.cor`    | `cor.circular` | `circ_corrcc`        |
+| Circular-Linear Correlation   | `circ_corrcl`     | `corrcl`            | -             | `cor.circular` | `circ_corrcl`        |
+| Circular Regression           | -                 | -                   | `circ.reg`    | `lm.circular`  | `circ_regress`       |
+
+
+#### 4. Circular Distributions
+| Feature                     | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)     | PyCircStat2 (Python) |
+| --------------------------- | ----------------- | ------------------- | ------------- | ---------------- | -------------------- |
+| Von Mises Distribution      | `circ_vmpdf`      | `vonmises_pdf`      | `dvonmises`   | `dvonmises`      | `vonmises_pdf`       |
+| Wrapped Normal Distribution | -                 | -                   | -             | `dwrappednormal` | `wrappednormal_pdf`  |
+| Wrapped Cauchy Distribution | -                 | -                   | -             | `dwrappedcauchy` | `wrappedcauchy_pdf`  |
+| Generalized von Mises (GvM) | -                 | -                   | -             | `dgvm`           | `gvm_pdf`            |
+| Empirical Distribution      | -                 | -                   | -             | `ecdf.circular`  | `circ_empirical`     |

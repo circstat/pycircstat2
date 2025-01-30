@@ -21,6 +21,7 @@ plugins:
 
 nav:
     - Home: index.md
+    - Features: features.md
     - API Reference:
           - Circular Data Base: reference/base.md
           - Descriptive Statistics: reference/descriptive.md

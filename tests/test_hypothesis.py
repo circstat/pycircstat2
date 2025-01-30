@@ -4,6 +4,7 @@ from pycircstat2 import Circular, load_data
 from pycircstat2.hypothesis import (
     V_test,
     batschelet_test,
+    binomial_test,
     chisquare_test,
     circ_range_test,
     kuiper_test,
@@ -240,3 +241,42 @@ def test_circ_range_test():
     range_stat, pval = circ_range_test(x)
     np.testing.assert_approx_equal(range_stat, 4.584073, significant=5)
     np.testing.assert_approx_equal(pval, 0.01701148, significant=5)
+
+
+def test_binomial_test_uniform():
+    """Test binomial_test with uniform circular data (should not reject H0)."""
+    np.random.seed(42)
+    alpha = np.random.uniform(0, 2 * np.pi, 100)  # Uniformly distributed angles
+    md = np.pi  # Test median at π (should be non-significant)
+    
+    pval = binomial_test(alpha, md)
+    
+    assert 0.05 < pval < 1.0, f"Unexpected p-value for uniform data: {pval}"
+
+def test_binomial_test_skewed():
+    """Test binomial_test with a skewed circular distribution (should reject H0)."""
+    np.random.seed(42)
+    alpha = np.random.vonmises(mu=np.pi/4, kappa=3, size=100)  # Clustered around π/4
+    md = np.pi  # Incorrect median hypothesis
+    
+    pval = binomial_test(alpha, md)
+    
+    assert pval < 0.05, f"Expected significant p-value but got {pval}"
+
+def test_binomial_test_symmetric():
+    """Test binomial_test with symmetric distribution around π (should fail to reject H0)."""
+    alpha = np.array([-np.pi/4, np.pi/4, np.pi/2, -np.pi/2, np.pi])
+    md = np.pi  # This should be a valid median
+    
+    pval = binomial_test(alpha, md)
+    
+    assert pval > 0.05, f"Unexpected p-value for symmetric data: {pval}"
+
+def test_binomial_test_extreme_case():
+    """Test binomial_test with all points clustered at π (extreme case)."""
+    alpha = np.full(20, np.pi)  # All angles at π
+    md = np.pi
+    
+    pval = binomial_test(alpha, md)
+    
+    assert np.isclose(pval, 1.0), f"Expected p-value of 1 for identical data but got {pval}"
