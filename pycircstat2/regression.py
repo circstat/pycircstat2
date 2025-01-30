@@ -6,7 +6,7 @@ from scipy.linalg import lstsq
 from scipy.special import i0, i1
 from scipy.stats import chi2, norm
 
-from .utils import significance_code
+from .utils import A1, A1inv, significance_code
 
 __all__ = ["CLRegression", "CCRegression"]
 
@@ -143,8 +143,8 @@ class CLRegression:
             return 1 / (R**3 - 4 * R**2 + 3 * R)
 
     def _A1_prime(self, kappa: np.ndarray) -> np.ndarray:
-        A1 = self._A1(kappa)
-        return 1 - A1 / kappa - A1**2
+        a1 = A1(kappa)
+        return 1 - a1 / kappa - a1**2
 
     def _fit(self):
         theta = self.theta
@@ -162,12 +162,12 @@ class CLRegression:
                 S = np.mean(np.sin(raw_deviation))
                 C = np.mean(np.cos(raw_deviation))
                 R = np.sqrt(S**2 + C**2)
-                kappa = self._A1inv(R)
+                kappa = A1inv(R)
                 mu = np.arctan2(S, C)
 
                 # Step 2: Update beta
                 G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
-                A = np.eye(n) * (kappa * self._A1(kappa))
+                A = np.eye(n) * (kappa * A1(kappa))
                 u = kappa * np.sin(raw_deviation - mu)
                 beta_new = np.linalg.solve(G.T @ A @ G, G.T @ (u + A @ G @ beta))
                 alpha_new, gamma_new = np.nan, np.nan

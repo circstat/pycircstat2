@@ -3,8 +3,9 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 import numpy as np
-from scipy.special import comb
-from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
+import pandas as pd
+from scipy.special import comb, i0
+from scipy.stats import chi2, f, norm, rankdata, vonmises, wilcoxon
 
 from .descriptive import (
     circ_dist,
@@ -1223,3 +1224,165 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
         pval = 2 * (1 - f.cdf(f_stat, n2, n1))
 
     return f_stat, pval
+
+
+def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
+    """
+    Perform Rao's test for homogeneity on multiple samples of angular data.
+
+    - **Test 1**: Equality of Mean Directions (Polar Vectors)
+    - **Test 2**: Equality of Dispersions
+
+    Parameters
+    ----------
+    samples : list of np.ndarray
+        A list where each entry is a vector of angular values (in radians).
+    alpha : float, optional
+        Significance level for the hypothesis test. Default is 0.05.
+
+    Returns
+    -------
+    dict
+        A dictionary with test statistics and p-values for both tests.
+
+    References
+    ----------
+    Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
+    Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
+    """
+    if not isinstance(samples, list) or not all(isinstance(s, np.ndarray) for s in samples):
+        raise ValueError("Input must be a list of numpy arrays.")
+
+    k = len(samples)  # Number of samples
+    n = np.array([len(s) for s in samples])  # Sample sizes
+
+    # Compute mean cosine and sine values for each sample
+    cos_means = np.array([np.mean(np.cos(s)) for s in samples])
+    sin_means = np.array([np.mean(np.sin(s)) for s in samples])
+
+    # Compute variances
+    # Compute sample variances (use ddof=1 to match R)
+    var_cos = np.array([np.var(np.cos(s), ddof=1) for s in samples])
+    var_sin = np.array([np.var(np.sin(s), ddof=1) for s in samples])
+
+    # Compute covariance (use ddof=1 to match R's var(x, y))
+    cov_cos_sin = np.array([np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in samples])
+
+    # Compute test statistics
+    s_polar = 1 / n * (var_sin / cos_means**2 + (sin_means**2 * var_cos) / cos_means**4 - (2 * sin_means * cov_cos_sin) / cos_means**3)
+    tan_means = sin_means / cos_means
+    H_polar = np.sum(tan_means**2 / s_polar) - (np.sum(tan_means / s_polar)**2) / np.sum(1 / s_polar)
+
+    U = cos_means**2 + sin_means**2
+    s_disp = 4 / n * (cos_means**2 * var_cos + sin_means**2 * var_sin + 2 * cos_means * sin_means * cov_cos_sin)
+    H_disp = np.sum(U**2 / s_disp) - (np.sum(U / s_disp)**2) / np.sum(1 / s_disp)
+
+    # Compute p-values
+    df = k - 1  # Degrees of freedom
+    pval_polar = 1 - chi2.cdf(H_polar, df)
+    pval_disp = 1 - chi2.cdf(H_disp, df)
+
+    # Determine critical values
+    crit_polar = chi2.ppf(1 - alpha, df)
+    crit_disp = chi2.ppf(1 - alpha, df)
+
+    # Test decisions
+    reject_polar = H_polar > crit_polar
+    reject_disp = H_disp > crit_disp
+
+    return {
+        "H_polar": H_polar,
+        "pval_polar": pval_polar,
+        "reject_polar": reject_polar,
+        "H_disp": H_disp,
+        "pval_disp": pval_disp,
+        "reject_disp": reject_disp,
+    }
+
+
+def change_point_test(alpha):
+    """
+    Perform a change point test for mean direction, concentration, or both.
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Vector of angular measurements in radians.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing test statistics and estimated change point locations.
+
+    References
+    ----------
+    Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Chapter 11.
+
+    Notes
+    -----
+    Ported from `change.pt()` function in the `CircStats` package for R.
+    """
+
+    def A1inv(R: float) -> float:
+        if 0 <= R < 0.53:
+            return 2 * R + R**3 + (5 * R**5) / 6
+        elif R < 0.85:
+            return -0.4 + 1.39 * R + 0.43 / (1 - R)
+        else:
+            return 1 / (R**3 - 4 * R**2 + 3 * R)
+
+    def phi(x):
+        """Helper function for phi computation."""
+        arg = A1inv(x)
+        if i0(arg) != np.inf:
+            return x * A1inv(x) - np.log(i0(arg))
+        else:
+            return x * A1inv(x) - (arg + np.log(1 / np.sqrt(2 * np.pi * arg) * (1 + 1/(8 * arg) + 9/(128 * arg**2) + 225/(1024 * arg**3))))
+
+    def est_rho(alpha):
+        """Estimate mean resultant length (rho)."""
+        return np.linalg.norm(np.sum(np.exp(1j * alpha))) / len(alpha)
+
+
+    n = len(alpha)
+    if n < 4:
+        raise ValueError("Sample size must be at least 4 for change point test.")
+
+    rho = est_rho(alpha)
+
+    R1, R2, V = np.zeros(n), np.zeros(n), np.zeros(n)
+    
+    for k in range(1, n):  
+        R1[k-1] = est_rho(alpha[:k]) * k  
+        R2[k-1] = est_rho(alpha[k:]) * (n - k)
+
+        if 2 <= k <= (n - 2): 
+            V[k-1] = (k/n) * phi(R1[k-1] / k) + ((n - k) / n) * phi(R2[k-1] / (n - k))
+
+    R1[-1] = rho * n 
+    R2[-1] = 0
+
+    R_diff = R1 + R2 - rho * n
+    rmax = np.max(R_diff)
+    k_r = np.argmax(R_diff)
+    rave = np.mean(R_diff)
+
+    if n > 3:
+        V = V[1:n-2]
+        print(f"V sliced: {V}")
+        tmax = np.max(V)
+        k_t = np.argmax(V) + 1
+        tave = np.mean(V) 
+    else:
+        raise ValueError("Sample size must be at least 4.")
+
+    return pd.DataFrame({
+        "n": [n],
+        "rho": [rho],
+        "rmax": [rmax],
+        "k.r": [k_r],
+        "rave": [rave],
+        "tmax": [tmax],
+        "k.t": [k_t],
+        "tave": [tave],
+    })

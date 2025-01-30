@@ -7,12 +7,14 @@ from pycircstat2.hypothesis import (
     V_test,
     batschelet_test,
     binomial_test,
+    change_point_test,
     chisquare_test,
     circ_range_test,
     concentration_test,
     kuiper_test,
     omnibus_test,
     one_sample_test,
+    rao_homogeneity_test,  # Import from PyCircStat2
     rao_spacing_test,
     rayleigh_test,
     symmetry_test,
@@ -327,5 +329,80 @@ def test_concentration_extreme_case():
 
     assert pval > 0.05, f"Unexpectedly small p-value: {pval}, should not reject H0."
 
-if __name__ == "__main__":
-    pytest.main()
+
+
+def test_rao_homogeneity_identical():
+    """Test with identical von Mises distributions (should fail to reject H0)."""
+    np.random.seed(42)
+    samples = [vonmises.rvs(mu=0, kappa=2, size=50) for _ in range(3)]
+
+    results = rao_homogeneity_test(samples)
+
+    assert results["pval_polar"] > 0.05, f"Unexpectedly small p-value: {results['pval_polar']}"
+    assert results["pval_disp"] > 0.05, f"Unexpectedly small p-value: {results['pval_disp']}"
+
+def test_rao_homogeneity_different_means():
+    """Test with different mean directions (should reject H0 for mean equality)."""
+    np.random.seed(42)
+    samples = [
+        vonmises.rvs(kappa=2, mu=0, size=50),
+        vonmises.rvs(kappa=2, mu=np.pi/4, size=50),
+        vonmises.rvs(kappa=2, mu=np.pi/2, size=50)
+    ]
+    results = rao_homogeneity_test(samples)
+
+    assert results["pval_polar"] < 0.05, f"Expected rejection but got p={results['pval_polar']}"
+
+def test_rao_homogeneity_different_dispersion():
+    """Test with different kappa values (should reject H0 for dispersion equality)."""
+    np.random.seed(42)
+    samples = [
+        vonmises.rvs(mu=0, kappa=5, size=50),
+        vonmises.rvs(mu=0, kappa=2, size=50),
+        vonmises.rvs(mu=0, kappa=1, size=50)
+    ]
+
+    results = rao_homogeneity_test(samples)
+
+    assert results["pval_disp"] < 0.05, f"Expected rejection but got p={results['pval_disp']}"
+
+def test_rao_homogeneity_small_samples():
+    """Test with very small sample sizes (should handle without error)."""
+    np.random.seed(42)
+    samples = [vonmises.rvs(mu=0, kappa=3, size=5) for _ in range(3)]
+
+    results = rao_homogeneity_test(samples)
+
+    assert "pval_polar" in results and "pval_disp" in results
+
+def test_rao_homogeneity_invalid_input():
+    """Test invalid input (should raise ValueError)."""
+    with pytest.raises(ValueError):
+        rao_homogeneity_test("invalid_input")
+
+    with pytest.raises(ValueError):
+        rao_homogeneity_test([np.array([0, np.pi/2]), "invalid_array"])
+
+def test_change_point_basic():
+    """Test change_point_test() on a simple dataset matching R."""
+    alpha = np.array([3.03, 0.28, 3.90, 5.56, 5.77, 5.06, 5.96, 
+                      0.16, 0.51, 1.21, 6.03, 1.05, 0.45, 1.47, 6.09])
+    
+    result = change_point_test(alpha)
+
+    # Expected values based on R output
+    expected_rho = 0.52307
+    expected_rmax = 2.237654
+    expected_k_r = 6
+    expected_rave = 1.066862
+    expected_tmax = 0.602549
+    expected_k_t = 6
+    expected_tave = 0.460675
+
+    assert np.isclose(result["rho"].iloc[0], expected_rho, atol=1e-5)
+    assert np.isclose(result["rmax"].iloc[0], expected_rmax, atol=1e-5)
+    assert result["k.r"].iloc[0] == expected_k_r
+    assert np.isclose(result["rave"].iloc[0], expected_rave, atol=1e-5)
+    assert np.isclose(result["tmax"].iloc[0], expected_tmax, atol=1e-5)
+    assert result["k.t"].iloc[0] == expected_k_t
+    assert np.isclose(result["tave"].iloc[0], expected_tave, atol=1e-5)

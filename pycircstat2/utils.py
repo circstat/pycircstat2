@@ -4,6 +4,7 @@ from typing import Union
 
 import numpy as np
 import pandas as pd
+from scipy.special import i0, i1
 
 
 def data2rad(
@@ -227,3 +228,15 @@ def rotate_data(alpha: np.ndarray, angle: float, unit: str = "radian") -> np.nda
     rotated_alpha = rad2data(rotated_alpha_rad, k=n_intervals)
 
     return rotated_alpha
+
+
+def A1(kappa: np.ndarray) -> np.ndarray:
+    return i1(kappa) / i0(kappa)
+
+def A1inv(R: float) -> float:
+    if 0 <= R < 0.53:
+        return 2 * R + R**3 + (5 * R**5) / 6
+    elif R < 0.85:
+        return -0.4 + 1.39 * R + 0.43 / (1 - R)
+    else:
+        return 1 / (R**3 - 4 * R**2 + 3 * R)
