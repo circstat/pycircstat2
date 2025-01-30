@@ -1,12 +1,15 @@
 import numpy as np
+import pytest
 
 from pycircstat2 import Circular, load_data
+from pycircstat2.distributions import vonmises
 from pycircstat2.hypothesis import (
     V_test,
     batschelet_test,
     binomial_test,
     chisquare_test,
     circ_range_test,
+    concentration_test,
     kuiper_test,
     omnibus_test,
     one_sample_test,
@@ -280,3 +283,49 @@ def test_binomial_test_extreme_case():
     pval = binomial_test(alpha, md)
     
     assert np.isclose(pval, 1.0), f"Expected p-value of 1 for identical data but got {pval}"
+
+
+
+def test_concentration_identical():
+    """Test concentration_test with identical von Mises distributions (should fail to reject H0)."""
+    np.random.seed(42)
+    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50)
+    alpha2 = vonmises.rvs(mu=0, kappa=3, size=50)
+
+    f_stat, pval = concentration_test(alpha1, alpha2)
+
+    assert pval > 0.05, f"Unexpectedly small p-value: {pval}, should not reject H0."
+
+def test_concentration_different():
+    """Test concentration_test with different kappa values (should reject H0)."""
+    np.random.seed(42)
+    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50)  # Higher concentration
+    alpha2 = vonmises.rvs(mu=0, kappa=1, size=50)  # Lower concentration
+
+    f_stat, pval = concentration_test(alpha1, alpha2)
+
+    assert pval < 0.05, f"Expected small p-value, but got {pval}"
+
+def test_concentration_high_dispersion():
+    """Test concentration_test with very dispersed data (should fail to reject H0)."""
+    np.random.seed(42)
+    alpha1 = np.random.uniform(0, 2*np.pi, 50)  # Uniformly spread
+    alpha2 = np.random.uniform(0, 2*np.pi, 50)
+
+    f_stat, pval = concentration_test(alpha1, alpha2)
+
+    assert pval > 0.05, f"Unexpectedly small p-value: {pval}, should not reject H0."
+
+
+def test_concentration_extreme_case():
+    """Test concentration_test when both samples have extremely high concentration (should fail to reject H0)."""
+    np.random.seed(42)
+    alpha1 = vonmises.rvs(mu=0, kappa=100, size=50)
+    alpha2 = vonmises.rvs(mu=0, kappa=100, size=50)
+
+    f_stat, pval = concentration_test(alpha1, alpha2)
+
+    assert pval > 0.05, f"Unexpectedly small p-value: {pval}, should not reject H0."
+
+if __name__ == "__main__":
+    pytest.main()

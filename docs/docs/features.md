@@ -25,29 +25,38 @@
 
 ##### Testing Significance of the Mean Direction
 
-| Feature         | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R)   | circular (R)    | PyCircStat2 (Python) |
-| --------------- | ----------------- | ------------------- | --------------- | --------------- | -------------------- |
-| Rayleigh Test   | `circ_rtest`      | `rayleigh`          | `rayleigh.test` | `rayleigh.test` | `rayleigh_test`      |
-| V-Test          | `circ_vtest`      | `vtest`             | `v.test`        | `v.test`        | `V_test`             |
-| One-sample test | `circ_mtest`      | `mtest`             |                 |                 | `one_sample_test`    |
+| Feature         | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)    | PyCircStat2 (Python) |
+| --------------- | ----------------- | ------------------- | ------------- | --------------- | -------------------- |
+| Rayleigh Test   | `circ_rtest`      | `rayleigh`          | `r.test`      | `rayleigh.test` | `rayleigh_test`      |
+| V-Test          | `circ_vtest`      | `vtest`             | `v.test`      | `v.test`        | `V_test`             |
+| One-sample test | `circ_mtest`      | `mtest`             |               |                 | `one_sample_test`    |
 
 #### Testing Significance of the Median Direction
 
-| Feature                    | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R) | PyCircStat2 (Python) |
-| -------------------------- | ----------------- | ------------------- | ------------- | ------------ | -------------------- |
-| Hodges-Ajne (omnibus) Test | `circ_otest`      | `omnibus`           |               |              | `omnibus_test`       |
-| Batschelet Test            | -                 | -                   |               |              | `batschelet_test`    |
-| Binomial Test              | `circ_medtest`    | `medtest`           |               |              | `binomial_test`      |
+| Feature                     | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R) | PyCircStat2 (Python) |
+| --------------------------- | ----------------- | ------------------- | ------------- | ------------ | -------------------- |
+| Hodges-Ajne (omnibus) Test  | `circ_otest`      | `omnibus`           |               |              | `omnibus_test`       |
+| Batschelet Test             | -                 | -                   |               |              | `batschelet_test`    |
+| Binomial Test               | `circ_medtest`    | `medtest`           |               |              | `binomial_test`      |
+| Symmetry Test around median | `circ_symtest`    | `symtest`           |               |              | `symmetry_test`      |
 
-| Feature                         | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R)          | circular (R)           | PyCircStat2 (Python)   |
-| ------------------------------- | ----------------- | ------------------- | ---------------------- | ---------------------- | ---------------------- |
-| Hodges-Ajne test (omnibus test) | `circ_otest`      | `omnibus`           |                        |                        | `omnibus_test`         |
-| Rao’s Spacing Test              | `circ_raotest`    | `raospacing`        | `rao.spacing.test`     | `rao.spacing.test`     | `rao_spacing_test`     |
-| Test Significance of median     | `circ_medtest`    | `medtest`           |                        |                        | -                      |
-| Kuiper’s Test                   | -                 | -                   | `kuiper.test`          | `kuiper.test`          | `circ_kuiper_test`     |
-| Watson-Williams Test            | `circ_wwtest`     | `watson_williams`   | `watson.williams.test` | `watson.williams.test` | `watson_williams_test` |
-| Symmetry Test around median     | `circ_symtest`    | `symtest`           |                        |                        | `symmetry_test`        |
-| Circular Range Test             | -                 | -                   | `circ_range`           |                        | `circ_range_test`      |
+#### Multi-sample testing of Mean Directions and Concentration
+
+| Feature                              | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)           | PyCircStat2 (Python)   |
+| ------------------------------------ | ----------------- | ------------------- | ------------- | ---------------------- | ---------------------- |
+| Watson-Williams Test (one-way ANOVA) | `circ_wwtest`     | `watson_williams`   | -             | `watson.williams.test` | `watson_williams_test` |
+| Harrison-Kanji Test (two-way ANOVA)  | `circ_hktest`     | `hktest`            | -             |                        | -                      |
+| Watson's U2 Test                     |                   |                     | `watson.two`  |                        | `watson_u2_test`       |
+| Concentration Test (F-test)          | `circ_ktest`      | -                   | -             |                        | `concentration_test`   |
+
+#### Goodness-of-fit Tests
+
+| Feature             | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)       | PyCircStat2 (Python) |
+| ------------------- | ----------------- | ------------------- | ------------- | ------------------ | -------------------- |
+| Kuiper’s Test       | `circ_kuipertest` | `kupier`            | `kuiper`      | `kuiper.test`      | `circ_kuiper_test`   |
+| Rao’s Spacing Test  | `circ_raotest`    | `raospacing`        | `rao.spacing` | `rao.spacing.test` | `rao_spacing_test`   |
+| Watson's Test       | -                 | -                   | `watson`      |                    | `watson_test`        |
+| Circular Range Test | -                 | -                   | `circ_range`  |                    | `circ_range_test`    |
 
 
 #### 3. Correlation & Regression

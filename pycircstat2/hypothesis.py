@@ -1159,3 +1159,67 @@ def binomial_test(alpha: np.ndarray, md: float) -> float:
     pval = binom.cdf(n_min, n, 0.5) + (1 - binom.cdf(n_max - 1, n, 0.5))
 
     return pval
+
+
+def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, float]:
+    """
+    Parametric two-sample test for concentration equality in circular data.
+
+    This test determines whether two von Mises-type samples have different
+    concentration parameters (i.e., different dispersions).
+
+    - **H0**: The two samples have the same concentration parameter.
+    - **H1**: The two samples have different concentration parameters.
+
+    Parameters
+    ----------
+    alpha1 : np.ndarray
+        First sample of circular data (radians).
+    alpha2 : np.ndarray
+        Second sample of circular data (radians).
+
+    Returns
+    -------
+    f_stat : float
+        The F-statistic for the test.
+    pval : float
+        The p-value indicating whether the samples have significantly different concentrations.
+
+    Notes
+    -----
+    - This test assumes that both samples follow von Mises distributions.
+    - The **resultant vector length** of the combined samples should be greater than 0.7 for validity.
+    - Based on Batschelet (1980), Section 6.9, p. 122-124.
+
+    References
+    ----------
+    Batschelet, E. (1980). Circular Statistics in Biology. Academic Press.
+    """
+    # Ensure inputs are numpy arrays
+    alpha1, alpha2 = np.asarray(alpha1), np.asarray(alpha2)
+    
+    # Sample sizes
+    n1, n2 = len(alpha1), len(alpha2)
+
+    # Compute resultant vector lengths
+    R1 = n1 * circ_r(alpha1)
+    R2 = n2 * circ_r(alpha2)
+
+    # Compute mean resultant length of combined samples
+    rbar = (R1 + R2) / (n1 + n2)
+
+    # Warn if rbar is too low
+    if rbar < 0.7:
+        print("Warning: The resultant vector length should be > 0.7 for valid results.")
+
+    # Compute F-statistic
+    f_stat = ((n2 - 1) * (n1 - R1)) / ((n1 - 1) * (n2 - R2))
+    
+    # Compute p-value (adjusting for F-stat symmetry)
+    if f_stat > 1:
+        pval = 2 * (1 - f.cdf(f_stat, n1, n2))
+    else:
+        f_stat = 1 / f_stat
+        pval = 2 * (1 - f.cdf(f_stat, n2, n1))
+
+    return f_stat, pval
