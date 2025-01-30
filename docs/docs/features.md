@@ -5,42 +5,44 @@
 | Feature                     | CircStat (MATLAB)  | PyCircStat (Python)       | CircStats (R) | circular (R)      | PyCircStat2 (Python) |
 | --------------------------- | ------------------ | ------------------------- | ------------- | ----------------- | -------------------- |
 | Circular Mean               | `circ_mean(alpha)` | `mean(alpha)`             | `circ.mean`   | `mean.circular`   | `circ_mean`          |
-| Circular Mean CI            | `circ_confmean`    | `mean(alpha, ci=95)`      |               |                   | `circ_mean_ci`       |
-| Circular Moment             | `circ_moment`      | `moment`                  |               |                   | `circ_moment`        |
-| Resultant Vector Length     | `circ_r`           | `resultant_vector_length` | -             | `rho.circular`    | `circ_r`             |
-| Circular Variance           | `circ_var`         | `var`                     | `circ.var`    | `var.circular`    | `circ_var`           |
-| Circular Standard Deviation | `circ_std`         | `std`                     | `circ.sd`     | `sd.circular`     | `circ_std`           |
-| Angular Variance            | `circ_var`         | `avar`                    |               |                   | `angular_var`        |
-| Angular Standard Deviation  | `circ_std`         | `astd`                    |               |                   | `angular_std`        |
-| Circular Median             | `circ_median`      | `median`                  | `circ.median` | `median.circular` | `circ_median`        |
-| Circular Median CI          | -                  | -                         |               |                   | `circ_median_ci`     |
-| Circular Skewness           | `circ_skewness`    | `skewness`                |               |                   | `circ_skewness`      |
-| Circular Kurtosis           | `circ_kurtosis`    | `kurtoisis`               |               |                   | `circ_kurtosis`      |
-| Circular Dispersion         | -                  | -                         | -             | -                 | `circ_dispersion`    |
-| Circular Distance           | `circ_dist`        | `cdist`                   |               |                   | `circ_dist`          |
-| Pairwaise Circular Distance | `circ_dist2`       | `pairwise_cdiff`          |               |                   | `circ_pairdist`      |
+| Circular Mean CI            | `circ_confmean`    | `mean(alpha, ci=95)`      | -             |                   | `circ_mean_ci`       |
+| Circular Moment             | `circ_moment`      | `moment`                  | `tri.moment`  |                   | `circ_moment`        |
+| Cencentration Parameter     | `circ_kappa`       | `kappa`                   | `est.kappa`   |                   | `circ_kappa`         |
+| Resultant Vector Length     | `circ_r`           | `resultant_vector_length` | `est.rho`     | `rho.circular`    | `circ_r`             |
+| Circular Variance           | `circ_var`         | `var`                     | -             | `var.circular`    | `circ_var`           |
+| Circular Standard Deviation | `circ_std`         | `std`                     | -             | `sd.circular`     | `circ_std`           |
+| Angular Variance            | `circ_var`         | `avar`                    | -             |                   | `angular_var`        |
+| Angular Standard Deviation  | `circ_std`         | `astd`                    | -             |                   | `angular_std`        |
+| Circular Median             | `circ_median`      | `median`                  | -             | `median.circular` | `circ_median`        |
+| Circular Median CI          | -                  | -                         | -             |                   | `circ_median_ci`     |
+| Circular Skewness           | `circ_skewness`    | `skewness`                | -             |                   | `circ_skewness`      |
+| Circular Kurtosis           | `circ_kurtosis`    | `kurtoisis`               | -             |                   | `circ_kurtosis`      |
+| Circular Dispersion         | -                  | -                         | `circ.disp`   | -                 | `circ_dispersion`    |
+| Circular Distance           | `circ_dist`        | `cdist`                   | -             |                   | `circ_dist`          |
+| Pairwaise Circular Distance | `circ_dist2`       | `pairwise_cdiff`          | -             |                   | `circ_pairdist`      |
 
 
 ### 2. Hypothesis Testing
 
-#### Testing Significance of the Mean Direction
+#### Testing Significance of the Mean Direction / Cencentration
 
-| Feature         | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)    | PyCircStat2 (Python) |
-| --------------- | ----------------- | ------------------- | ------------- | --------------- | -------------------- |
-| Rayleigh Test   | `circ_rtest`      | `rayleigh`          | `r.test`      | `rayleigh.test` | `rayleigh_test`      |
-| V-Test          | `circ_vtest`      | `vtest`             | `v.test`      | `v.test`        | `V_test`             |
-| One-sample test | `circ_mtest`      | `mtest`             |               |                 | `one_sample_test`    |
+| Feature           | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R)    | PyCircStat2 (Python) |
+| ----------------- | ----------------- | ------------------- | ------------- | --------------- | -------------------- |
+| Rayleigh Test     | `circ_rtest`      | `rayleigh`          | `r.test`      | `rayleigh.test` | `rayleigh_test`      |
+| V-Test            | `circ_vtest`      | `vtest`             | `v0.test`     | `v.test`        | `V_test`             |
+| One-sample Test   | `circ_mtest`      | `mtest`             | -             |                 | `one_sample_test`    |
+| Change Point Test | -                 | -                   | `change.pt`   |                 | `change_point_test`  |
 
 #### Testing Significance of the Median Direction
 
 | Feature                     | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R) | circular (R) | PyCircStat2 (Python) |
 | --------------------------- | ----------------- | ------------------- | ------------- | ------------ | -------------------- |
-| Hodges-Ajne (omnibus) Test  | `circ_otest`      | `omnibus`           |               |              | `omnibus_test`       |
-| Batschelet Test             | -                 | -                   |               |              | `batschelet_test`    |
-| Binomial Test               | `circ_medtest`    | `medtest`           |               |              | `binomial_test`      |
-| Symmetry Test around median | `circ_symtest`    | `symtest`           |               |              | `symmetry_test`      |
+| Hodges-Ajne (omnibus) Test  | `circ_otest`      | `omnibus`           | -             |              | `omnibus_test`       |
+| Batschelet Test             | -                 | -                   | -             |              | `batschelet_test`    |
+| Binomial Test               | `circ_medtest`    | `medtest`           | -             |              | `binomial_test`      |
+| Symmetry Test around median | `circ_symtest`    | `symtest`           | -             |              | `symmetry_test`      |
 
-#### Multi-sample testing of Mean Directions and Concentration
+#### Multi-sample testing of Mean Directions / Concentration
 
 | Feature                              | CircStat (MATLAB) | PyCircStat (Python) | CircStats (R)     | circular (R)           | PyCircStat2 (Python)   |
 | ------------------------------------ | ----------------- | ------------------- | ----------------- | ---------------------- | ---------------------- |
@@ -66,7 +68,7 @@
 | Circular-Circular Correlation | `circ_corrcc`     | `corrcc`            | `circ.cor`    | `cor.circular` | `aacorr`             |
 | Circular-Linear Correlation   | `circ_corrcl`     | `corrcl`            | -             | `cor.circular` | `alcorr`             |
 | Circular-Circular Regression  | -                 | -                   | `circ.reg`    | `lm.circular`  | `CCRegression`       |
-| Circular-Linear Regression    | -                 | -                    | -             | `lm.circular`  | `CLRegression`       |
+| Circular-Linear Regression    | -                 | -                   | -             | `lm.circular`  | `CLRegression`       |
 
 
 

@@ -16,7 +16,7 @@ from .descriptive import (
     circ_r,
     circ_range,
 )
-from .utils import angmod, angular_distance, significance_code
+from .utils import A1inv, angmod, angular_distance, significance_code
 
 ###################
 # One-Sample Test #
@@ -1322,14 +1322,6 @@ def change_point_test(alpha):
     -----
     Ported from `change.pt()` function in the `CircStats` package for R.
     """
-
-    def A1inv(R: float) -> float:
-        if 0 <= R < 0.53:
-            return 2 * R + R**3 + (5 * R**5) / 6
-        elif R < 0.85:
-            return -0.4 + 1.39 * R + 0.43 / (1 - R)
-        else:
-            return 1 / (R**3 - 4 * R**2 + 3 * R)
 
     def phi(x):
         """Helper function for phi computation."""
