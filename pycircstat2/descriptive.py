@@ -1338,6 +1338,62 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
 
     return kappa
 
+def circ_dist(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    r"""
+    Compute the pairwise circular difference $x_i - y_i$ using complex representation.
+    
+    Parameters
+    ----------
+    x : array-like
+        Sample of circular data (radians).
+    y : array-like
+        Sample of circular data (radians) or a single angle.
+
+    Returns
+    -------
+    array
+        Circular differences wrapped to [-pi, pi].
+    
+    References
+    ----------
+    - Section 27.7 (Zar, 2010, P642)
+
+    """
+    return np.angle(np.exp(1j * x) / np.exp(1j * y))
+
+
+def circ_pairdist(x: np.ndarray, y: Optional[np.ndarray]=None) -> np.ndarray:
+    r"""
+    Compute all pairwise circular differences $x_i - y_j$ around the circle.
+    
+    Parameters
+    ----------
+    x : array-like
+        Sample of circular data (radians).
+    y : array-like, optional
+        Sample of circular data (radians). If None, computes all pairwise 
+        differences within x.
+    
+    Returns
+    -------
+    ndarray
+        Matrix of pairwise circular differences wrapped to [-pi, pi].
+
+    References
+    ----------
+    - Section 27.7 (Zar, 2010, P642)
+    """
+    x = np.asarray(x)
+    
+    if y is None:
+        y = x  # Compute pairwise distances within x itself
+    
+    y = np.asarray(y)
+
+    # Broadcasting-friendly complex exponentiation method
+    return np.angle(np.exp(1j * x[:, None]) / np.exp(1j * y[None, :]))
+
+
 
 #########################
 # Convinience functions #

@@ -4,6 +4,7 @@ from pycircstat2 import Circular, load_data
 from pycircstat2.descriptive import (
     angular_std,
     circ_dispersion,
+    circ_dist,
     circ_kurtosis,
     circ_mean_and_r,
     circ_mean_and_r_of_means,
@@ -13,6 +14,7 @@ from pycircstat2.descriptive import (
     circ_median,
     circ_median_ci,
     circ_moment,
+    circ_pairdist,
     circ_skewness,
     circ_std,
     compute_smooth_params,
@@ -264,3 +266,40 @@ def test_compute_smooth_params():
     c_fisher_b1 = Circular(time2float(d_fisher_b1), unit="hour")
     h0 = compute_smooth_params(c_fisher_b1.r, c_fisher_b1.n)
     np.testing.assert_approx_equal(h0, 1.06, significant=2)
+
+def test_circ_dist():
+    """Test circ_dist() for correctness and periodicity."""
+    x = np.array([0, np.pi/2, np.pi, -np.pi/2])
+    y = np.array([np.pi/4, -np.pi/4, np.pi, np.pi])
+
+    expected = (x - y + np.pi) % (2 * np.pi) - np.pi
+    result = circ_dist(x, y)
+
+    # Check if the output matches the expected values
+    assert np.allclose(result, expected), f"Expected {expected}, but got {result}"
+
+    # Check periodicity property
+    assert np.allclose(circ_dist(x + 2 * np.pi, y), result)
+    assert np.allclose(circ_dist(x, y + 2 * np.pi), result)
+
+def test_circ_pairdist():
+    """Test circ_pairdist() for correctness and shape."""
+    x = np.array([0, np.pi/2, np.pi])
+    y = np.array([np.pi/4, 3*np.pi/4])
+
+    expected = np.angle(np.exp(1j * x[:, None]) / np.exp(1j * y[None, :]))
+    result = circ_pairdist(x, y)
+
+    # Check if the output matches expected pairwise differences
+    assert np.allclose(result, expected), f"Expected {expected}, but got {result}"
+
+    # Verify output shape (len(x) × len(y))
+    assert result.shape == (len(x), len(y))
+
+    # Test when y is None (should return pairwise differences within x)
+    auto_result = circ_pairdist(x)
+    assert auto_result.shape == (len(x), len(x))  # Square matrix
+
+    # Check periodicity
+    assert np.allclose(circ_pairdist(x + 2*np.pi, y), result)
+    assert np.allclose(circ_pairdist(x, y + 2*np.pi), result)

@@ -22,6 +22,9 @@ readme = {file = "README.md", content-type = "text/markdown"}
 dev = [
     "ruff",
     "pytest",
+    "mkdocs",
+    "mkdocs-material-extensions",
+    "mkdocstrings[python]",
 ]
 
 [tool.setuptools]
