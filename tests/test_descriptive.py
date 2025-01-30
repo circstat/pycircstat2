@@ -15,6 +15,7 @@ from pycircstat2.descriptive import (
     circ_median_ci,
     circ_moment,
     circ_pairdist,
+    circ_range,
     circ_skewness,
     circ_std,
     compute_smooth_params,
@@ -303,3 +304,8 @@ def test_circ_pairdist():
     # Check periodicity
     assert np.allclose(circ_pairdist(x + 2*np.pi, y), result)
     assert np.allclose(circ_pairdist(x, y + 2*np.pi), result)
+
+def test_circ_range():
+
+    x = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.6, 36.0, 36.0, 36.0, 36.0, 36.0, 36.0, 72.0, 108.0, 108.0, 169.2, 324.0])
+    np.testing.assert_approx_equal(circ_range(x), 4.584073, significant=2)

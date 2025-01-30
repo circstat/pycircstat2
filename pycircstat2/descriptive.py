@@ -362,8 +362,6 @@ def angular_var(
     r"""
     Angular variance
 
-    $$ V = 1 - r $$
-
     Parameters
     ----------
     alpha: np.array (n, ) or None
@@ -1577,3 +1575,28 @@ def nonparametric_density_estimation(
     f = radius * np.sqrt(1 + np.pi * f) - radius
 
     return x, f
+
+def circ_range(alpha: np.ndarray) -> float:
+    """
+    Compute the circular range of angular data.
+    
+    The circular range is the difference between the maximum and minimum angles 
+    in the dataset, adjusted for circular continuity.
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Angles in radians.
+
+    Returns
+    -------
+    float
+        Circular range, a measure of clustering (higher = more clustered).
+
+    Reference
+    ---------
+    P162, Section 7.2.3 of Jammalamadaka, S. Rao and SenGupta, A. (2001)
+    """
+    alpha = np.sort(alpha % (2 * np.pi))  # Convert to [0, 2π) and sort
+    spacings = np.diff(alpha, prepend=alpha[-1] - 2 * np.pi)  # Compute spacings
+    return 2 * np.pi - np.max(spacings)  # Circular range

@@ -5,6 +5,7 @@ from pycircstat2.hypothesis import (
     V_test,
     batschelet_test,
     chisquare_test,
+    circ_range_test,
     kuiper_test,
     omnibus_test,
     one_sample_test,
@@ -231,3 +232,11 @@ def test_rao_spacing_test():
     U, pval = rao_spacing_test(alpha=c_pigeon.alpha, n_simulation=9999)
     np.testing.assert_approx_equal(U, 161.92308, significant=3)
     assert 0.05 < pval < 0.10
+
+def test_circ_range_test():
+
+
+    x = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.6, 36.0, 36.0, 36.0, 36.0, 36.0, 36.0, 72.0, 108.0, 108.0, 169.2, 324.0])
+    range_stat, pval = circ_range_test(x)
+    np.testing.assert_approx_equal(range_stat, 4.584073, significant=5)
+    np.testing.assert_approx_equal(pval, 0.01701148, significant=5)

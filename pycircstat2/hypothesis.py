@@ -3,9 +3,17 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 import numpy as np
+from scipy.special import comb
 from scipy.stats import f, norm, rankdata, vonmises, wilcoxon
 
-from .descriptive import circ_kappa, circ_mean_and_r, circ_mean_ci, circ_median, circ_r
+from .descriptive import (
+    circ_kappa,
+    circ_mean_and_r,
+    circ_mean_ci,
+    circ_median,
+    circ_r,
+    circ_range,
+)
 from .utils import angmod, angular_distance, significance_code
 
 ###################
@@ -1062,3 +1070,40 @@ def rao_spacing_test(
         print(f"P-value = {pval}\n")
 
     return np.rad2deg(Uo), pval
+
+def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
+    """
+    Perform the Circular Range Test for uniformity.
+
+    - **H0**: The data is uniformly distributed around the circle.
+    - **H1**: The data is non-uniformly distributed (clustered).
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Angles in radians.
+
+    Returns
+    -------
+    range_stat : float
+        The circular range test statistic.
+    p_value : float
+        The p-value indicating significance of non-uniformity.
+
+    Reference
+    ---------
+    P162, Section 7.2.3 of Jammalamadaka, S. Rao and SenGupta, A. (2001)
+    """
+    range_stat = circ_range(alpha)  # Compute test statistic
+
+    # Compute p-value using approximation formula from CircStats (if available)
+    n = len(alpha)
+    stop = int(np.floor(1 / (1 - range_stat / (2 * np.pi))))
+    index = np.arange(1, stop + 1)
+
+    # Compute p-value using series expansion
+    sequence = ((-1) ** (index - 1)) * comb(n, index) * \
+               (1 - index * (1 - range_stat / (2 * np.pi))) ** (n - 1)
+    p_value = np.sum(sequence)
+
+    return range_stat, p_value
