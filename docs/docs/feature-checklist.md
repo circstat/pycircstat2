@@ -29,15 +29,15 @@
 | Feature           | PyCircStat2 (Python) | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R)    |
 | ----------------- | -------------------- | ------------------- | ----------------- | ------------- | --------------- |
 | Rayleigh Test     | `rayleigh_test`      | `rayleigh`          | `circ_rtest`      | `r.test`      | `rayleigh.test` |
-| V-Test            | `V_test`             | `vtest`             | `circ_vtest`      | `v0.test`     | `v.test`        |
-| One-sample Test   | `one_sample_test`    | `mtest`             | `circ_mtest`      | -             |                 |
-| Change Point Test | `change_point_test`  | -                   | -                 | `change.pt`   |                 |
+| V-Test            | `V_test`             | `vtest`             | `circ_vtest`      | `v0.test`     | -               |
+| One-sample Test   | `one_sample_test`    | `mtest`             | `circ_mtest`      | -             | -               |
+| Change Point Test | `change_point_test`  | -                   | -                 | `change.pt`   | `change.point`  |
 
 #### Testing Significance of the Median Direction
 
 | Feature                     | PyCircStat2 (Python) | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R) |
 | --------------------------- | -------------------- | ------------------- | ----------------- | ------------- | ------------ |
-| Hodges-Ajne (omnibus) Test  | `omnibus_test`       | `omnibus`           | `circ_otest`      | -             |              |
+| Hodges-Ajne (omnibus) Test  | `omnibus_test`       | `omnibus`           | `circ_otest`      | -             | -            |
 | Batschelet Test             | `batschelet_test`    | -                   | -                 | -             |              |
 | Binomial Test               | `binomial_test`      | `medtest`           | `circ_medtest`    | -             |              |
 | Symmetry Test around median | `symmetry_test`      | `symtest`           | `circ_symtest`    | -             |              |
@@ -47,10 +47,11 @@
 | Feature                     | PyCircStat2 (Python)   | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
 | --------------------------- | ---------------------- | ------------------- | ----------------- | ----------------- | ---------------------- |
 | Watson-Williams Test [^1]   | `watson_williams_test` | `watson_williams`   | `circ_wwtest`     | -                 | `watson.williams.test` |
-| Harrison-Kanji Test[^2]     | `harrison_kanji_test`                      | `hktest`            | `circ_hktest`     | -                 |                        |
-| Watson's U2 Test            | `watson_u2_test`       | -                   | -                 | `watson.two`      |                        |
-| Concentration Test (F-test) | `concentration_test`   | -                   | `circ_ktest`      | -                 |                        |
-| Rao's Tests for Homogeneity | `rao_homogeneity_test` | -                   | -                 | `rao.homogeneity` |                        |
+| Harrison-Kanji Test[^2]     | `harrison_kanji_test`  | `hktest`            | `circ_hktest`     | -                 | -                      |
+| Watson's U2 Test            | `watson_u2_test`       | -                   | -                 | `watson.two`      | `watson.two.test`      |
+| Wallraff Test               | `wallraff_test`        | -                   | -                 | -                 | `wallraff.test`        |
+| Concentration Test (F-test) | `concentration_test`   | -                   | `circ_ktest`      | -                 | -                      |
+| Rao's Tests for Homogeneity | `rao_homogeneity_test` | -                   | -                 | `rao.homogeneity` | `rao.test`             |
 
 #### Goodness-of-fit Tests
 
@@ -63,23 +64,95 @@
 
 
 ### 3. Correlation & Regression
-| Feature                       | PyCircStat2 (Python) | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R)   |
-| ----------------------------- | -------------------- | ------------------- | ----------------- | ------------- | -------------- |
-| Circular-Circular Correlation | `aacorr`             | `corrcc`            | `circ_corrcc`     | `circ.cor`    | `cor.circular` |
-| Circular-Linear Correlation   | `alcorr`             | `corrcl`            | `circ_corrcl`     | -             | `cor.circular` |
-| Circular-Circular Regression  | `CCRegression`       | -                   | -                 | `circ.reg`    | `lm.circular`  |
-| Circular-Linear Regression    | `CLRegression`       | -                   | -                 | -             | `lm.circular`  |
+| Feature                       | PyCircStat2 (Python) | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R)              |
+| ----------------------------- | -------------------- | ------------------- | ----------------- | ------------- | ------------------------- |
+| Circular-Circular Correlation | `aacorr`             | `corrcc`            | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
+| Circular-Linear Correlation   | `alcorr`             | `corrcl`            | `circ_corrcl`     | -             | -                         |
+| Circular-Circular Regression  | `CCRegression`       | -                   | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
+| Circular-Linear Regression    | `CLRegression`       | -                   | -                 | -             | `lm.circular(type="c-l")` |
 
 
 
 ### 4. Circular Distributions
-| Feature                    | Method | PyCircStat2 (Python) | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R) |
-| -------------------------- | ------ | -------------------- | ------------------- | ----------------- | ------------- | ------------ |
-| **Von Mises Distribution** | PDF    | `vonmises.pdf`       | `vonmises`          | `circ_vmpdf`      | `dvm`         | `dvonmises`  |
-|                            | CDF    | `vonmises.cdf`       | -                   | -                 | `pvm`         | -            |
-|                            | PPF    | `vonmises.ppf`       | -                   | -                 | -             | -            |
-|                            | RVS    | `vonmises.rvs`       | -                   | `circ_vmrnd`      | `rvm`         | -            |
-|                            | Fit    | `vonmises.fit`       | -                   | `circ_vmpar`      | `vm.ml`       | -            |
+
+#### Symmetric Circular Distributions
+
+| Feature              | Method | PyCircStat2 (Python)      | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R)     |
+| -------------------- | ------ | ------------------------- | ------------------- | ----------------- | ------------- | ---------------- |
+| Circular Uniform     | PDF    | `circularuniform.pdf`     | -                   | -                 | -             | -                |
+|                      | CDF    | `circularuniform.cdf`     | -                   | -                 | -             | -                |
+|                      | PPF    | `circularuniform.ppf`     | -                   | -                 | -             | -                |
+|                      | RVS    | `circularuniform.rvs`     | -                   | -                 | -             | -                |
+|                      | Fit    | `circularuniform.fit`     | -                   | -                 | -             | -                |
+| Triangular           | PDF    | `triangular.pdf`          | `triangular.pdf`    | -                 | `dtri`        | -                |
+|                      | CDF    | `triangular.cdf`          | `triangular.cdf`    | -                 | -             | -                |
+|                      | PPF    | `triangular.ppf`          | `triangular.ppf`    | -                 | -             | -                |
+|                      | RVS    | `triangular.rvs`          | `triangular.rvs`    | -                 | `rtri`        | -                |
+|                      | Fit    | `triangular.fit`          | `triangular.fit`    | -                 | -             | -                |
+| Cardioid             | PDF    | `cardioid.pdf`            | `cardioid.pdf`      | -                 | `dcard`       | `dcardioid`      |
+|                      | CDF    | `cardioid.cdf`            | `cardioid.cdf`      | -                 | -             | -                |
+|                      | PPF    | `cardioid.ppf`            | `cardioid.ppf`      |                   | -             | -                |
+|                      | RVS    | `cardioid.rvs`            | `cardioid.rvs`      | -                 | `rcard`       | `rcardioid`      |
+|                      | Fit    | `cardioid.fit`            | `cardioid.fit`      | -                 | -             |                  |
+| Cartwright           | PDF    | `cartwright.pdf`          | -                   | -                 | -             | `dcarthwrite`    |
+|                      | CDF    | `cartwright.cdf`          | -                   | -                 | -             | -                |
+|                      | PPF    | `cartwright.ppf`          | -                   | -                 | -             | -                |
+|                      | RVS    | `cartwright.rvs`          | -                   | -                 | -             | -                |
+|                      | Fit    | `cartwright.fit`          | -                   | -                 | -             | -                |
+| Wrapped Normal       | PDF    | `wrapnorm.pdf`            | -                   | -                 | `dwrpnorm`    | `dwrappednormal` |
+|                      | CDF    | `wrapnorm.cdf`            | -                   | -                 | -             | `pwrappednormal` |
+|                      | PPF    | `wrapnorm.ppf`            | -                   | -                 | -             | `qwrappednormal` |
+|                      | RVS    | `wrapnorm.rvs`            | -                   | -                 | `rwrpnorm`    | `rwrappednormal` |
+|                      | Fit    | `wrapnorm.fit`            | -                   | -                 | -             | -                |
+| Wrapped Cauchy       | PDF    | `wrapcauchy.pdf`          | -                   | -                 | `dwrpcauchy`  | `dwrappedcauchy` |
+|                      | CDF    | `wrapcauchy.cdf`          | -                   | -                 | -             | -                |
+|                      | PPF    | `wrapcauchy.ppf`          | -                   | -                 | -             | -                |
+|                      | RVS    | `wrapcauchy.rvs`          | -                   | -                 | `rwrpcauchy`  | `rwrappedcauchy` |
+|                      | Fit    | `wrapcauchy.fit`          | -                   | -                 | -             | -                |
+| Von Mises            | PDF    | `vonmises.pdf`            | -                   | `circ_vmpdf`      | `dvm`         | `dvonmises`      |
+|                      | CDF    | `vonmises.cdf`            | -                   | -                 | `pvm`         | `pvonmises`      |
+|                      | PPF    | `vonmises.ppf`            | -                   | -                 | -             | `qvonmises`      |
+|                      | RVS    | `vonmises.rvs`            | -                   | `circ_vmrnd`      | `rvm`         | `rvonmises`      |
+|                      | Fit    | `vonmises.fit`            | -                   | `circ_vmpar`      | `vm.ml`       | -                |
+| Flattopped Von Mises | PDF    | `vonmises_flattopped.pdf` | -                   | -                 | -             | -                |
+|                      | CDF    | `vonmises_flattopped.cdf` | -                   | -                 | -             | -                |
+|                      | PPF    | `vonmises_flattopped.ppf` | -                   | -                 | -             | -                |
+|                      | RVS    | `vonmises_flattopped.rvs` | -                   | -                 | -             | -                |
+|                      | Fit    | `vonmises_flattopped.fit` | -                   | -                 | -             | -                |
+| Jones-Pewsey         | PDF    | `jonespewsey.pdf`         | -                   | -                 | -             | `djonespewsey`   |
+|                      | CDF    | `jonespewsey.cdf`         | -                   | -                 | -             | -                |
+|                      | PPF    | `jonespewsey.ppf`         | -                   | -                 | -             | -                |
+|                      | RVS    | `jonespewsey.rvs`         | -                   | -                 | -             | -                |
+|                      | Fit    | `jonespewsey.fit`         | -                   | -                 | -             | -                |
+| Kato-Jones           | PDF    | -                         | -                   | -                 | -             | `dkatojones`     |
+|                      | CDF    | -                         | -                   | -                 | -             | -                |
+|                      | PPF    | -                         | -                   | -                 | -             | -                |
+|                      | RVS    | -                         | -                   | -                 | -             | `rkatojones`     |
+|                      | Fit    | -                         | -                   | -                 | -             | -                |
+
+#### Asymmetric Circular Distributions
+| Feature                  | Method | PyCircStat2 (Python)         | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R) |
+| ------------------------ | ------ | ---------------------------- | ------------------- | ----------------- | ------------- | ------------ |
+| Jones-Pewsey Sine-Skewed | PDF    | `jonespewsey_sineskewed.pdf` | -                   | -                 | -             | -            |
+|                          | CDF    | `jonespewsey_sineskewed.cdf` | -                   | -                 | -             | -            |
+|                          | PPF    | `jonespewsey_sineskewed.ppf` | -                   | -                 | -             | -            |
+|                          | RVS    | `jonespewsey_sineskewed.rvs` | -                   | -                 | -             | -            |
+|                          | Fit    | `jonespewsey_sineskewed.fit` | -                   | -                 | -             | -            |
+| Jones-Pewsey Asymmetric  | PDF    | `jonespewsey_asym.pdf`       | -                   | -                 | -             | -            |
+|                          | CDF    | `jonespewsey_asym.cdf`       | -                   | -                 | -             | -            |
+|                          | PPF    | `jonespewsey_asym.ppf`       | -                   | -                 | -             | -            |
+|                          | RVS    | `jonespewsey_asym.rvs`       | -                   | -                 | -             | -            |
+|                          | Fit    | `jonespewsey_asym.fit`       | -                   | -                 | -             | -            |
+| Inverse Batschelet       | PDF    | `inverse_batschelet.pdf`     | -                   | -                 | -             | -            |
+|                          | CDF    | `inverse_batschelet.cdf`     | -                   | -                 | -             | -            |
+|                          | PPF    | `inverse_batschelet.ppf`     | -                   | -                 | -             | -            |
+|                          | RVS    | `inverse_batschelet.rvs`     | -                   | -                 | -             | -            |
+|                          | Fit    | `inverse_batschelet.fit`     | -                   | -                 | -             | -            |
+| Wrapped Stable           | PDF    | `wrapstable.pdf`             | -                   | -                 | -             | -            |
+|                          | CDF    | `wrapstable.cdf`             | -                   | -                 | -             | -            |
+|                          | PPF    | `wrapstable.ppf`             | -                   | -                 | -             | -            |
+|                          | RVS    | `wrapstable.rvs`             | -                   | -                 | `rwrpstab`    | -            |
+|                          | Fit    | `wrapstable.fit`             | -                   | -                 | -             | -            |
 
 
 [^1]: One-way ANOVA.
