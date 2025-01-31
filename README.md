@@ -39,6 +39,7 @@ A rework of [pycircstat](https://github.com/circstat/pycircstat).
   - **Symmetric distributions**: Circular Uniform, Cardioid, Cartwright, Wrapped Normal, Wrapped Cauchy, von Mises (and its flat-top extension), and Jones-Pewsey.
   - **Asymmetric distributions**: Sine-skewed Jones-Pewsey, Asymmetric Extended Jones-Pewsey, Inverse Batschelet.
 
+Also see the full feature checklist [here](https://circstat.github.io/pycircstat2/feature-checklist/).
 
 ## Installation
 
