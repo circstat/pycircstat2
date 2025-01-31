@@ -9,6 +9,7 @@ from pycircstat2.hypothesis import (
     binomial_test,
     change_point_test,
     chisquare_test,
+    circ_anova_test,
     circ_range_test,
     concentration_test,
     harrison_kanji_test,
@@ -574,3 +575,51 @@ def test_harrison_kanji_vs_pycircstat():
     table_new_values = table_new.to_numpy()
 
     assert np.allclose(table_orig_values, table_new_values, atol=1e-6, equal_nan=True), f"ANOVA tables differ:\nOriginal:\n{table_orig}\nNew:\n{table_new}"
+
+def test_circ_anova_test():
+    """Test the Circular ANOVA (F-test & LRT) for multiple samples."""
+
+    # Set seed for reproducibility
+    np.random.seed(42)
+
+    # Generate von Mises distributed samples with different mean directions
+    group1 = np.random.vonmises(mu=0, kappa=5, size=50)
+    group2 = np.random.vonmises(mu=np.pi / 4, kappa=5, size=50)
+    group3 = np.random.vonmises(mu=np.pi / 2, kappa=5, size=50)
+
+    samples = [group1, group2, group3]
+
+    # Run F-test
+    result_f = circ_anova_test(samples, method="F-test")
+    assert "statistic" in result_f, "F-test did not return a statistic"
+    assert "p_value" in result_f, "F-test did not return a p-value"
+    assert result_f["p_value"] >= 0 and result_f["p_value"] <= 1, "F-test p-value out of range"
+    assert result_f["df"] == (2, 147, 149), f"F-test degrees of freedom mismatch: {result_f['df']}"
+    
+    # Run Likelihood Ratio Test (LRT)
+    result_lrt = circ_anova_test(samples, method="LRT")
+    assert "statistic" in result_lrt, "LRT did not return a statistic"
+    assert "p_value" in result_lrt, "LRT did not return a p-value"
+    assert result_lrt["p_value"] >= 0 and result_lrt["p_value"] <= 1, "LRT p-value out of range"
+    assert result_lrt["df"] == 2, f"LRT degrees of freedom mismatch: {result_lrt['df']}"
+
+    # Edge case: All groups have the same mean direction
+    identical_group = np.random.vonmises(mu=0, kappa=5, size=50)
+    result_identical = circ_anova_test([identical_group] * 3, method="F-test")
+    assert result_identical["p_value"] > 0.05, "F-test should not reject H0 for identical groups"
+
+    # Edge case: Small sample sizes
+    small_group1 = np.random.vonmises(mu=0, kappa=5, size=5)
+    small_group2 = np.random.vonmises(mu=np.pi / 4, kappa=5, size=5)
+    small_group3 = np.random.vonmises(mu=np.pi / 2, kappa=5, size=5)
+
+    result_small = circ_anova_test([small_group1, small_group2, small_group3], method="F-test")
+    assert result_small["p_value"] >= 0 and result_small["p_value"] <= 1, "Small-sample p-value out of range"
+
+    # Invalid method check
+    with pytest.raises(ValueError, match="Invalid method. Choose 'F-test' or 'LRT'."):
+        circ_anova_test(samples, method="INVALID")
+
+    # Single group should raise error
+    with pytest.raises(ValueError, match="At least two groups are required for ANOVA."):
+        circ_anova_test([group1])

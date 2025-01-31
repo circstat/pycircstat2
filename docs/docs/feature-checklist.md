@@ -2,24 +2,24 @@
 
 ### 1. Descriptive Statistics
 
-| Feature                     | PyCircStat2 (Python) | PyCircStat (Python)       | CircStat (MATLAB)  | CircStats (R) | circular (R)      |
-| --------------------------- | -------------------- | ------------------------- | ------------------ | ------------- | ----------------- |
-| Circular Mean               | `circ_mean`          | `mean(alpha)`             | `circ_mean(alpha)` | `circ.mean`   | `mean.circular`   |
-| Circular Mean CI            | `circ_mean_ci`       | `mean(alpha, ci=95)`      | `circ_confmean`    | -             |                   |
-| Circular Moment             | `circ_moment`        | `moment`                  | `circ_moment`      | `tri.moment`  |                   |
-| Cencentration Parameter     | `circ_kappa`         | `kappa`                   | `circ_kappa`       | `est.kappa`   |                   |
-| Resultant Vector Length     | `circ_r`             | `resultant_vector_length` | `circ_r`           | `est.rho`     | `rho.circular`    |
-| Circular Variance           | `circ_var`           | `var`                     | `circ_var`         | -             | `var.circular`    |
-| Circular Standard Deviation | `circ_std`           | `std`                     | `circ_std`         | -             | `sd.circular`     |
-| Angular Variance            | `angular_var`        | `avar`                    | `circ_var`         | -             |                   |
-| Angular Standard Deviation  | `angular_std`        | `astd`                    | `circ_std`         | -             |                   |
-| Circular Median             | `circ_median`        | `median`                  | `circ_median`      | -             | `median.circular` |
-| Circular Median CI          | `circ_median_ci`     | -                         | -                  | -             |                   |
-| Circular Skewness           | `circ_skewness`      | `skewness`                | `circ_skewness`    | -             |                   |
-| Circular Kurtosis           | `circ_kurtosis`      | `kurtoisis`               | `circ_kurtosis`    | -             |                   |
-| Circular Dispersion         | `circ_dispersion`    | -                         | -                  | `circ.disp`   | -                 |
-| Circular Distance           | `circ_dist`          | `cdist`                   | `circ_dist`        | -             |                   |
-| Pairwaise Circular Distance | `circ_pairdist`      | `pairwise_cdiff`          | `circ_dist2`       | -             |                   |
+| Feature                     | PyCircStat2 (Python) | PyCircStat (Python)       | CircStat (MATLAB)  | CircStats (R) | circular (R)        |
+| --------------------------- | -------------------- | ------------------------- | ------------------ | ------------- | ------------------- |
+| Circular Mean               | `circ_mean`          | `mean(alpha)`             | `circ_mean(alpha)` | `circ.mean`   | `mean.circular`     |
+| Circular Mean CI            | `circ_mean_ci`       | `mean(alpha, ci=95)`      | `circ_confmean`    | -             |                     |
+| Circular Moment             | `circ_moment`        | `moment`                  | `circ_moment`      | `tri.moment`  |                     |
+| Cencentration Parameter     | `circ_kappa`         | `kappa`                   | `circ_kappa`       | `est.kappa`   |                     |
+| Resultant Vector Length     | `circ_r`             | `resultant_vector_length` | `circ_r`           | `est.rho`     | `rho.circular`      |
+| Circular Variance           | `circ_var`           | `var`                     | `circ_var`         | -             | `var.circular`      |
+| Circular Standard Deviation | `circ_std`           | `std`                     | `circ_std`         | -             | `sd.circular`       |
+| Angular Variance            | `angular_var`        | `avar`                    | `circ_var`         | -             | `angular.variance`  |
+| Angular Standard Deviation  | `angular_std`        | `astd`                    | `circ_std`         | -             | `angular.deviation` |
+| Circular Median             | `circ_median`        | `median`                  | `circ_median`      | -             | `median.circular`   |
+| Circular Median CI          | `circ_median_ci`     | -                         | -                  | -             |                     |
+| Circular Skewness           | `circ_skewness`      | `skewness`                | `circ_skewness`    | -             |                     |
+| Circular Kurtosis           | `circ_kurtosis`      | `kurtoisis`               | `circ_kurtosis`    | -             |                     |
+| Circular Dispersion         | `circ_dispersion`    | -                         | -                  | `circ.disp`   | -                   |
+| Circular Distance           | `circ_dist`          | `cdist`                   | `circ_dist`        | -             |                     |
+| Pairwaise Circular Distance | `circ_pairdist`      | `pairwise_cdiff`          | `circ_dist2`       | -             |                     |
 
 
 ### 2. Hypothesis Testing
@@ -44,14 +44,15 @@
 
 #### Multi-sample testing of Mean Directions / Concentration
 
-| Feature                     | PyCircStat2 (Python)   | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
-| --------------------------- | ---------------------- | ------------------- | ----------------- | ----------------- | ---------------------- |
-| Watson-Williams Test [^1]   | `watson_williams_test` | `watson_williams`   | `circ_wwtest`     | -                 | `watson.williams.test` |
-| Harrison-Kanji Test[^2]     | `harrison_kanji_test`  | `hktest`            | `circ_hktest`     | -                 | -                      |
-| Watson's U2 Test            | `watson_u2_test`       | -                   | -                 | `watson.two`      | `watson.two.test`      |
-| Wallraff Test               | `wallraff_test`        | -                   | -                 | -                 | `wallraff.test`        |
-| Concentration Test (F-test) | `concentration_test`   | -                   | `circ_ktest`      | -                 | -                      |
-| Rao's Tests for Homogeneity | `rao_homogeneity_test` | -                   | -                 | `rao.homogeneity` | `rao.test`             |
+| Feature                       | PyCircStat2 (Python)   | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
+| ----------------------------- | ---------------------- | ------------------- | ----------------- | ----------------- | ---------------------- |
+| Circular Analysis of Variance | `circ_anova_test`      | -                   | -                 | -                 | `aov.circular`         |
+| Watson-Williams Test [^1]     | `watson_williams_test` | `watson_williams`   | `circ_wwtest`     | -                 | `watson.williams.test` |
+| Harrison-Kanji Test[^2]       | `harrison_kanji_test`  | `hktest`            | `circ_hktest`     | -                 | -                      |
+| Watson's U2 Test              | `watson_u2_test`       | -                   | -                 | `watson.two`      | `watson.two.test`      |
+| Wallraff Test                 | `wallraff_test`        | -                   | -                 | -                 | `wallraff.test`        |
+| Concentration Test (F-test)   | `concentration_test`   | -                   | `circ_ktest`      | -                 | -                      |
+| Rao's Tests for Homogeneity   | `rao_homogeneity_test` | -                   | -                 | `rao.homogeneity` | `rao.test`             |
 
 #### Goodness-of-fit Tests
 
@@ -155,5 +156,5 @@
 |                          | Fit    | `wrapstable.fit`             | -                   | -                 | -             | -            |
 
 
-[^1]: One-way ANOVA.
+[^1]: Yet anothr one-way ANOVA.
 [^2]: Two-way ANOVA.

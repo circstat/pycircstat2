@@ -807,6 +807,161 @@ def wallraff_test(
     return U, pval
 
 
+def circ_anova_test(
+    samples: list[np.ndarray], 
+    method: str = "F-test", 
+    kappa: Optional[float] = None, 
+    f_mod: bool = True, 
+    verbose: bool = False
+) -> dict:
+    """
+    Circular Analysis of Variance (ANOVA) for multi-sample comparison of mean directions.
+
+    - **H₀**: All groups have the same mean direction.
+    - **H₁**: At least one group has a different mean direction.
+
+    Parameters
+    ----------
+    samples : list of np.ndarray
+        List of arrays, where each array contains circular data (angles in radians) for a group.
+    method : str, optional
+        The test statistic to use. Options:
+        - `"F-test"` (default): High-concentration F-test (Stephens 1972).
+        - `"LRT"`: Likelihood Ratio Test (Cordeiro et al. 1994).
+    kappa : float, optional
+        The common concentration parameter (κ). If not specified, it is estimated using MLE.
+    f_mod : bool, optional
+        If `True`, applies a correction factor `(1 + 3/8κ)` to the F-statistic.
+    verbose : bool, optional
+        If `True`, prints the test summary.
+
+    Returns
+    -------
+    result : dict
+        A dictionary with:
+        - `'method'`: `"F-test"` or `"LRT"`
+        - `'mu'`: Mean directions of each group (radians)
+        - `'mu_all'`: Mean direction of all samples combined
+        - `'kappa'`: Estimated concentration parameters for each group
+        - `'kappa_all'`: Estimated concentration parameter for all samples combined
+        - `'rho'`: Resultant vector lengths for each group
+        - `'rho_all'`: Resultant vector length for all samples combined
+        - `'df'`: Degrees of freedom
+        - `'statistic'`: Test statistic (F-value or Chi-Square)
+        - `'p_value'`: p-value
+        - `'SS'`: Sum of squares (for F-test)
+        - `'MS'`: Mean squares (for F-test)
+
+    References
+    ----------
+    - Stephens (1972). Multi-sample tests for the von Mises distribution.
+    - Cordeiro, Paula, & Botter (1994). Improved likelihood ratio tests for dispersion models.
+    - Jammalamadaka & SenGupta (2001). Topics in Circular Statistics, Section 5.3.
+    """
+
+    # Number of groups
+    k = len(samples)
+    if k < 2:
+        raise ValueError("At least two groups are required for ANOVA.")
+
+    # Sample sizes, mean directions, and resultants
+    ns = np.array([len(group) for group in samples])
+    Rs = np.array([circ_r(group) * len(group) for group in samples])  # Sum of resultant vectors
+    mus = np.array([circ_mean(group) for group in samples])  # Mean directions
+
+    # Overall resultant and mean direction
+    all_samples = np.hstack(samples)
+    N = len(all_samples)
+    R_all = circ_r(all_samples) * N
+    mu_all = circ_mean(all_samples)
+
+    # Estimate κ if not provided
+    if kappa is None:
+        kappa = circ_kappa(R_all / N)
+
+    # **F-test**
+    if method == "F-test":
+        # Between-group and within-group sum of squares
+        SS_between = np.sum(Rs) - R_all
+        SS_within = N - np.sum(Rs)
+        SS_total = N - R_all
+
+        df_between = k - 1
+        df_within = N - k
+        df_total = N - 1
+
+        MS_between = SS_between / df_between
+        MS_within = SS_within / df_within
+
+        # Apply correction factor (Stephens 1972)
+        if f_mod:
+            F_stat = (1 + 3 / (8 * kappa)) * (MS_between / MS_within)
+        else:
+            F_stat = MS_between / MS_within
+
+        p_value = 1 - f.cdf(F_stat, df_between, df_within)
+
+        result = {
+            "method": "F-test",
+            "mu": mus,
+            "mu_all": mu_all,
+            "kappa": kappa,
+            "kappa_all": kappa,
+            "rho": Rs,
+            "rho_all": R_all,
+            "df": (df_between, df_within, df_total),
+            "statistic": F_stat,
+            "p_value": p_value,
+            "SS": (SS_between, SS_within, SS_total),
+            "MS": (MS_between, MS_within)
+        }
+
+    # **Likelihood Ratio Test (LRT)**
+    elif method == "LRT":
+        # Compute test statistic
+        term1 = 1 - (1 / (4 * kappa)) * (sum(1 / ns) - 1 / N)
+        term2 = 2 * kappa * np.sum(Rs * (1 - np.cos(mus - mu_all)))
+        chi_square_stat = term1 * term2
+
+        df = k - 1
+        p_value = 1 - chi2.cdf(chi_square_stat, df)
+
+        result = {
+            "method": "LRT",
+            "mu": mus,
+            "mu_all": mu_all,
+            "kappa": kappa,
+            "kappa_all": kappa,
+            "rho": Rs,
+            "rho_all": R_all,
+            "df": df,
+            "statistic": chi_square_stat,
+            "p_value": p_value,
+        }
+
+    else:
+        raise ValueError("Invalid method. Choose 'F-test' or 'LRT'.")
+
+    # Print results if verbose is enabled
+    if verbose:
+        print("\nCircular Analysis of Variance (ANOVA)")
+        print("--------------------------------------")
+        print(f"Method: {result['method']}")
+        print(f"Mean Directions (radians): {result['mu']}")
+        print(f"Overall Mean Direction (radians): {result['mu_all']}")
+        print(f"Kappa: {result['kappa']}")
+        print(f"Kappa (overall): {result['kappa_all']}")
+        print(f"Degrees of Freedom: {result['df']}")
+        print(f"Test Statistic: {result['statistic']:.5f}")
+        print(f"P-value: {result['p_value']:.5f}")
+        if method == "F-test":
+            print(f"Sum of Squares (Between, Within, Total): {result['SS']}")
+            print(f"Mean Squares (Between, Within): {result['MS']}")
+        print("--------------------------------------\n")
+
+    return result
+
+
 #####################
 ## Goodness-of-Fit ##
 #####################
