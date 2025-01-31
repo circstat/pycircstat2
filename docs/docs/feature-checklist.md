@@ -159,5 +159,6 @@
 | Asymmetric Trangular     | PDF    | -                            | -          | -                 | -             | `dasytriangular` |
 | Projected Normal         | PDF    | -                            | -          | -                 | -             | `dpnorm`         |
 |                          | RVS    | -                            | -          | -                 | -             | `rpnorm`         |
+
 [^1]: Yet anothr one-way ANOVA.
 [^2]: Two-way ANOVA.
