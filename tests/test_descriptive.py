@@ -15,6 +15,7 @@ from pycircstat2.descriptive import (
     circ_median_ci,
     circ_moment,
     circ_pairdist,
+    circ_quantile,
     circ_range,
     circ_skewness,
     circ_std,
@@ -309,3 +310,21 @@ def test_circ_range():
 
     x = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.6, 36.0, 36.0, 36.0, 36.0, 36.0, 36.0, 72.0, 108.0, 108.0, 169.2, 324.0])
     np.testing.assert_approx_equal(circ_range(x), 4.584073, significant=2)
+
+def test_circ_quantile():
+    """Test `circ_quantile` with known input and compare with R output."""
+
+    # Generate a known dataset
+    np.random.seed(42)
+    angles = np.random.uniform(0, 2 * np.pi, size=100)
+
+    # Compute circular quantiles
+    probs = np.array([0.25, 0.5, 0.75])
+    quantiles = circ_quantile(angles, probs=probs)
+
+    # Ensure values are within valid range [0, 2π]
+    assert np.all(quantiles >= 0) and np.all(quantiles <= 2 * np.pi), "Quantiles out of range"
+
+    # Ensure median matches `circ_median`
+    from pycircstat2.descriptive import circ_median
+    assert np.isclose(quantiles[1], circ_median(angles), atol=1e-5), "Median quantile does not match circular median"

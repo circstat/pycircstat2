@@ -16,7 +16,7 @@ from pycircstat2.hypothesis import (
     kuiper_test,
     omnibus_test,
     one_sample_test,
-    rao_homogeneity_test,  # Import from PyCircStat2
+    rao_homogeneity_test,
     rao_spacing_test,
     rayleigh_test,
     symmetry_test,

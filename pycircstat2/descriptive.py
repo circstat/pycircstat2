@@ -1600,3 +1600,65 @@ def circ_range(alpha: np.ndarray) -> float:
     alpha = np.sort(alpha % (2 * np.pi))  # Convert to [0, 2π) and sort
     spacings = np.diff(alpha, prepend=alpha[-1] - 2 * np.pi)  # Compute spacings
     return 2 * np.pi - np.max(spacings)  # Circular range
+
+from typing import Union
+
+import numpy as np
+
+from .descriptive import circ_median
+
+
+def circ_quantile(
+    alpha: np.ndarray,
+    probs: Union[float, np.ndarray] = np.array([0, 0.25, 0.5, 0.75, 1.0]),
+    type: int = 7,
+) -> np.ndarray:
+    """
+    Compute quantiles for circular data.
+
+    This function computes quantiles for circular data by shifting the 
+    data to be centered around the circular median, applying a linear quantile function,
+    and then shifting back.
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Sample of circular data (radians).
+    probs : float or np.ndarray, optional
+        Probabilities at which to compute quantiles. Default is `[0, 0.25, 0.5, 0.75, 1.0]`.
+    type : int, optional
+        Quantile algorithm type (default `7`, matches R’s default quantile type).
+
+    Returns
+    -------
+    np.ndarray
+        Circular quantiles.
+
+    References
+    ----------
+    - R's `quantile.circular` from the `circular` package.
+    - Fisher (1993), Section 2.3.2.
+    """
+
+    # Convert to numpy array
+    alpha = np.asarray(alpha)
+    probs = np.atleast_1d(probs)
+
+    # Compute circular median
+    circular_median = circ_median(alpha)
+
+    # If the median is NaN (e.g., uniform data), return NaNs
+    if np.isnan(circular_median):
+        return np.full_like(probs, np.nan)
+
+    # Transform data relative to circular median
+    shifted_alpha = (alpha - circular_median) % (2 * np.pi)
+    shifted_alpha = np.where(shifted_alpha > np.pi, shifted_alpha - 2 * np.pi, shifted_alpha)
+
+    # Compute linear quantiles on transformed data
+    linear_quantiles = np.quantile(shifted_alpha, probs, method="linear" if type == 7 else "midpoint")
+
+    # Transform back to original circular space
+    circular_quantiles = (linear_quantiles + circular_median) % (2 * np.pi)
+
+    return circular_quantiles

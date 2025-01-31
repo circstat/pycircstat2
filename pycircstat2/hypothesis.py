@@ -1659,3 +1659,113 @@ def harrison_kanji_test(alpha: np.ndarray, idp: np.ndarray, idq: np.ndarray, int
 
     return pval, table
 
+
+def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
+    """
+    Test for Homogeneity of Concentration Parameters (κ) in Circular Data.
+
+    - **H₀**: All groups have the same concentration parameter (κ).
+    - **H₁**: At least one group has a different κ.
+
+    Parameters
+    ----------
+    samples : list of np.ndarray
+        List of circular data arrays (angles in radians) for different groups.
+    verbose : bool, optional
+        If `True`, prints the test summary.
+
+    Returns
+    -------
+    result : dict
+        A dictionary containing:
+        - `'kappa'`: Estimated concentration parameters for each group.
+        - `'kappa_all'`: Estimated common κ for all samples combined.
+        - `'rho'`: Mean resultant lengths for each group.
+        - `'rho_all'`: Mean resultant length for all samples combined.
+        - `'df'`: Degrees of freedom.
+        - `'statistic'`: Test statistic (Chi-Square).
+        - `'p_value'`: p-value.
+
+    Notes
+    -----
+    - Uses **different approximations based on mean resultant length** (`r̄`):
+      - **Small `r̄` (< 0.45)**: Uses `arcsin` transformation.
+      - **Moderate `r̄` (0.45 - 0.7)**: Uses `asinh` transformation.
+      - **Large `r̄` (> 0.7)**: Uses Bartlett-type test (log-likelihood method).
+    
+    References
+    ----------
+    - Jammalamadaka & SenGupta (2001), Section 5.4.
+    - Fisher (1993), Section 4.3.
+    - `equal.kappa.test` from R's `circular` package.
+    """
+
+    # Number of groups
+    k = len(samples)
+    if k < 2:
+        raise ValueError("At least two groups are required for the test.")
+
+    # Sample sizes
+    ns = np.array([len(group) for group in samples])
+
+    # Mean resultant lengths
+    r_bars = np.array([circ_r(group) for group in samples])
+    Rs = r_bars * ns  # Unnormalized resultants
+
+    # Overall resultant and mean resultant length
+    all_samples = np.hstack(samples)
+    N = len(all_samples)
+    r_bar_all = circ_r(all_samples)
+
+    # Estimate kappa values
+    kappas = np.array([circ_kappa(r) for r in r_bars])
+    kappa_all = circ_kappa(r_bar_all)
+
+    # Choose test statistic based on `r̄`
+    if r_bar_all < 0.45:
+        # Small `r̄`: arcsin transformation
+        ws = 4 * (ns - 4) / 3
+        g1s = np.arcsin(np.sqrt(3/8) * 2 * r_bars)
+        chi_square_stat = np.sum(ws * g1s**2) - (np.sum(ws * g1s)**2 / np.sum(ws))
+
+    elif 0.45 <= r_bar_all <= 0.7:
+        # Moderate `r̄`: asinh transformation
+        ws = (ns - 3) / 0.798
+        g2s = np.arcsinh((r_bars - 1.089) / 0.258)
+        chi_square_stat = np.sum(ws * g2s**2) - (np.sum(ws * g2s)**2 / np.sum(ws))
+
+    else:
+        # Large `r̄`: Bartlett-type test
+        vs = ns - 1
+        v = N - k
+        d = 1 / (3 * (k - 1)) * (np.sum(1 / vs) - 1 / v)
+        chi_square_stat = (1 / (1 + d)) * (v * np.log((N - np.sum(Rs)) / v) - np.sum(vs * np.log((ns - Rs) / vs)))
+
+    # Compute p-value
+    df = k - 1
+    p_value = 1 - chi2.cdf(chi_square_stat, df)
+
+    result = {
+        "kappa": kappas,
+        "kappa_all": kappa_all,
+        "rho": r_bars,
+        "rho_all": r_bar_all,
+        "df": df,
+        "statistic": chi_square_stat,
+        "p_value": p_value
+    }
+
+    # Print results if verbose is enabled
+    if verbose:
+        print("\nTest for Homogeneity of Concentration Parameters (κ)")
+        print("------------------------------------------------------")
+        print(f"Mean Resultant Lengths: {r_bars}")
+        print(f"Overall Mean Resultant Length: {r_bar_all:.5f}")
+        print(f"Estimated Kappa Values: {kappas}")
+        print(f"Overall Estimated Kappa: {kappa_all:.5f}")
+        print(f"Degrees of Freedom: {df}")
+        print(f"Chi-Square Statistic: {chi_square_stat:.5f}")
+        print(f"P-value: {p_value:.5f}")
+        print("------------------------------------------------------\n")
+
+    return result
