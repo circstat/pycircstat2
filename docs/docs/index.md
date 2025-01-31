@@ -70,5 +70,5 @@ And a few more examples on selective topics:
 -   [Utils](https://github.com/circstat/pycircstat2/blob/main/examples/T0-utils.ipynb)
 -   [Descriptive Statistics](https://github.com/circstat/pycircstat2/blob/main/examples/T1-descriptive-statistics.ipynb)
 -   [Hypothesis Testing](https://github.com/circstat/pycircstat2/blob/main/examples/T2-hypothesis-testing.ipynb)
--   [Circular Models](https://github.com/circstat/pycircstat2/blob/main/examples/T3-circular-models.ipynb)
+-   [Circular Models](https://github.com/circstat/pycircstat2/blob/main/examples/T3-circular-distributions.ipynb)
 -   [Regression](https://github.com/circstat/pycircstat2/blob/main/examples/T4-regression.ipynb)
