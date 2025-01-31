@@ -11,6 +11,7 @@ from pycircstat2.hypothesis import (
     chisquare_test,
     circ_range_test,
     concentration_test,
+    harrison_kanji_test,
     kuiper_test,
     omnibus_test,
     one_sample_test,
@@ -406,3 +407,170 @@ def test_change_point_basic():
     assert np.isclose(result["tmax"].iloc[0], expected_tmax, atol=1e-5)
     assert result["k.t"].iloc[0] == expected_k_t
     assert np.isclose(result["tave"].iloc[0], expected_tave, atol=1e-5)
+
+def test_harrison_kanji_test():
+    """Test Harrison-Kanji two-way ANOVA for circular data."""
+    np.random.seed(42)
+    alpha = np.random.vonmises(0, 2, 50)
+    idp = np.random.choice([1, 2, 3], 50)
+    idq = np.random.choice([1, 2], 50)
+
+    pval, anova_table = harrison_kanji_test(alpha, idp, idq)
+
+    assert len(pval) == 3  # Should return three p-values
+    assert anova_table.shape[0] >= 3  # At least 3 sources in ANOVA table
+    assert all(0 <= p <= 1 for p in pval if p is not None)  # Valid p-values
+
+@pytest.mark.skip(reason="Skipped unless explicitly called with `-k test_harrison_kanji_vs_pycircstat`")
+def test_harrison_kanji_vs_pycircstat():
+    """Compare PyCircStat2 `harrison_kanji_test` with original PyCircStat `hktest`."""
+    def hktest(alpha, idp, idq, inter=True, fn=None):
+        """copied and fixed from pycircstat.hktest"""
+        import pandas as pd
+        from scipy import special, stats
+
+        from pycircstat2.descriptive import circ_kappa, circ_mean, circ_r
+
+        if fn is None:
+            fn = ['A', 'B']
+        p = len(np.unique(idp))
+        q = len(np.unique(idq))
+        df = pd.DataFrame({fn[0]: idp, fn[1]: idq, 'dependent': alpha})
+        n = len(df)
+        tr = n * circ_r(df['dependent'])
+        kk = circ_kappa(tr / n)
+
+        # both factors
+        gr = df.groupby(fn)
+        cn = gr.count()
+        cr = gr.agg(circ_r) * cn
+        cn = cn.unstack(fn[1])
+        cr = cr.unstack(fn[1])
+
+        # factor A
+        gr = df.groupby(fn[0])
+        pn = gr.count()['dependent']
+        pr = gr.agg(circ_r)['dependent'] * pn
+        pm = gr.agg(circ_mean)['dependent']
+        # factor B
+        gr = df.groupby(fn[1])
+        qn = gr.count()['dependent']
+        qr = gr.agg(circ_r)['dependent'] * qn
+        qm = gr.agg(circ_mean)['dependent']
+
+        if kk > 2:  # large kappa
+            # effect of factor 1
+            eff_1 = sum(pr ** 2 / cn.sum(axis=1)) - tr ** 2 / n
+            df_1 = p - 1
+            ms_1 = eff_1 / df_1
+
+            # effect of factor 2
+            eff_2 = sum(qr ** 2. / cn.sum(axis=0)) - tr ** 2 / n
+            df_2 = q - 1
+            ms_2 = eff_2 / df_2
+
+            # total effect
+            eff_t = n - tr ** 2 / n
+            df_t = n - 1
+            m = cn.values.mean()
+
+            if inter:
+                # correction factor for improved F statistic
+                beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk ** 2)))
+                # residual effects
+                eff_r = n - (cr**2./cn).values.sum()
+                df_r = p*q*(m-1)
+                ms_r = eff_r / df_r
+
+                # interaction effects
+                eff_i = (cr**2./cn).values.sum() - sum(qr**2./qn) - sum(pr**2./pn) + tr**2/n
+                df_i = (p-1)*(q-1)
+                ms_i = eff_i/df_i;
+
+                # interaction test statistic
+                FI = ms_i / ms_r
+                pI = 1 - stats.f.cdf(FI,df_i,df_r)
+            else:
+                # residual effect
+                eff_r = n - sum(qr**2./qn)- sum(pr**2./pn) + tr**2/n
+                df_r = (p-1)*(q-1)
+                ms_r = eff_r / df_r
+
+                # interaction effects
+                eff_i = None
+                df_i = None
+                ms_i = None
+
+                # interaction test statistic
+                FI = None
+                pI = np.nan
+                beta = 1
+
+
+            F1 = beta * ms_1 / ms_r
+            p1 = 1 - stats.f.cdf(F1,df_1,df_r)
+
+            F2 = beta * ms_2 / ms_r
+            p2 = 1 - stats.f.cdf(F2,df_2,df_r)
+
+        else: #small kappa
+            # correction factor
+            # special.iv is Modified Bessel function of the first kind of real order
+            rr = special.iv(1,kk) / special.iv(0,kk)
+            f = 2/(1-rr**2)
+
+            chi1 = f * (sum(pr**2./pn)- tr**2/n)
+            df_1 = 2*(p-1)
+            p1 = 1 - stats.chi2.cdf(chi1, df=df_1)
+
+            chi2 = f * (sum(qr**2./qn)- tr**2/n)
+            df_2 = 2*(q-1)
+            p2 = 1 - stats.chi2.cdf(chi2, df=df_2)
+
+            chiI = f * ( (cr**2./cn).values.sum() - sum(pr**2./pn) - sum(qr**2./qn) + tr**2/n)
+            df_i = (p-1) * (q-1)
+            pI = stats.chi2.sf(chiI, df=df_i)
+
+
+
+        pval = (p1.squeeze(), p2.squeeze(), pI.squeeze())
+
+        if kk>2:
+            table = pd.DataFrame({
+                'Source': fn + ['Interaction', 'Residual', 'Total'],
+                'DoF': [df_1, df_2, df_i, df_r, df_t],
+                'SS': [eff_1, eff_2, eff_i, eff_r, eff_t],
+                'MS': [ms_1, ms_2, ms_i, ms_r, np.nan],
+                'F': [F1.squeeze(), F2.squeeze(), FI, np.nan, np.nan],
+                'p': list(pval) + [np.nan, np.nan]
+            })
+            table = table.set_index('Source')
+        else:
+            table = pd.DataFrame({
+                'Source': fn + ['Interaction'],
+                'DoF': [df_1, df_2, df_i],
+                'chi2': [chi1.squeeze(), chi2.squeeze(), chiI.squeeze()],
+                'p': pval
+            })
+            table = table.set_index('Source')
+
+        return pval, table
+
+    alpha = np.random.vonmises(0, 2, 50)
+    idp = np.random.choice([1, 2, 3], 50)
+    idq = np.random.choice([1, 2], 50)
+
+    # Run original PyCircStat test
+    pval_orig, table_orig = hktest(alpha, idp, idq)
+
+    # Run PyCircStat2 version
+    pval_new, table_new = harrison_kanji_test(alpha, idp, idq)
+
+    # Compare p-values
+    assert np.allclose(pval_orig, pval_new, atol=1e-6), f"P-values mismatch:\nOriginal: {pval_orig}\nNew: {pval_new}"
+
+    # Compare ANOVA table values (ignoring index differences)
+    table_orig_values = table_orig.to_numpy()
+    table_new_values = table_new.to_numpy()
+
+    assert np.allclose(table_orig_values, table_new_values, atol=1e-6, equal_nan=True), f"ANOVA tables differ:\nOriginal:\n{table_orig}\nNew:\n{table_new}"

@@ -4,12 +4,13 @@ from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
-from scipy.special import comb, i0
+from scipy.special import comb, i0, iv
 from scipy.stats import chi2, f, norm, rankdata, vonmises, wilcoxon
 
 from .descriptive import (
     circ_dist,
     circ_kappa,
+    circ_mean,
     circ_mean_and_r,
     circ_mean_ci,
     circ_median,
@@ -1378,3 +1379,128 @@ def change_point_test(alpha):
         "k.t": [k_t],
         "tave": [tave],
     })
+
+
+def harrison_kanji_test(alpha: np.ndarray, idp: np.ndarray, idq: np.ndarray, inter: bool = True, fn: Optional[list] = None) -> tuple[tuple[float, float, float], pd.DataFrame]:
+    """
+    Harrison-Kanji Test (Two-Way ANOVA) for Circular Data.
+    """
+
+    if fn is None:
+        fn = ['A', 'B']
+
+    # Ensure data is in column format
+    alpha = np.asarray(alpha).flatten()
+    idp = np.asarray(idp).flatten()
+    idq = np.asarray(idq).flatten()
+
+
+    # Number of factor levels
+    p = len(np.unique(idp))
+    q = len(np.unique(idq))
+
+    # Data frame for aggregation
+    df = pd.DataFrame({fn[0]: idp, fn[1]: idq, 'dependent': alpha})
+    n = len(df)
+
+    # Total resultant vector length
+    tr = n * circ_r(df['dependent'])
+    kk = circ_kappa(tr / n)
+
+    # Compute mean resultants per group
+    gr = df.groupby(fn)
+    cn = gr.count()
+    cr = gr.agg(circ_r) * cn
+    cn = cn.unstack(fn[1])
+    cr = cr.unstack(fn[1])
+
+    # Factor A
+    gr = df.groupby(fn[0])
+    pn = gr.count()['dependent']
+    pr = gr.agg(circ_r)['dependent'] * pn
+    pm = gr.agg(circ_mean)['dependent']
+
+    # Factor B
+    gr = df.groupby(fn[1])
+    qn = gr.count()['dependent']
+    qr = gr.agg(circ_r)['dependent'] * qn
+    qm = gr.agg(circ_mean)['dependent']
+
+    if kk > 2:  # Large kappa approximation
+        eff_1 = sum(pr ** 2 / cn.sum(axis=1)) - tr ** 2 / n
+        df_1 = p - 1
+        ms_1 = eff_1 / df_1
+
+        eff_2 = sum(qr ** 2 / cn.sum(axis=0)) - tr ** 2 / n
+        df_2 = q - 1
+        ms_2 = eff_2 / df_2
+
+        eff_t = n - tr ** 2 / n
+        df_t = n - 1
+        m = cn.values.mean()
+
+        if inter:
+            beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk ** 2)))
+
+            eff_r = n - (cr**2./cn).values.sum()
+            df_r = p * q * (m - 1)
+            ms_r = eff_r / df_r
+
+            eff_i = (cr**2./cn).values.sum() - sum(qr**2./qn) - sum(pr**2./pn) + tr**2 / n
+            df_i = (p - 1) * (q - 1)
+            ms_i = eff_i / df_i
+
+            FI = ms_i / ms_r
+            pI = 1 - f.cdf(FI, df_i, df_r)  # `f.cdf` is now unambiguous
+        else:
+            eff_r = n - sum(qr**2./qn) - sum(pr**2./pn) + tr**2 / n
+            df_r = (p - 1) * (q - 1)
+            ms_r = eff_r / df_r
+
+            eff_i, df_i, ms_i, FI, pI = None, None, None, None, np.nan
+            beta = 1
+
+        F1 = beta * ms_1 / ms_r
+        p1 = 1 - f.cdf(F1, df_1, df_r)
+
+        F2 = beta * ms_2 / ms_r
+        p2 = 1 - f.cdf(F2, df_2, df_r)
+
+    else:  # Small kappa approximation
+        rr = iv(1, kk) / iv(0, kk)
+        kappa_factor = 2 / (1 - rr ** 2)  # Renamed `f` to `kappa_factor`
+
+        chi1 = kappa_factor * (sum(pr**2./pn) - tr**2 / n)
+        df_1 = 2 * (p - 1)
+        p1 = 1 - chi2.cdf(chi1, df=df_1)
+
+        chi2_val = kappa_factor * (sum(qr**2./qn) - tr**2 / n)
+        df_2 = 2 * (q - 1)
+        p2 = 1 - chi2.cdf(chi2_val, df=df_2)
+
+        chiI = kappa_factor * ((cr**2./cn).values.sum() - sum(pr**2./pn) - sum(qr**2./qn) + tr**2 / n)
+        df_i = (p - 1) * (q - 1)
+        pI = chi2.sf(chiI, df=df_i)
+
+    pval = (p1.squeeze(), p2.squeeze(), pI.squeeze())
+
+    # Construct ANOVA Table
+    if kk > 2:
+        table = pd.DataFrame({
+            'Source': fn + ['Interaction', 'Residual', 'Total'],
+            'DoF': [df_1, df_2, df_i, df_r, df_t],
+            'SS': [eff_1, eff_2, eff_i, eff_r, eff_t],
+            'MS': [ms_1, ms_2, ms_i, ms_r, np.nan],
+            'F': [F1.squeeze(), F2.squeeze(), FI, np.nan, np.nan],
+            'p': list(pval) + [np.nan, np.nan]
+        }).set_index('Source')
+    else:
+        table = pd.DataFrame({
+            'Source': fn + ['Interaction'],
+            'DoF': [df_1, df_2, df_i],
+            'chi2': [chi1.squeeze(), chi2_val.squeeze(), chiI.squeeze()],
+            'p': pval
+        }).set_index('Source')
+
+    return pval, table
+

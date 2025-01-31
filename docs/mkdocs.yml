@@ -21,7 +21,7 @@ plugins:
 
 nav:
     - Home: index.md
-    - Features: features.md
+    - Feature Checklist: feature-checklist.md
     - API Reference:
           - Circular Data Base: reference/base.md
           - Descriptive Statistics: reference/descriptive.md
@@ -32,13 +32,17 @@ nav:
           - Utilities: reference/utils.md
 
 markdown_extensions:
+    - footnotes
     - pymdownx.arithmatex:
           generic: true
     - toc:
           toc_depth: 2
+
 extra_javascript:
     - javascripts/mathjax.js
     - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+extra_css:
+    - css/extra.css
 
 watch:
     - ../pycircstat2
