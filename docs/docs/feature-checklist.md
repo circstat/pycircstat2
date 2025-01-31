@@ -55,14 +55,15 @@
 | Concentration Test (F-test)   | `concentration_test`   | -                   | `circ_ktest`      | -                 | -                      |
 | Equal Kappa Test              | `equal_kappa_test`     | -                   | -                 | -                 | `equal.kappa.test`     |
 | Rao's Tests for Homogeneity   | `rao_homogeneity_test` | -                   | -                 | `rao.homogeneity` | `rao.test`             |
+
 #### Goodness-of-fit Tests
 
 | Feature             | PyCircStat2 (Python) | PyCircStat (Python) | CircStat (MATLAB) | CircStats (R) | circular (R)       |
 | ------------------- | -------------------- | ------------------- | ----------------- | ------------- | ------------------ |
 | Kuiper’s Test       | `circ_kuiper_test`   | `kupier`            | `circ_kuipertest` | `kuiper`      | `kuiper.test`      |
 | Rao’s Spacing Test  | `rao_spacing_test`   | `raospacing`        | `circ_raotest`    | `rao.spacing` | `rao.spacing.test` |
-| Watson's Test       | `watson_test`        | -                   | -                 | `watson`      |                    |
-| Circular Range Test | `circ_range_test`    | -                   | -                 | `circ_range`  |                    |
+| Watson's Test       | `watson_test`        | -                   | -                 | `watson`      | `watson.test`      |
+| Circular Range Test | `circ_range_test`    | -                   | -                 | `circ_range`  | `range.circular`   |
 
 
 ### 3. Correlation & Regression
