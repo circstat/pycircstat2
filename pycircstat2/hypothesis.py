@@ -1769,3 +1769,82 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
         print("------------------------------------------------------\n")
 
     return result
+
+def equal_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
+    """
+    Common Median Test (Equal Median Test) for Multiple Circular Samples.
+
+    - **H₀**: All groups have the same circular median.
+    - **H₁**: At least one group has a different circular median.
+
+    Parameters
+    ----------
+    samples : list of np.ndarray
+        List of circular data arrays (angles in radians) for different groups.
+    verbose : bool, optional
+        If `True`, prints the test summary.
+
+    Returns
+    -------
+    result : dict
+        A dictionary containing:
+        - `'common_median'`: Estimated shared median if H₀ is not rejected; otherwise, `NaN`.
+        - `'test_statistic'`: Test statistic (Chi-Square).
+        - `'p_value'`: p-value.
+        - `'reject'`: Boolean indicating whether to reject H₀.
+
+    References
+    ----------
+    - Fisher, N. I. (1995). Statistical Analysis of Circular Data.
+    - `circ_cmtest` from MATLAB's Circular Statistics Toolbox.
+    """
+
+    # Number of groups
+    k = len(samples)
+    if k < 2:
+        raise ValueError("At least two groups are required for the test.")
+
+    # Sample sizes
+    ns = np.array([len(group) for group in samples])
+    N = np.sum(ns)  # Total number of observations
+
+    # Compute the common circular median
+    common_median = circ_median(np.hstack(samples))
+
+    # Compute deviations from the common median
+    m = np.zeros(k)
+    for i, group in enumerate(samples):
+        deviations = circ_dist(group, common_median)
+        m[i] = np.sum(deviations < 0)  # Count how many are "below" the median
+
+    # Compute test statistic
+    M = np.sum(m)
+    P = (N**2 / (M * (N - M))) * np.sum(m**2 / ns) - (N * M) / (N - M)
+
+    # Compute p-value
+    df = k - 1
+    p_value = 1 - chi2.cdf(P, df)
+    reject = p_value < 0.05  # Reject H₀ if p-value is below 0.05
+
+    # If the null hypothesis is rejected, return NaN for the median
+    if reject:
+        common_median = np.nan
+
+    result = {
+        "common_median": common_median,
+        "test_statistic": P,
+        "p_value": p_value,
+        "reject": reject
+    }
+
+    # Print results if verbose is enabled
+    if verbose:
+        print("\nCommon Median Test (Equal Median Test)")
+        print("--------------------------------------")
+        print(f"Estimated Common Median: {common_median if not reject else 'NaN'}")
+        print(f"Test Statistic: {P:.5f}")
+        print(f"P-value: {p_value:.5f}")
+        print(f"Reject H₀: {'Yes' if reject else 'No'}")
+        print("--------------------------------------\n")
+
+    return result

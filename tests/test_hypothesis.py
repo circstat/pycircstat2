@@ -12,6 +12,7 @@ from pycircstat2.hypothesis import (
     circ_anova_test,
     circ_range_test,
     concentration_test,
+    equal_median_test,
     harrison_kanji_test,
     kuiper_test,
     omnibus_test,
@@ -623,3 +624,44 @@ def test_circ_anova_test():
     # Single group should raise error
     with pytest.raises(ValueError, match="At least two groups are required for ANOVA."):
         circ_anova_test([group1])
+
+
+def test_equal_median_identical_samples():
+    """Test if the test correctly fails to reject H₀ when all groups are identical."""
+    alpha1 = np.array([0.1, 0.2, 0.3, 1.5, 1.6])
+    alpha2 = np.array([0.1, 0.2, 0.3, 1.5, 1.6])
+    alpha3 = np.array([0.1, 0.2, 0.3, 1.5, 1.6])
+
+    result = equal_median_test([alpha1, alpha2, alpha3])
+    assert result["reject"] is np.False_
+    assert not np.isnan(result["common_median"])
+
+def test_equal_median_different_samples():
+    """Test if the test correctly rejects H₀ when groups have different medians."""
+    alpha1 = np.array([0.1, 0.2, 0.3, 1.5, 1.6])
+    alpha2 = np.array([2.2, 2.3, 2.4, 3.1, 3.2])
+    alpha3 = np.array([3.5, 3.6, 3.7, 4.2, 4.3])
+
+    result = equal_median_test([alpha1, alpha2, alpha3])
+    assert result["reject"] is np.True_
+    assert np.isnan(result["common_median"])
+
+def test_equal_median_large_sample():
+    """Test the function on large sample sizes with similar medians."""
+    np.random.seed(42)
+    alpha1 = np.random.vonmises(mu=0, kappa=2, size=500)
+    alpha2 = np.random.vonmises(mu=0, kappa=2, size=500)
+    alpha3 = np.random.vonmises(mu=0, kappa=2, size=500)
+
+    result = equal_median_test([alpha1, alpha2, alpha3])
+    assert result["reject"] is np.False_
+    assert not np.isnan(result["common_median"])
+
+def test_equal_median_small_sample():
+    """Test if the function handles small sample sizes correctly."""
+    alpha1 = np.array([0.1, 0.2, 0.3])
+    alpha2 = np.array([0.15, 0.25, 0.35])
+
+    result = equal_median_test([alpha1, alpha2])
+    assert result["reject"] is np.False_
+    assert not np.isnan(result["common_median"])

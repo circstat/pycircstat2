@@ -1601,12 +1601,6 @@ def circ_range(alpha: np.ndarray) -> float:
     spacings = np.diff(alpha, prepend=alpha[-1] - 2 * np.pi)  # Compute spacings
     return 2 * np.pi - np.max(spacings)  # Circular range
 
-from typing import Union
-
-import numpy as np
-
-from .descriptive import circ_median
-
 
 def circ_quantile(
     alpha: np.ndarray,
