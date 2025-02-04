@@ -1770,7 +1770,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
 
     return result
 
-def equal_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
+def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
     """
     Common Median Test (Equal Median Test) for Multiple Circular Samples.
 

@@ -56,7 +56,7 @@
 | Wallraff Test                 | `wallraff_test`        | -                 | -                 | -                 | `wallraff.test`        |
 | Wheeler-Watson Test           | `wheeler_watson_test`  | -                 | -                 | -                 | `watson.wheeler.test`  |
 | Concentration Test (F-test)   | `concentration_test`   | -                 | `circ_ktest`      | -                 | -                      |
-| Equal Median Test             | `equal_median_test`    | `cmtest`          | `circ_cmtest`     | -                 | -                      |
+| Common Median Test             | `common_median_test`    | `cmtest`          | `circ_cmtest`     | -                 | -                      |
 | Equal Kappa Test              | `equal_kappa_test`     | -                 | -                 | -                 | `equal.kappa.test`     |
 | Rao's Tests for Homogeneity   | `rao_homogeneity_test` | -                 | -                 | `rao.homogeneity` | `rao.test`             |
 

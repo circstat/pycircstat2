@@ -11,8 +11,8 @@ from pycircstat2.hypothesis import (
     chisquare_test,
     circ_anova_test,
     circ_range_test,
+    common_median_test,
     concentration_test,
-    equal_median_test,
     harrison_kanji_test,
     kuiper_test,
     omnibus_test,
@@ -632,7 +632,7 @@ def test_equal_median_identical_samples():
     alpha2 = np.array([0.1, 0.2, 0.3, 1.5, 1.6])
     alpha3 = np.array([0.1, 0.2, 0.3, 1.5, 1.6])
 
-    result = equal_median_test([alpha1, alpha2, alpha3])
+    result = common_median_test([alpha1, alpha2, alpha3])
     assert result["reject"] is np.False_
     assert not np.isnan(result["common_median"])
 
@@ -642,7 +642,7 @@ def test_equal_median_different_samples():
     alpha2 = np.array([2.2, 2.3, 2.4, 3.1, 3.2])
     alpha3 = np.array([3.5, 3.6, 3.7, 4.2, 4.3])
 
-    result = equal_median_test([alpha1, alpha2, alpha3])
+    result = common_median_test([alpha1, alpha2, alpha3])
     assert result["reject"] is np.True_
     assert np.isnan(result["common_median"])
 
@@ -653,7 +653,7 @@ def test_equal_median_large_sample():
     alpha2 = np.random.vonmises(mu=0, kappa=2, size=500)
     alpha3 = np.random.vonmises(mu=0, kappa=2, size=500)
 
-    result = equal_median_test([alpha1, alpha2, alpha3])
+    result = common_median_test([alpha1, alpha2, alpha3])
     assert result["reject"] is np.False_
     assert not np.isnan(result["common_median"])
 
@@ -662,6 +662,6 @@ def test_equal_median_small_sample():
     alpha1 = np.array([0.1, 0.2, 0.3])
     alpha2 = np.array([0.15, 0.25, 0.35])
 
-    result = equal_median_test([alpha1, alpha2])
+    result = common_median_test([alpha1, alpha2])
     assert result["reject"] is np.False_
     assert not np.isnan(result["common_median"])
