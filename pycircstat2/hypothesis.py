@@ -807,7 +807,7 @@ def wallraff_test(
     return U, pval
 
 
-def circ_anova_test(
+def circ_anova(
     samples: list[np.ndarray], 
     method: str = "F-test", 
     kappa: Optional[float] = None, 

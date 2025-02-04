@@ -49,7 +49,7 @@
 
 | Feature                       | PyCircStat2            | PyCircStat        | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
 | ----------------------------- | ---------------------- | ----------------- | ----------------- | ----------------- | ---------------------- |
-| Circular Analysis of Variance | `circ_anova_test`      | -                 | -                 | -                 | `aov.circular`         |
+| Circular Analysis of Variance | `circ_anova`      | -                 | -                 | -                 | `aov.circular`         |
 | Watson-Williams Test [^1]     | `watson_williams_test` | `watson_williams` | `circ_wwtest`     | -                 | `watson.williams.test` |
 | Harrison-Kanji Test[^2]       | `harrison_kanji_test`  | `hktest`          | `circ_hktest`     | -                 | -                      |
 | Watson's U2 Test              | `watson_u2_test`       | -                 | -                 | `watson.two`      | `watson.two.test`      |
