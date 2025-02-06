@@ -75,8 +75,8 @@
 ### 3. Correlation & Regression
 | Feature                       | PyCircStat2    | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)              |
 | ----------------------------- | -------------- | ---------- | ----------------- | ------------- | ------------------------- |
-| Circular-Circular Correlation | `aacorr`       | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
-| Circular-Linear Correlation   | `alcorr`       | `corrcl`   | `circ_corrcl`     | -             | -                         |
+| Circular-Circular Correlation | `circ_corrcc`       | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
+| Circular-Linear Correlation   | `circ_corrcl`       | `corrcl`   | `circ_corrcl`     | -             | -                         |
 | Circular-Circular Regression  | `CCRegression` | -          | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
 | Circular-Linear Regression    | `CLRegression` | -          | -                 | -             | `lm.circular(type="c-l")` |
 

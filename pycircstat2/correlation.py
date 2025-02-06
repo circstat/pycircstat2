@@ -16,7 +16,7 @@ class CorrelationResult:
     test_stat: Optional[float] = None
 
 
-def aacorr(
+def circ_corrcc(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
     method: str = "fl",
@@ -75,11 +75,11 @@ def aacorr(
     """
 
     if method == "fl":  # Fisher & Lee (1983)
-        _corr = _aacorr_fl
+        _corr = _circ_corrcc_fl
     elif method == "js":  # Jammalamadaka & SenGupta (2001)
-        _corr = _aacorr_js
+        _corr = _circ_corrcc_js
     elif method == "nonparametric":
-        _corr = _aacorr_np
+        _corr = _circ_corrcc_np
     else:
         raise ValueError("Invalid method. Choose from 'fl', 'js', 'nonparametric'.")
 
@@ -91,7 +91,7 @@ def aacorr(
         return result.r
 
 
-def _aacorr_fl(
+def _circ_corrcc_fl(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
     test: bool,
@@ -134,7 +134,7 @@ def _aacorr_fl(
     r = _corr(a, b)
 
     if test:
-        # jackknife test (Fingleton, 1989)
+        # jackknife test (Upton & Fingleton, 1989)
         # compute raa an additional n times, each time leaving out one pair of observations
         n = len(a)
         raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
@@ -151,7 +151,7 @@ def _aacorr_fl(
         return CorrelationResult(r=r)
 
 
-def _aacorr_js(
+def _circ_corrcc_js(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
     test: bool,
@@ -218,7 +218,7 @@ def _aacorr_js(
         return CorrelationResult(r=r)
 
 
-def _aacorr_np(
+def _circ_corrcc_np(
     a: Union[Type[Circular], np.ndarray],
     b: Union[Type[Circular], np.ndarray],
     test: bool,
@@ -252,7 +252,7 @@ def _aacorr_np(
     return CorrelationResult(r=r, reject_null=reject)
 
 
-def alcorr(
+def circ_corrcl(
     a: Union[Type[Circular], np.ndarray],
     x: np.ndarray,
 ) -> CorrelationResult:
