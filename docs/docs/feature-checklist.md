@@ -30,18 +30,18 @@
 
 #### One-Sample Tests for Significance
 
-| Feature                     | H0                        | PyCircStat2         | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)    |
-| --------------------------- | ------------------------- | ------------------- | ---------- | ----------------- | ------------- | --------------- |
-| **Mean Direction**          |                           |                     |            |                   |               |                 |
-| Rayleigh Test               | $\rho=0$                  | `rayleigh_test`     | `rayleigh` | `circ_rtest`      | `r.test`      | `rayleigh.test` |
-| V-Test                      | $\rho=0$                  | `V_test`            | `vtest`    | `circ_vtest`      | `v0.test`     | -               |
-| One-sample Test             | $\tilde\mu=μ_0$           | `one_sample_test`   | `mtest`    | `circ_mtest`      | -             | -               |
-| Change Point Test           | no change point           | `change_point_test` | -          | -                 | `change.pt`   | `change.point`  |
-| **Median Direction**        |                           |                     |            |                   |               |                 |
-| Hodges-Ajne (omnibus) Test  | $\rho=0$                  | `omnibus_test`      | `omnibus`  | `circ_otest`      | -             | -               |
-| Batschelet Test             | $\rho=0$                  | `batschelet_test`   | -          | -                 | -             | -               |
-| Binomial Test               | $\tilde\theta = \theta_0$ | `binomial_test`     | `medtest`  | `circ_medtest`    | -             | -               |
-| Symmetry Test around median | $\text{symmetry}$         | `symmetry_test`     | `symtest`  | `circ_symtest`    | -             | -               |
+| Feature                     | H0                                  | PyCircStat2         | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)    |
+| --------------------------- | ----------------------------------- | ------------------- | ---------- | ----------------- | ------------- | --------------- |
+| **Mean Direction**          |                                     |                     |            |                   |               |                 |
+| Rayleigh Test               | $\rho=0$ [^uniform]                 | `rayleigh_test`     | `rayleigh` | `circ_rtest`      | `r.test`      | `rayleigh.test` |
+| V-Test                      | $\rho=0$                            | `V_test`            | `vtest`    | `circ_vtest`      | `v0.test`     | -               |
+| One-sample Test             | $\tilde\mu=μ_0$                     | `one_sample_test`   | `mtest`    | `circ_mtest`      | -             | -               |
+| Change Point Test           | no change point                     | `change_point_test` | -          | -                 | `change.pt`   | `change.point`  |
+| **Median Direction**        |                                     |                     |            |                   |               |                 |
+| Hodges-Ajne (omnibus) Test  | $\rho=0$                            | `omnibus_test`      | `omnibus`  | `circ_otest`      | -             | -               |
+| Batschelet Test             | $\rho=0$                            | `batschelet_test`   | -          | -                 | -             | -               |
+| Binomial Test               | $\tilde\theta = \theta_0$ [^median] | `binomial_test`     | `medtest`  | `circ_medtest`    | -             | -               |
+| Symmetry Test around median | $\text{symmetry}$                   | `symmetry_test`     | `symtest`  | `circ_symtest`    | -             | -               |
 
 #### Multi-Sample Tests for Significance
 
@@ -57,7 +57,7 @@
 | Concentration Test (F-test)     | $\kappa_1 = \dots = \kappa_n$                 | `concentration_test`   | -                 | `circ_ktest`      | -                 | -                      |
 | Equal Kappa Test                | $\kappa_1 = \dots = \kappa_n$                 | `equal_kappa_test`     | -                 | -                 | -                 | `equal.kappa.test`     |
 | **Distribution Homogeneity**    |                                               |                        |                   |                   |                   |                        |
-| Watson's U2 Test                | $F_1 = F_2$                                   | `watson_u2_test`       | -                 | -                 | `watson.two`      | `watson.two.test`      |
+| Watson's U2 Test                | $F_1 = F_2$ [^F]                              | `watson_u2_test`       | -                 | -                 | `watson.two`      | `watson.two.test`      |
 | Wallraff Test                   | $F_1 = F_2$                                   | `wallraff_test`        | -                 | -                 | -                 | `wallraff.test`        |
 | Wheeler-Watson Test             | $F_1 = F_2$                                   | `wheeler_watson_test`  | -                 | -                 | -                 | `watson.wheeler.test`  |
 | Rao's Tests for Homogeneity     | $F_1 = F_2$                                   | `rao_homogeneity_test` | -                 | -                 | `rao.homogeneity` | `rao.test`             |
@@ -75,8 +75,8 @@
 ### 3. Correlation & Regression
 | Feature                       | PyCircStat2    | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)              |
 | ----------------------------- | -------------- | ---------- | ----------------- | ------------- | ------------------------- |
-| Circular-Circular Correlation | `circ_corrcc`       | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
-| Circular-Linear Correlation   | `circ_corrcl`       | `corrcl`   | `circ_corrcl`     | -             | -                         |
+| Circular-Circular Correlation | `circ_corrcc`  | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
+| Circular-Linear Correlation   | `circ_corrcl`  | `corrcl`   | `circ_corrcl`     | -             | -                         |
 | Circular-Circular Regression  | `CCRegression` | -          | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
 | Circular-Linear Regression    | `CLRegression` | -          | -                 | -             | `lm.circular(type="c-l")` |
 
@@ -168,7 +168,7 @@
 
 [^uniform]: $\rho=0$ stands for uniform distributed.
 [^median]: $\theta$ stands for median.
+[^F]: $F$ stands for distributions.
 [^one-way]: Yet anothr one-way ANOVA.
 [^two-way]: Two-way ANOVA.
-[^F]: $F$ stands for distributions.
 

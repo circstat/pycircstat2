@@ -29,6 +29,7 @@ nav:
           - Correlation: reference/correlation.md
           - Regression: reference/regression.md
           - Distributions: reference/distributions.md
+          - Clustering: reference/clustering.md
           - Utilities: reference/utils.md
 
 markdown_extensions:

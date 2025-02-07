@@ -105,8 +105,8 @@ def circ_plot(
 
         # plot density
         if plot_density:  # and not np.isclose(circ_data.r, 0):
-
             kwargs_density = kwargs.pop("kwargs_density", {})
+
             density_method = kwargs_density.pop("method", "nonparametric")
             density_color = kwargs_density.pop("color", "black")
             density_linestyle = kwargs_density.pop("linestyle", "-")

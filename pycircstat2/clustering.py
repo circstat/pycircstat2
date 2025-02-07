@@ -1,15 +1,55 @@
-from typing import Union
+from typing import Optional, Union
 
 import numpy as np
-from scipy.stats import vonmises
 
 from .descriptive import circ_kappa, circ_mean_and_r
+from .distributions import vonmises
 from .utils import data2rad
 
 
 class MoVM:
     """
-    Mixture of von Mises Clustering
+    Mixture of von Mises (MoVM) Clustering.
+
+    This class implements the Expectation-Maximization (EM) algorithm for clustering 
+    circular data using a mixture of von Mises distributions. It is analogous to 
+    Gaussian Mixture Models (GMM) but adapted for directional statistics.
+
+    Parameters
+    ----------
+    burnin : int, default=30
+        Number of initial iterations before checking for convergence.
+    n_clusters : int, default=5
+        The number of von Mises distributions (clusters) to fit.
+    n_iters : int, default=100
+        Maximum number of iterations for the EM algorithm.
+    n_intervals : int, default=360
+        Used for converting degree-based data into radians.
+    unit : {"degree", "radian"}, default="degree"
+        Specifies whether input data is in degrees or radians.
+    random_seed : int, default=2046
+        Random seed for reproducibility.
+    threshold : float, default=1e-16
+        Convergence threshold based on the negative log-likelihood difference.
+
+    Attributes
+    ----------
+    converged : bool
+        Whether the algorithm has converged.
+    nLL : np.ndarray
+        Array of negative log-likelihood values over iterations.
+    m : np.ndarray
+        Cluster means (circular means).
+    r : np.ndarray
+        Cluster mean resultant vectors.
+    p : np.ndarray
+        Cluster probabilities.
+    kappa : np.ndarray
+        Concentration parameters for each von Mises component.
+    gamma : np.ndarray
+        Responsibility matrix (posterior probabilities of clusters for each data point).
+    labels : np.ndarray
+        The most probable cluster assignment for each data point.
     """
 
     def __init__(
@@ -37,25 +77,62 @@ class MoVM:
         self,
         x: np.ndarray,
         n_clusters_init: int,
-    ):
-        n = len(x)  # number of samples
-        p = (
-            np.ones(n_clusters_init) / n_clusters_init
-        )  # initial cluster probability
-        z = np.random.choice(
-            np.arange(n_clusters_init), size=n
-        )  # initial labels
+    ) -> tuple:
+        """
+        Initializes cluster parameters before running the EM algorithm.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Input circular data in radians.
+        n_clusters_init : int
+            Number of initial clusters.
+
+        Returns
+        -------
+        tuple
+            - m (np.ndarray): Initial cluster means.
+            - kappa (np.ndarray): Initial concentration parameters.
+            - p (np.ndarray): Initial cluster probabilities.
+        """
+        # number of samples
+        n = len(x)  
+
+        # initial cluster probability
+        p = np.ones(n_clusters_init) / n_clusters_init 
+
+        # initial labels
+        z = np.random.choice(np.arange(n_clusters_init), size=n) 
+
+        # initial means and resultant vector lengths
         m, r = map(
             np.array,
             zip(*[circ_mean_and_r(x[z == i]) for i in range(n_clusters_init)]),
-        )  # initial means and resultant vector lengths
-        kappa = np.array(
-            [circ_kappa(r=r[i]) for i in range(n_clusters_init)]
-        )  # initial kappa (without correction by hard-coding a larger enough n)
+        )  
+
+        # initial kappa (without correction by hard-coding a larger enough n)
+        kappa = np.array([circ_kappa(r=r[i]) for i in range(n_clusters_init)])  
 
         return m, kappa, p
 
     def fit(self, x: np.ndarray, verbose: Union[bool, int] = 0):
+        """
+        Fits the mixture of von Mises model to the given data using the EM algorithm.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Input data points in degrees or radians.
+        verbose : bool or int, default=0
+            If True, prints progress every iteration. If an integer, prints every `verbose` iterations.
+
+        Updates
+        -------
+        - self.m : Fitted cluster means.
+        - self.kappa : Fitted concentration parameters.
+        - self.p : Fitted cluster probabilities.
+        - self.labels : Final cluster assignments.
+        """
         # seed
         np.random.seed(self.random_seed)
 
@@ -83,6 +160,7 @@ class MoVM:
                 np.sum(gamma_normed, axis=1)
                 / np.sum(gamma_normed, axis=1).sum()
             )
+            
             m, r = map(
                 np.array,
                 zip(
@@ -136,20 +214,49 @@ class MoVM:
         p: np.ndarray,
         m: np.ndarray,
         kappa: np.ndarray,
-    ):
+    )-> np.ndarray:
+        """
+        Computes posterior probabilities (responsibilities) for each cluster.
+
+        Returns
+        -------
+        np.ndarray
+            Cluster assignment probabilities for each data point.
+        """
         gamma = np.vstack(
             [
-                p[i] * vonmises.pdf(x_rad, kappa=kappa[i], loc=m[i])
+                p[i] * vonmises.pdf(x_rad, kappa=kappa[i], mu=m[i])
                 for i in range(self.n_clusters)
             ]
         )
         return gamma
 
-    def compute_nLL(self, gamma: np.ndarray):
+    def compute_nLL(self, gamma: np.ndarray)-> float:
+        """
+        Computes the negative log-likelihood.
+
+        Parameters
+        ----------
+        gamma : np.ndarray
+            The responsibility matrix (posterior probabilities of clusters for each data point).
+
+        Returns
+        -------
+        float
+            The negative log-likelihood value.
+        """
         nLL = -np.sum(np.log(np.sum(gamma, axis=0) + 1e-16))
         return nLL
 
-    def compute_BIC(self):
+    def compute_BIC(self)-> float:
+        """
+        Computes the Bayesian Information Criterion (BIC) for model selection.
+
+        Returns
+        -------
+        float
+            The computed BIC value.
+        """
         nLL = self.compute_nLL(self.gamma)
         nparams = self.n_clusters * 3 - 1  # n_means + n_kappas + (n_ps - 1)
         bic = 2 * nLL + np.log(self.n) * nparams
@@ -158,10 +265,27 @@ class MoVM:
 
     def predict_density(
         self,
-        x: np.ndarray = None,
+        x: Optional[np.ndarray] = None,
         unit: Union[str, None] = None,
         n_intervals: Union[float, int, None] = None,
-    ):
+    )-> np.ndarray:
+        """
+        Predicts density estimates for given points.
+
+        Parameters
+        ----------
+        x : np.ndarray, optional
+            Points at which to estimate the density.
+        unit : {"degree", "radian"}, optional
+            Specifies whether input data is in degrees or radians.
+        n_intervals : int, optional
+            Number of intervals for data conversion.
+
+        Returns
+        -------
+        np.ndarray
+            Estimated density at the provided points.
+        """
         unit = self.unit if unit is None else unit
         n_intervals = self.n_intervals if n_intervals is None else n_intervals
 
@@ -171,12 +295,25 @@ class MoVM:
         x_rad = x if unit == "radian" else data2rad(x, n_intervals)
 
         d = [
-            self.p[i] * vonmises.pdf(x_rad, kappa=self.kappa[i], loc=self.m[i])
+            self.p[i] * vonmises.pdf(x_rad, kappa=self.kappa[i], mu=self.m[i])
             for i in range(self.n_clusters)
         ]
         return np.sum(d, axis=0)
 
-    def predict(self, x: np.ndarray):
+    def predict(self, x: np.ndarray)-> np.ndarray:
+        """
+        Predicts cluster assignments for new data.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            New data points in degrees or radians.
+
+        Returns
+        -------
+        np.ndarray
+            Predicted cluster labels.
+        """
         x_rad = x if self.unit == "radian" else data2rad(x, self.n_intervals)
 
         gamma = self.compute_gamma(
