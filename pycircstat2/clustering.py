@@ -50,6 +50,20 @@ class MoVM:
         Responsibility matrix (posterior probabilities of clusters for each data point).
     labels : np.ndarray
         The most probable cluster assignment for each data point.
+
+    Examples
+    --------
+        import numpy as np
+        from pycircstat2.clustering import MoVM
+        np.random.seed(42)
+        x1 = np.random.vonmises(mu=0, kappa=5, size=100)
+        x2 = np.random.vonmises(mu=np.pi, kappa=10, size=100)
+        x = np.concatenate([x1, x2])
+        np.random.shuffle(x)
+        movm = MoVM(n_clusters=2, n_iters=200, unit="radian", random_seed=42)
+        movm.fit(x, verbose=False)
+
+
     """
 
     def __init__(
