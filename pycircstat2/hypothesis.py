@@ -1011,8 +1011,7 @@ def angular_randomisation_test(
 
         # Compute absolute angular differences following the formula:
         # D(φᵢ,ψⱼ) = π - |π - |φᵢ - ψⱼ||
-        diff = np.abs(phi_reshaped - psi_reshaped)
-        distances = np.pi - np.abs(np.pi - diff)
+        distances = np.pi - np.abs(np.pi - np.abs(phi_reshaped - psi_reshaped))
 
         # Return sum of all distances
         return np.sum(distances)
