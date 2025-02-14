@@ -175,9 +175,9 @@ def circ_mean_and_r_of_means(
     """
 
     if circs is None:
-        assert isinstance(ms, np.ndarray) and isinstance(
-            rs, np.ndarray
-        ), "If `circs` is None, then `ms` and `rs` are needed."
+        assert isinstance(ms, np.ndarray) and isinstance(rs, np.ndarray), (
+            "If `circs` is None, then `ms` and `rs` are needed."
+        )
     else:
         ms, rs = map(np.array, zip(*[(circ.mean, circ.r) for circ in circs]))
 
@@ -464,15 +464,15 @@ def circ_var(
         w = np.ones_like(alpha)
 
     if r is None:
-        assert isinstance(alpha, np.ndarray) and isinstance(
-            w, np.ndarray
-        ), "If `r` is None, then `alpha` and `w` are needed."
+        assert isinstance(alpha, np.ndarray) and isinstance(w, np.ndarray), (
+            "If `r` is None, then `alpha` and `w` are needed."
+        )
         r = circ_r(alpha, w)
 
     if bin_size is None:
-        assert isinstance(alpha, np.ndarray) and isinstance(
-            w, np.ndarray
-        ), "If `bin_size` is None, then `alpha` and `w` are needed."
+        assert isinstance(alpha, np.ndarray) and isinstance(w, np.ndarray), (
+            "If `bin_size` is None, then `alpha` and `w` are needed."
+        )
         if (w == w[0]).all():  #
             bin_size = 0
         else:
@@ -1020,9 +1020,9 @@ def _circ_mean_ci_approximate(
     """
 
     if r is None:
-        assert isinstance(
-            alpha, np.ndarray
-        ), "If `r` is None, then `alpha` (and `w`) is needed."
+        assert isinstance(alpha, np.ndarray), (
+            "If `r` is None, then `alpha` (and `w`) is needed."
+        )
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w)
@@ -1179,9 +1179,9 @@ def circ_median_ci(
     """
 
     if median is None:
-        assert isinstance(
-            alpha, np.ndarray
-        ), "If `median` is None, then `alpha` (and `w`) is needed."
+        assert isinstance(alpha, np.ndarray), (
+            "If `median` is None, then `alpha` (and `w`) is needed."
+        )
         if w is None:
             w = np.ones_like(alpha)
         median = circ_median(alpha=alpha, w=w, method=method)
@@ -1336,61 +1336,110 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
 
     return kappa
 
-def circ_dist(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+
+def circ_dist(
+    x: np.ndarray,
+    y: Optional[np.ndarray] = None,
+    metric: str = "center",
+    return_sum: bool = False,
+) -> np.ndarray:
     r"""
-    Compute the pairwise circular difference $x_i - y_i$ using complex representation.
-    
+    Compute the element-wise circular distance between two arrays of angles.
+
     Parameters
     ----------
     x : array-like
-        Sample of circular data (radians).
-    y : array-like
-        Sample of circular data (radians) or a single angle.
+        First sample of circular data (radians).
+    y : array-like, optional
+        Second sample of circular data (radians). If None, computes element-wise
+        distances within `x` itself.
+    metric : str, optional
+        Distance metric to use, options:
+        - "center" (default): Standard circular difference wrapped to [-π, π].
+        - "geodesic": π - |π - |x - y||.
+        - "angularseparation": 1 - cos(x - y).
+        - "chord": sqrt(2 * (1 - cos(x - y))).
+    return_sum : bool, optional
+        If True, returns the sum of all computed distances (like R's `dist.circular()`).
 
     Returns
     -------
     array
-        Circular differences wrapped to [-pi, pi].
-    
-    References
-    ----------
-    - Section 27.7 (Zar, 2010, P642)
-
+        Element-wise distance values based on the chosen metric.
     """
-    return np.angle(np.exp(1j * x) / np.exp(1j * y))
+    x = np.asarray(x)
+
+    if y is None:
+        y = x
+
+    y = np.asarray(y)
+
+    # Ensure broadcasting works without explicit shape checks
+    try:
+        np.broadcast_shapes(x.shape, y.shape)
+    except ValueError:
+        raise ValueError(
+            f"Shapes {x.shape} and {y.shape} are incompatible for broadcasting."
+        )
+
+    if metric == "center":
+        distances = np.angle(np.exp(1j * x) / np.exp(1j * y))
+
+    elif metric == "geodesic":
+        distances = np.pi - np.abs(np.pi - np.abs(x - y))
+
+    elif metric == "angularseparation":
+        distances = 1 - np.cos(x - y)
+
+    elif metric == "chord":
+        distances = np.sqrt(2 * (1 - np.cos(x - y)))
+
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
+
+    return np.sum(distances) if return_sum else distances
 
 
-def circ_pairdist(x: np.ndarray, y: Optional[np.ndarray]=None) -> np.ndarray:
+def circ_pairdist(
+    x: np.ndarray,
+    y: Optional[np.ndarray] = None,
+    metric: str = "center",
+    return_sum: bool = False,
+) -> np.ndarray:
     r"""
-    Compute all pairwise circular differences $x_i - y_j$ around the circle.
-    
+    Compute the pairwise circular distance between all elements in `x` and `y`.
+
     Parameters
     ----------
     x : array-like
-        Sample of circular data (radians).
+        First sample of circular data (radians).
     y : array-like, optional
-        Sample of circular data (radians). If None, computes all pairwise 
-        differences within x.
-    
+        Second sample of circular data (radians). If None, computes pairwise
+        distances within `x` itself.
+    metric : str, optional
+        Distance metric to use (same options as `circ_dist`).
+    return_sum : bool, optional
+        If True, returns the sum of all computed distances (like R's `dist.circular()`).
+
     Returns
     -------
     ndarray
-        Matrix of pairwise circular differences wrapped to [-pi, pi].
-
-    References
-    ----------
-    - Section 27.7 (Zar, 2010, P642)
+        Pairwise distance matrix where entry (i, j) is the circular distance
+        between x[i] and y[j] based on the chosen metric.
     """
     x = np.asarray(x)
-    
+
+    # If y is not provided, compute pairwise distances within x
     if y is None:
-        y = x  # Compute pairwise distances within x itself
-    
+        y = x
+
     y = np.asarray(y)
 
-    # Broadcasting-friendly complex exponentiation method
-    return np.angle(np.exp(1j * x[:, None]) / np.exp(1j * y[None, :]))
+    # Reshape to allow broadcasting for pairwise computation
+    x_reshaped = x[:, None]  # Shape (n, 1)
+    y_reshaped = y[None, :]  # Shape (1, m)
 
+    return circ_dist(x_reshaped, y_reshaped, metric=metric, return_sum=return_sum)
 
 
 #########################
@@ -1576,11 +1625,12 @@ def nonparametric_density_estimation(
 
     return x, f
 
+
 def circ_range(alpha: np.ndarray) -> float:
     """
     Compute the circular range of angular data.
-    
-    The circular range is the difference between the maximum and minimum angles 
+
+    The circular range is the difference between the maximum and minimum angles
     in the dataset, adjusted for circular continuity.
 
     Parameters
@@ -1610,7 +1660,7 @@ def circ_quantile(
     """
     Compute quantiles for circular data.
 
-    This function computes quantiles for circular data by shifting the 
+    This function computes quantiles for circular data by shifting the
     data to be centered around the circular median, applying a linear quantile function,
     and then shifting back.
 
@@ -1647,10 +1697,14 @@ def circ_quantile(
 
     # Transform data relative to circular median
     shifted_alpha = (alpha - circular_median) % (2 * np.pi)
-    shifted_alpha = np.where(shifted_alpha > np.pi, shifted_alpha - 2 * np.pi, shifted_alpha)
+    shifted_alpha = np.where(
+        shifted_alpha > np.pi, shifted_alpha - 2 * np.pi, shifted_alpha
+    )
 
     # Compute linear quantiles on transformed data
-    linear_quantiles = np.quantile(shifted_alpha, probs, method="linear" if type == 7 else "midpoint")
+    linear_quantiles = np.quantile(
+        shifted_alpha, probs, method="linear" if type == 7 else "midpoint"
+    )
 
     # Transform back to original circular space
     circular_quantiles = (linear_quantiles + circular_median) % (2 * np.pi)

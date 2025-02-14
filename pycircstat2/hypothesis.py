@@ -16,6 +16,7 @@ from .descriptive import (
     circ_median,
     circ_r,
     circ_range,
+    circ_pairdist,
 )
 from .utils import A1inv, angmod, angular_distance, significance_code
 
@@ -96,9 +97,9 @@ def rayleigh_test(
     """
 
     if r is None:
-        assert isinstance(
-            alpha, np.ndarray
-        ), "If `r` is None, then `alpha` (and `w`) is needed."
+        assert isinstance(alpha, np.ndarray), (
+            "If `r` is None, then `alpha` (and `w`) is needed."
+        )
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w, dtype=int)
@@ -113,7 +114,6 @@ def rayleigh_test(
     pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
 
     if B > 1:
-
         tb = np.zeros(B)
         for i in range(B):
             x = np.random.normal(size=(n, 1))
@@ -254,9 +254,9 @@ def V_test(
     """
 
     if mean is None or r is None or n is None:
-        assert isinstance(
-            alpha, np.ndarray
-        ), "If `mean`, `r` or `n` is None, then `alpha` (and `w`) is needed."
+        assert isinstance(alpha, np.ndarray), (
+            "If `mean`, `r` or `n` is None, then `alpha` (and `w`) is needed."
+        )
         if w is None:
             w = np.ones_like(alpha)
         n = np.sum(w)
@@ -326,9 +326,9 @@ def one_sample_test(
     """
 
     if lb is None or ub is None:
-        assert isinstance(
-            alpha, np.ndarray
-        ), "If `ub` or `lb` is None, then `alpha` (and `w`) is needed."
+        assert isinstance(alpha, np.ndarray), (
+            "If `ub` or `lb` is None, then `alpha` (and `w`) is needed."
+        )
         if w is None:
             w = np.ones_like(alpha)
         lb, ub = circ_mean_ci(alpha=alpha, w=w)
@@ -776,9 +776,9 @@ def wallraff_test(
     P637-638, Section 27.8, Example 27.13 of Zar, 2010
     """
 
-    assert (
-        len(circs) == 2
-    ), "Current implementation only supports two-sample comparision."
+    assert len(circs) == 2, (
+        "Current implementation only supports two-sample comparision."
+    )
 
     angles = np.ones(len(circs)) * angle if isinstance(angle, float) else angle
     ns = [c.n for c in circs]
@@ -808,11 +808,11 @@ def wallraff_test(
 
 
 def circ_anova(
-    samples: list[np.ndarray], 
-    method: str = "F-test", 
-    kappa: Optional[float] = None, 
-    f_mod: bool = True, 
-    verbose: bool = False
+    samples: list[np.ndarray],
+    method: str = "F-test",
+    kappa: Optional[float] = None,
+    f_mod: bool = True,
+    verbose: bool = False,
 ) -> dict:
     """
     Circular Analysis of Variance (ANOVA) for multi-sample comparison of mean directions.
@@ -866,7 +866,9 @@ def circ_anova(
 
     # Sample sizes, mean directions, and resultants
     ns = np.array([len(group) for group in samples])
-    Rs = np.array([circ_r(group) * len(group) for group in samples])  # Sum of resultant vectors
+    Rs = np.array(
+        [circ_r(group) * len(group) for group in samples]
+    )  # Sum of resultant vectors
     mus = np.array([circ_mean(group) for group in samples])  # Mean directions
 
     # Overall resultant and mean direction
@@ -913,7 +915,7 @@ def circ_anova(
             "statistic": F_stat,
             "p_value": p_value,
             "SS": (SS_between, SS_within, SS_total),
-            "MS": (MS_between, MS_within)
+            "MS": (MS_between, MS_within),
         }
 
     # **Likelihood Ratio Test (LRT)**
@@ -960,6 +962,108 @@ def circ_anova(
         print("--------------------------------------\n")
 
     return result
+
+
+def angular_randomisation_test(
+    circs: list,
+    n_simulation: int = 1000,
+    verbose: bool = False,
+) -> tuple[float, float]:
+    """The Angular Randomization Test (ART) for homogeneity.
+
+    - H0: The two samples come from the same population.
+    - H1: The two samples do not come from the same population.
+
+    Parameters
+    ----------
+    circs: list
+        A list of Circular objects.
+    n_simulation: int, optional
+        Number of permutations for the test. Defaults to 1000.
+
+    Returns
+    -------
+    T_obs: float
+        Observed value of the ART test statistic.
+    p_value: float
+        p-value of the test.
+
+    Reference
+    ---------
+    Jebur, A. J., & Abushilah, S. F. (2022).
+    Distribution-free two-sample homogeneity test for circular data based on geodesic distance.
+    International Journal of Nonlinear Analysis and Applications, 13(1), 2703-2711.
+    """
+
+    def art_statistic(S1: np.ndarray, S2: np.ndarray) -> float:
+        """
+        Compute the Angular Randomisation Test (ART) statistic for two groups of circular data.
+        Following equations (3.1) and (4.2) from Jebur & Abushilah (2022) .
+
+        Args:
+            S1 (np.ndarray): First group of angles in radians (φ values)
+            S2 (np.ndarray): Second group of angles in radians (ψ values)
+
+        Returns:
+            float: The ART test statistic
+        """
+        n = len(S1)
+        m = len(S2)
+
+        # Compute the scaling factor ((n+m)/(nm))^(-1/2)
+        scaling_factor = np.sqrt(n * m / (n + m))
+
+        # Compute sum of all pairwise geodesic distances
+        total_distance = circ_pairdist(S1, S2, metric="geodesic", return_sum=True)
+
+        # Scale the total distance and return
+        return scaling_factor * total_distance
+
+    # number of samples
+    k = len(circs)
+    if k != 2:
+        raise ValueError("The Angular Randomization Test requires exactly two samples.")
+
+    # 1. Compute observed test statistic T*₀
+    observed_stat = art_statistic(circs[0].alpha, circs[1].alpha)
+
+    # Initialize counter for permutations more extreme than observed
+    n_extreme = 1  # Start at 1 to count the observed statistic
+
+    # Combine samples for permutation
+    combined_data = np.concatenate([circs[0].alpha, circs[1].alpha])
+    n1 = len(circs[0].alpha)
+
+    # Perform permutation test
+
+    for _ in range(n_simulation):
+        # Randomly permute the combined data
+        permuted_data = np.random.permutation(combined_data)
+
+        # Split into two groups of original sizes
+        perm_S1 = permuted_data[:n1]
+        perm_S2 = permuted_data[n1:]
+
+        # Compute test statistic for this permutation
+        perm_stat = art_statistic(perm_S1, perm_S2)
+
+        # Count if permuted statistic is >= observed (one-sided test)
+        if perm_stat >= observed_stat:
+            n_extreme += 1
+
+    # Compute p-value as in equation (4.3)
+    p_value = n_extreme / (n_simulation + 1)
+
+    if verbose:
+        print("Angular Randomization Test (ART) for Homogeneity")
+        print("-------------------------------------------------")
+        print("H0: The two samples come from the same population.")
+        print("HA: The two samples do not come from the same population.")
+        print("")
+        print(f"Observed Test Statistic: {observed_stat:.5f}")
+        print(f"P-value: {p_value:.5f} {significance_code(p_value)}")
+
+    return observed_stat, p_value
 
 
 #####################
@@ -1229,6 +1333,7 @@ def rao_spacing_test(
 
     return np.rad2deg(Uo), pval
 
+
 def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
     """
     Perform the Circular Range Test for uniformity.
@@ -1260,8 +1365,11 @@ def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
     index = np.arange(1, stop + 1)
 
     # Compute p-value using series expansion
-    sequence = ((-1) ** (index - 1)) * comb(n, index) * \
-               (1 - index * (1 - range_stat / (2 * np.pi))) ** (n - 1)
+    sequence = (
+        ((-1) ** (index - 1))
+        * comb(n, index)
+        * (1 - index * (1 - range_stat / (2 * np.pi))) ** (n - 1)
+    )
     p_value = np.sum(sequence)
 
     return range_stat, p_value
@@ -1354,7 +1462,7 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
     """
     # Ensure inputs are numpy arrays
     alpha1, alpha2 = np.asarray(alpha1), np.asarray(alpha2)
-    
+
     # Sample sizes
     n1, n2 = len(alpha1), len(alpha2)
 
@@ -1371,7 +1479,7 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
 
     # Compute F-statistic
     f_stat = ((n2 - 1) * (n1 - R1)) / ((n1 - 1) * (n2 - R2))
-    
+
     # Compute p-value (adjusting for F-stat symmetry)
     if f_stat > 1:
         pval = 2 * (1 - f.cdf(f_stat, n1, n2))
@@ -1406,7 +1514,9 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
     Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
     Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
     """
-    if not isinstance(samples, list) or not all(isinstance(s, np.ndarray) for s in samples):
+    if not isinstance(samples, list) or not all(
+        isinstance(s, np.ndarray) for s in samples
+    ):
         raise ValueError("Input must be a list of numpy arrays.")
 
     k = len(samples)  # Number of samples
@@ -1422,16 +1532,36 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
     var_sin = np.array([np.var(np.sin(s), ddof=1) for s in samples])
 
     # Compute covariance (use ddof=1 to match R's var(x, y))
-    cov_cos_sin = np.array([np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in samples])
+    cov_cos_sin = np.array(
+        [np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in samples]
+    )
 
     # Compute test statistics
-    s_polar = 1 / n * (var_sin / cos_means**2 + (sin_means**2 * var_cos) / cos_means**4 - (2 * sin_means * cov_cos_sin) / cos_means**3)
+    s_polar = (
+        1
+        / n
+        * (
+            var_sin / cos_means**2
+            + (sin_means**2 * var_cos) / cos_means**4
+            - (2 * sin_means * cov_cos_sin) / cos_means**3
+        )
+    )
     tan_means = sin_means / cos_means
-    H_polar = np.sum(tan_means**2 / s_polar) - (np.sum(tan_means / s_polar)**2) / np.sum(1 / s_polar)
+    H_polar = np.sum(tan_means**2 / s_polar) - (
+        np.sum(tan_means / s_polar) ** 2
+    ) / np.sum(1 / s_polar)
 
     U = cos_means**2 + sin_means**2
-    s_disp = 4 / n * (cos_means**2 * var_cos + sin_means**2 * var_sin + 2 * cos_means * sin_means * cov_cos_sin)
-    H_disp = np.sum(U**2 / s_disp) - (np.sum(U / s_disp)**2) / np.sum(1 / s_disp)
+    s_disp = (
+        4
+        / n
+        * (
+            cos_means**2 * var_cos
+            + sin_means**2 * var_sin
+            + 2 * cos_means * sin_means * cov_cos_sin
+        )
+    )
+    H_disp = np.sum(U**2 / s_disp) - (np.sum(U / s_disp) ** 2) / np.sum(1 / s_disp)
 
     # Compute p-values
     df = k - 1  # Degrees of freedom
@@ -1485,12 +1615,18 @@ def change_point_test(alpha):
         if i0(arg) != np.inf:
             return x * A1inv(x) - np.log(i0(arg))
         else:
-            return x * A1inv(x) - (arg + np.log(1 / np.sqrt(2 * np.pi * arg) * (1 + 1/(8 * arg) + 9/(128 * arg**2) + 225/(1024 * arg**3))))
+            return x * A1inv(x) - (
+                arg
+                + np.log(
+                    1
+                    / np.sqrt(2 * np.pi * arg)
+                    * (1 + 1 / (8 * arg) + 9 / (128 * arg**2) + 225 / (1024 * arg**3))
+                )
+            )
 
     def est_rho(alpha):
         """Estimate mean resultant length (rho)."""
         return np.linalg.norm(np.sum(np.exp(1j * alpha))) / len(alpha)
-
 
     n = len(alpha)
     if n < 4:
@@ -1499,15 +1635,17 @@ def change_point_test(alpha):
     rho = est_rho(alpha)
 
     R1, R2, V = np.zeros(n), np.zeros(n), np.zeros(n)
-    
-    for k in range(1, n):  
-        R1[k-1] = est_rho(alpha[:k]) * k  
-        R2[k-1] = est_rho(alpha[k:]) * (n - k)
 
-        if 2 <= k <= (n - 2): 
-            V[k-1] = (k/n) * phi(R1[k-1] / k) + ((n - k) / n) * phi(R2[k-1] / (n - k))
+    for k in range(1, n):
+        R1[k - 1] = est_rho(alpha[:k]) * k
+        R2[k - 1] = est_rho(alpha[k:]) * (n - k)
 
-    R1[-1] = rho * n 
+        if 2 <= k <= (n - 2):
+            V[k - 1] = (k / n) * phi(R1[k - 1] / k) + ((n - k) / n) * phi(
+                R2[k - 1] / (n - k)
+            )
+
+    R1[-1] = rho * n
     R2[-1] = 0
 
     R_diff = R1 + R2 - rho * n
@@ -1516,50 +1654,57 @@ def change_point_test(alpha):
     rave = np.mean(R_diff)
 
     if n > 3:
-        V = V[1:n-2]
+        V = V[1 : n - 2]
         print(f"V sliced: {V}")
         tmax = np.max(V)
         k_t = np.argmax(V) + 1
-        tave = np.mean(V) 
+        tave = np.mean(V)
     else:
         raise ValueError("Sample size must be at least 4.")
 
-    return pd.DataFrame({
-        "n": [n],
-        "rho": [rho],
-        "rmax": [rmax],
-        "k.r": [k_r],
-        "rave": [rave],
-        "tmax": [tmax],
-        "k.t": [k_t],
-        "tave": [tave],
-    })
+    return pd.DataFrame(
+        {
+            "n": [n],
+            "rho": [rho],
+            "rmax": [rmax],
+            "k.r": [k_r],
+            "rave": [rave],
+            "tmax": [tmax],
+            "k.t": [k_t],
+            "tave": [tave],
+        }
+    )
 
 
-def harrison_kanji_test(alpha: np.ndarray, idp: np.ndarray, idq: np.ndarray, inter: bool = True, fn: Optional[list] = None) -> tuple[tuple[float, float, float], pd.DataFrame]:
+def harrison_kanji_test(
+    alpha: np.ndarray,
+    idp: np.ndarray,
+    idq: np.ndarray,
+    inter: bool = True,
+    fn: Optional[list] = None,
+) -> tuple[tuple[float, float, float], pd.DataFrame]:
     """
     Harrison-Kanji Test (Two-Way ANOVA) for Circular Data.
     """
 
     if fn is None:
-        fn = ['A', 'B']
+        fn = ["A", "B"]
 
     # Ensure data is in column format
     alpha = np.asarray(alpha).flatten()
     idp = np.asarray(idp).flatten()
     idq = np.asarray(idq).flatten()
 
-
     # Number of factor levels
     p = len(np.unique(idp))
     q = len(np.unique(idq))
 
     # Data frame for aggregation
-    df = pd.DataFrame({fn[0]: idp, fn[1]: idq, 'dependent': alpha})
+    df = pd.DataFrame({fn[0]: idp, fn[1]: idq, "dependent": alpha})
     n = len(df)
 
     # Total resultant vector length
-    tr = n * circ_r(df['dependent'])
+    tr = n * circ_r(df["dependent"])
     kk = circ_kappa(tr / n)
 
     # Compute mean resultants per group
@@ -1571,44 +1716,49 @@ def harrison_kanji_test(alpha: np.ndarray, idp: np.ndarray, idq: np.ndarray, int
 
     # Factor A
     gr = df.groupby(fn[0])
-    pn = gr.count()['dependent']
-    pr = gr.agg(circ_r)['dependent'] * pn
-    pm = gr.agg(circ_mean)['dependent']
+    pn = gr.count()["dependent"]
+    pr = gr.agg(circ_r)["dependent"] * pn
+    pm = gr.agg(circ_mean)["dependent"]
 
     # Factor B
     gr = df.groupby(fn[1])
-    qn = gr.count()['dependent']
-    qr = gr.agg(circ_r)['dependent'] * qn
-    qm = gr.agg(circ_mean)['dependent']
+    qn = gr.count()["dependent"]
+    qr = gr.agg(circ_r)["dependent"] * qn
+    qm = gr.agg(circ_mean)["dependent"]
 
     if kk > 2:  # Large kappa approximation
-        eff_1 = sum(pr ** 2 / cn.sum(axis=1)) - tr ** 2 / n
+        eff_1 = sum(pr**2 / cn.sum(axis=1)) - tr**2 / n
         df_1 = p - 1
         ms_1 = eff_1 / df_1
 
-        eff_2 = sum(qr ** 2 / cn.sum(axis=0)) - tr ** 2 / n
+        eff_2 = sum(qr**2 / cn.sum(axis=0)) - tr**2 / n
         df_2 = q - 1
         ms_2 = eff_2 / df_2
 
-        eff_t = n - tr ** 2 / n
+        eff_t = n - tr**2 / n
         df_t = n - 1
         m = cn.values.mean()
 
         if inter:
-            beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk ** 2)))
+            beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk**2)))
 
-            eff_r = n - (cr**2./cn).values.sum()
+            eff_r = n - (cr**2.0 / cn).values.sum()
             df_r = p * q * (m - 1)
             ms_r = eff_r / df_r
 
-            eff_i = (cr**2./cn).values.sum() - sum(qr**2./qn) - sum(pr**2./pn) + tr**2 / n
+            eff_i = (
+                (cr**2.0 / cn).values.sum()
+                - sum(qr**2.0 / qn)
+                - sum(pr**2.0 / pn)
+                + tr**2 / n
+            )
             df_i = (p - 1) * (q - 1)
             ms_i = eff_i / df_i
 
             FI = ms_i / ms_r
             pI = 1 - f.cdf(FI, df_i, df_r)  # `f.cdf` is now unambiguous
         else:
-            eff_r = n - sum(qr**2./qn) - sum(pr**2./pn) + tr**2 / n
+            eff_r = n - sum(qr**2.0 / qn) - sum(pr**2.0 / pn) + tr**2 / n
             df_r = (p - 1) * (q - 1)
             ms_r = eff_r / df_r
 
@@ -1623,17 +1773,22 @@ def harrison_kanji_test(alpha: np.ndarray, idp: np.ndarray, idq: np.ndarray, int
 
     else:  # Small kappa approximation
         rr = iv(1, kk) / iv(0, kk)
-        kappa_factor = 2 / (1 - rr ** 2)  # Renamed `f` to `kappa_factor`
+        kappa_factor = 2 / (1 - rr**2)  # Renamed `f` to `kappa_factor`
 
-        chi1 = kappa_factor * (sum(pr**2./pn) - tr**2 / n)
+        chi1 = kappa_factor * (sum(pr**2.0 / pn) - tr**2 / n)
         df_1 = 2 * (p - 1)
         p1 = 1 - chi2.cdf(chi1, df=df_1)
 
-        chi2_val = kappa_factor * (sum(qr**2./qn) - tr**2 / n)
+        chi2_val = kappa_factor * (sum(qr**2.0 / qn) - tr**2 / n)
         df_2 = 2 * (q - 1)
         p2 = 1 - chi2.cdf(chi2_val, df=df_2)
 
-        chiI = kappa_factor * ((cr**2./cn).values.sum() - sum(pr**2./pn) - sum(qr**2./qn) + tr**2 / n)
+        chiI = kappa_factor * (
+            (cr**2.0 / cn).values.sum()
+            - sum(pr**2.0 / pn)
+            - sum(qr**2.0 / qn)
+            + tr**2 / n
+        )
         df_i = (p - 1) * (q - 1)
         pI = chi2.sf(chiI, df=df_i)
 
@@ -1641,21 +1796,25 @@ def harrison_kanji_test(alpha: np.ndarray, idp: np.ndarray, idq: np.ndarray, int
 
     # Construct ANOVA Table
     if kk > 2:
-        table = pd.DataFrame({
-            'Source': fn + ['Interaction', 'Residual', 'Total'],
-            'DoF': [df_1, df_2, df_i, df_r, df_t],
-            'SS': [eff_1, eff_2, eff_i, eff_r, eff_t],
-            'MS': [ms_1, ms_2, ms_i, ms_r, np.nan],
-            'F': [F1.squeeze(), F2.squeeze(), FI, np.nan, np.nan],
-            'p': list(pval) + [np.nan, np.nan]
-        }).set_index('Source')
+        table = pd.DataFrame(
+            {
+                "Source": fn + ["Interaction", "Residual", "Total"],
+                "DoF": [df_1, df_2, df_i, df_r, df_t],
+                "SS": [eff_1, eff_2, eff_i, eff_r, eff_t],
+                "MS": [ms_1, ms_2, ms_i, ms_r, np.nan],
+                "F": [F1.squeeze(), F2.squeeze(), FI, np.nan, np.nan],
+                "p": list(pval) + [np.nan, np.nan],
+            }
+        ).set_index("Source")
     else:
-        table = pd.DataFrame({
-            'Source': fn + ['Interaction'],
-            'DoF': [df_1, df_2, df_i],
-            'chi2': [chi1.squeeze(), chi2_val.squeeze(), chiI.squeeze()],
-            'p': pval
-        }).set_index('Source')
+        table = pd.DataFrame(
+            {
+                "Source": fn + ["Interaction"],
+                "DoF": [df_1, df_2, df_i],
+                "chi2": [chi1.squeeze(), chi2_val.squeeze(), chiI.squeeze()],
+                "p": pval,
+            }
+        ).set_index("Source")
 
     return pval, table
 
@@ -1692,7 +1851,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
       - **Small `r̄` (< 0.45)**: Uses `arcsin` transformation.
       - **Moderate `r̄` (0.45 - 0.7)**: Uses `asinh` transformation.
       - **Large `r̄` (> 0.7)**: Uses Bartlett-type test (log-likelihood method).
-    
+
     References
     ----------
     - Jammalamadaka & SenGupta (2001), Section 5.4.
@@ -1725,21 +1884,23 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
     if r_bar_all < 0.45:
         # Small `r̄`: arcsin transformation
         ws = 4 * (ns - 4) / 3
-        g1s = np.arcsin(np.sqrt(3/8) * 2 * r_bars)
-        chi_square_stat = np.sum(ws * g1s**2) - (np.sum(ws * g1s)**2 / np.sum(ws))
+        g1s = np.arcsin(np.sqrt(3 / 8) * 2 * r_bars)
+        chi_square_stat = np.sum(ws * g1s**2) - (np.sum(ws * g1s) ** 2 / np.sum(ws))
 
     elif 0.45 <= r_bar_all <= 0.7:
         # Moderate `r̄`: asinh transformation
         ws = (ns - 3) / 0.798
         g2s = np.arcsinh((r_bars - 1.089) / 0.258)
-        chi_square_stat = np.sum(ws * g2s**2) - (np.sum(ws * g2s)**2 / np.sum(ws))
+        chi_square_stat = np.sum(ws * g2s**2) - (np.sum(ws * g2s) ** 2 / np.sum(ws))
 
     else:
         # Large `r̄`: Bartlett-type test
         vs = ns - 1
         v = N - k
         d = 1 / (3 * (k - 1)) * (np.sum(1 / vs) - 1 / v)
-        chi_square_stat = (1 / (1 + d)) * (v * np.log((N - np.sum(Rs)) / v) - np.sum(vs * np.log((ns - Rs) / vs)))
+        chi_square_stat = (1 / (1 + d)) * (
+            v * np.log((N - np.sum(Rs)) / v) - np.sum(vs * np.log((ns - Rs) / vs))
+        )
 
     # Compute p-value
     df = k - 1
@@ -1752,7 +1913,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
         "rho_all": r_bar_all,
         "df": df,
         "statistic": chi_square_stat,
-        "p_value": p_value
+        "p_value": p_value,
     }
 
     # Print results if verbose is enabled
@@ -1769,6 +1930,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
         print("------------------------------------------------------\n")
 
     return result
+
 
 def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
     """
@@ -1834,7 +1996,7 @@ def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict
         "common_median": common_median,
         "test_statistic": P,
         "p_value": p_value,
-        "reject": reject
+        "reject": reject,
     }
 
     # Print results if verbose is enabled
