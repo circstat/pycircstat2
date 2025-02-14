@@ -45,22 +45,23 @@
 
 #### Multi-Sample Tests for Significance
 
-| Feature                         | H0                                            | PyCircStat2            | PyCircStat        | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
-| ------------------------------- | --------------------------------------------- | ---------------------- | ----------------- | ----------------- | ----------------- | ---------------------- |
-| **Mean Direction**              |                                               |                        |                   |                   |                   |                        |
-| Circular Analysis of Variance   | $\mu_1 = \dots = \mu_n$                       | `circ_anova`           | -                 | -                 | -                 | `aov.circular`         |
-| Watson-Williams Test [^one-way] | $\mu_1 = \dots = \mu_n$                       | `watson_williams_test` | `watson_williams` | `circ_wwtest`     | -                 | `watson.williams.test` |
-| Harrison-Kanji Test[^two-way]   | $\mu_1 = \dots = \mu_n$                       | `harrison_kanji_test`  | `hktest`          | `circ_hktest`     | -                 | -                      |
-| **Median Direction**            |                                               |                        |                   |                   |                   |                        |
-| Common Median Test              | $\tilde{\theta}_1 = \dots = \tilde{\theta}_n$ | `common_median_test`   | `cmtest`          | `circ_cmtest`     | -                 | -                      |
-| **Concentration**               |                                               |                        |                   |                   |                   |                        |
-| Concentration Test (F-test)     | $\kappa_1 = \dots = \kappa_n$                 | `concentration_test`   | -                 | `circ_ktest`      | -                 | -                      |
-| Equal Kappa Test                | $\kappa_1 = \dots = \kappa_n$                 | `equal_kappa_test`     | -                 | -                 | -                 | `equal.kappa.test`     |
-| **Distribution Homogeneity**    |                                               |                        |                   |                   |                   |                        |
-| Watson's U2 Test                | $F_1 = F_2$ [^F]                              | `watson_u2_test`       | -                 | -                 | `watson.two`      | `watson.two.test`      |
-| Wallraff Test                   | $F_1 = F_2$                                   | `wallraff_test`        | -                 | -                 | -                 | `wallraff.test`        |
-| Wheeler-Watson Test             | $F_1 = F_2$                                   | `wheeler_watson_test`  | -                 | -                 | -                 | `watson.wheeler.test`  |
-| Rao's Tests for Homogeneity     | $F_1 = F_2$                                   | `rao_homogeneity_test` | -                 | -                 | `rao.homogeneity` | `rao.test`             |
+| Feature                         | H0                                            | PyCircStat2                  | PyCircStat        | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
+| ------------------------------- | --------------------------------------------- | ---------------------------- | ----------------- | ----------------- | ----------------- | ---------------------- |
+| **Mean Direction**              |                                               |                              |                   |                   |                   |                        |
+| Circular Analysis of Variance   | $\mu_1 = \dots = \mu_n$                       | `circ_anova`                 | -                 | -                 | -                 | `aov.circular`         |
+| Watson-Williams Test [^one-way] | $\mu_1 = \dots = \mu_n$                       | `watson_williams_test`       | `watson_williams` | `circ_wwtest`     | -                 | `watson.williams.test` |
+| Harrison-Kanji Test[^two-way]   | $\mu_1 = \dots = \mu_n$                       | `harrison_kanji_test`        | `hktest`          | `circ_hktest`     | -                 | -                      |
+| **Median Direction**            |                                               |                              |                   |                   |                   |                        |
+| Common Median Test              | $\tilde{\theta}_1 = \dots = \tilde{\theta}_n$ | `common_median_test`         | `cmtest`          | `circ_cmtest`     | -                 | -                      |
+| **Concentration**               |                                               |                              |                   |                   |                   |                        |
+| Concentration Test (F-test)     | $\kappa_1 = \dots = \kappa_n$                 | `concentration_test`         | -                 | `circ_ktest`      | -                 | -                      |
+| Equal Kappa Test                | $\kappa_1 = \dots = \kappa_n$                 | `equal_kappa_test`           | -                 | -                 | -                 | `equal.kappa.test`     |
+| **Distribution Homogeneity**    |                                               |                              |                   |                   |                   |                        |
+| Watson's U2 Test                | $F_1 = F_2$ [^F]                              | `watson_u2_test`             | -                 | -                 | `watson.two`      | `watson.two.test`      |
+| Wallraff Test                   | $F_1 = F_2$                                   | `wallraff_test`              | -                 | -                 | -                 | `wallraff.test`        |
+| Wheeler-Watson Test             | $F_1 = F_2$                                   | `wheeler_watson_test`        | -                 | -                 | -                 | `watson.wheeler.test`  |
+| Angular Randomization Test      | $F_1 = F_2$                                   | `angular_randomisation_test` | -                 | -                 | -                 | -                      |
+| Rao's Tests for Homogeneity     | $F_1 = F_2$                                   | `rao_homogeneity_test`       | -                 | -                 | `rao.homogeneity` | `rao.test`             |
 
 #### Goodness-of-fit Tests
 
