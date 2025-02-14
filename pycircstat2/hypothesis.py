@@ -16,6 +16,7 @@ from .descriptive import (
     circ_median,
     circ_r,
     circ_range,
+    circ_pairdist,
 )
 from .utils import A1inv, angmod, angular_distance, significance_code
 
@@ -994,28 +995,6 @@ def angular_randomisation_test(
     International Journal of Nonlinear Analysis and Applications, 13(1), 2703-2711.
     """
 
-    def compute_geodesic_distance(phi: np.ndarray, psi: np.ndarray) -> np.ndarray:
-        """
-        Compute the sum of all pairwise geodesic distances between two sets of angles.
-
-        Args:
-            phi (np.ndarray): First set of angles in radians
-            psi (np.ndarray): Second set of angles in radians
-
-        Returns:
-            float: Sum of all pairwise geodesic distances
-        """
-        # Reshape arrays for broadcasting
-        phi_reshaped = phi.reshape(-1, 1)  # n x 1
-        psi_reshaped = psi.reshape(1, -1)  # 1 x m
-
-        # Compute absolute angular differences following the formula:
-        # D(φᵢ,ψⱼ) = π - |π - |φᵢ - ψⱼ||
-        distances = np.pi - np.abs(np.pi - np.abs(phi_reshaped - psi_reshaped))
-
-        # Return sum of all distances
-        return np.sum(distances)
-
     def art_statistic(S1: np.ndarray, S2: np.ndarray) -> float:
         """
         Compute the Angular Randomisation Test (ART) statistic for two groups of circular data.
@@ -1035,7 +1014,7 @@ def angular_randomisation_test(
         scaling_factor = np.sqrt(n * m / (n + m))
 
         # Compute sum of all pairwise geodesic distances
-        total_distance = compute_geodesic_distance(S1, S2)
+        total_distance = circ_pairdist(S1, S2, metric="geodesic", return_sum=True)
 
         # Scale the total distance and return
         return scaling_factor * total_distance

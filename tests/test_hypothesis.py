@@ -225,7 +225,12 @@ def test_watson_test():
 
 
 def test_angular_randomisation_test():
-    pass
+    np.random.seed(42)
+    alpha1 = Circular(np.random.vonmises(mu=0, kappa=3, size=10), unit="radian")
+    alpha2 = Circular(np.random.vonmises(mu=0, kappa=3, size=50), unit="radian")
+
+    observed_stat, p_value = angular_randomisation_test([alpha1, alpha2])
+    assert p_value > 0.05, "Expected non-significant p-value"
 
 
 def test_rao_spacing_test():
