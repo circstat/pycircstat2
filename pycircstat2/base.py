@@ -458,25 +458,15 @@ class Circular:
 
         Examples
         --------
-        #### Basic scatter plot
-
         ```
-        data = [30, 60, 90, 120, 150]
-        circ = Circular(data, unit="degree")
-        circ.plot(config={"scatter": {"color" : "blue", "size": 15}})
-        ```
+        from pycircstat2 import load_data, Circular
 
-        #### Rose diagram with density
-
-        ```
-        circ.plot(plot_rose=True, plot_density=True, bins=18)
+        data = load_data("B3", source="fisher")["θ"].values
+        c = Circular(data, unit="degree")
+        c.plot(config={"scatter": {"color" : "blue", "size": 15}})
         ```
 
-        #### Customized plot with radial grid and legend
-
-        ```
-        circ.plot(plot_grid=True, plot_spine=True, plot_mean=True)
-        ```
+        See docstring of `circ_plot` for more examples and customization options.
         """
         ax = circ_plot(self, ax=ax, config=config)
 
