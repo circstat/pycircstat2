@@ -30,6 +30,7 @@ nav:
           - Regression: reference/regression.md
           - Distributions: reference/distributions.md
           - Clustering: reference/clustering.md
+          - Visualization: reference/visualization.md
           - Utilities: reference/utils.md
 
 markdown_extensions:

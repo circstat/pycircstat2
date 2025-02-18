@@ -11,7 +11,7 @@ from pycircstat2.descriptive import (
 
 
 # Recursive function to merge user config into defaults
-def merge_dicts(defaults, overrides):
+def _merge_dicts(defaults, overrides):
     """Recursively merge overrides into defaults without modifying the originals.
     
     - If `overrides[key] == False`: The feature is explicitly disabled.
@@ -96,6 +96,93 @@ def circ_plot(
     config : dict, optional
         Configuration dictionary that overrides defaults.
 
+        - **"figsize"** : tuple, default=(5, 5)  
+            Size of the figure in inches.
+        
+        - **"projection"** : str, default="polar"  
+            Type of projection used for the plot.
+
+        - **"grid"** : bool, default=True  
+            Whether to display grid lines.
+
+        - **"spine"** : bool, default=False  
+            Whether to show the polar spine.
+
+        - **"axis"** : bool, default=True  
+            Whether to display the axis.
+
+        - **"outward"** : bool, default=True  
+            Determines whether scatter points are plotted outward or inward.
+
+        - **"zero_location"** : str, default="N"  
+            The reference direction for 0 degrees (e.g., "N", "E", "S", "W").
+
+        - **"clockwise"** : int, default=-1  
+            Direction of angle increase: -1 for clockwise, 1 for counterclockwise.
+
+        - **"radius"** : dict  
+            Controls radial axis settings:
+            - **"ticks"** : list, default=[0, 1]  
+                Radial tick values.
+            - **"lim_max"** : float or None, default=None  
+                Maximum radial axis limit.
+
+        - **"scatter"** : dict  
+            Controls scatter plot settings:
+            - **"marker"** : str, default="o"  
+                Marker style for scatter points.
+            - **"color"** : str, default="black"  
+                Color of scatter points.
+            - **"size"** : int, default=10  
+                Size of scatter markers.
+            - **"r_start"** : float, default=1  
+                Starting radius for scatter points.
+
+        - **"rose"** : dict  
+            Controls rose diagram settings:
+            - **"bins"** : int, default=12  
+                Number of bins for histogram.
+            - **"counts"** : bool, default=False  
+                Whether to display counts on bars.
+
+        - **"density"** : dict or bool  
+            Controls density estimation settings:
+            - **If False**, disables density plotting.
+            - **If True**, uses default settings.
+            - **If dict**, allows customization:
+                - **"method"** : str, default="nonparametric"  
+                    Method for density estimation ("nonparametric" or "MoVM").
+                - **"color"** : str, default="black"  
+                    Color of the density line.
+                - **"linestyle"** : str, default="-"  
+                    Line style of the density plot.
+
+        - **"mean"** : dict or bool  
+            Controls mean direction plotting:
+            - **If False**, disables mean plot.
+            - **If True**, uses default settings.
+            - **If dict**, allows customization:
+                - **"color"** : str, default="black"  
+                    Color of the mean line.
+                - **"linestyle"** : str, default="-"  
+                    Line style of the mean plot.
+                - **"kind"** : str, default="arrow"  
+                    Type of mean representation.
+                - **"ci"** : bool, default=True  
+                    Whether to display mean confidence intervals.
+
+        - **"median"** : dict or bool  
+            Controls median direction plotting:
+            - **If False**, disables median plot.
+            - **If True**, uses default settings.
+            - **If dict**, allows customization:  
+                - **"color"** : str, default="black"  
+                    Color of the median line.
+                - **"linestyle"** : str, default="dotted"  
+                    Line style of the median plot.
+                - **"ci"** : bool, default=True  
+                    Whether to display median confidence intervals.
+
     Returns
     -------
     ax : matplotlib.axes._axes.Axes
@@ -103,7 +190,7 @@ def circ_plot(
     """
 
     # Merge user config with defaults recursively
-    config = merge_dicts(DEFAULT_CIRC_PLOT_CONFIG, config or {})
+    config = _merge_dicts(DEFAULT_CIRC_PLOT_CONFIG, config or {})
     
     # check axes
     if ax is None:
