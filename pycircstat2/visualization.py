@@ -28,7 +28,7 @@ def _merge_dicts(defaults, overrides):
             # Merge and ensure False values are correctly overridden
             for sub_key, sub_value in value.items():
                 if isinstance(sub_value, dict) and isinstance(merged[key].get(sub_key), dict):
-                    merged[key][sub_key] = merge_dicts(merged[key][sub_key], sub_value)
+                    merged[key][sub_key] = _merge_dicts(merged[key][sub_key], sub_value)
                 else:
                     merged[key][sub_key] = sub_value  # Overwrite
         else:
