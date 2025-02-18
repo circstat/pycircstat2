@@ -303,7 +303,6 @@ def circ_plot(
             bottom=0,
             zorder=2,
         )
-        print(config["rose"]["counts"])
         if config["rose"]["counts"]:
             
             for i, v in enumerate(w):
