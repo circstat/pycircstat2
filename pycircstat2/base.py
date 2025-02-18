@@ -428,7 +428,7 @@ class Circular:
 
         return self.__repr__()
 
-    def plot(self, ax=None, kind=None, **kwargs):
+    def plot(self, ax=None, config=None):
         """
         Visualize circular data.
 
@@ -440,32 +440,9 @@ class Circular:
         ax : matplotlib.axes._axes.Axes, optional
             The matplotlib Axes object where the plot will be drawn. If None, a new Axes object
             is created. Default is None.
-
-        kind : str or None, optional
-            Deprecated. Use `kwargs` for customizing specific plot types instead. Default is None.
-
-        **kwargs : dict, optional
-            Additional parameters for customizing the plot. Examples include:
-
-            - `outward` (bool): Whether scatter points radiate outward. Default is True.
-            - `figsize` (tuple): Size of the figure. Default is (5, 5).
-            - `projection` (str): Projection type, typically "polar". Default is "polar".
-            - `marker` (str): Marker style for scatter points. Default is "o".
-            - `marker_color` (str): Color of scatter points. Default is "black".
-            - `marker_size` (int): Size of scatter points. Default is 10.
-            - `bins` (int): Number of bins for the rose diagram. Default is 12.
-            - `plot_density` (bool): Whether to plot density estimation. Default is True.
-            - `plot_rose` (bool): Whether to plot a rose diagram. Default is True.
-            - `plot_mean` (bool): Whether to plot the angular mean. Default is True.
-            - `plot_mean_ci` (bool): Whether to plot confidence intervals for the angular mean. Default is True.
-            - `plot_median` (bool): Whether to plot the angular median. Default is True.
-            - `plot_median_ci` (bool): Whether to plot confidence intervals for the angular median. Default is True.
-            - `zero_location` (str): Zero location on the polar plot ("N", "E", "S", "W"). Default is "N".
-            - `clockwise` (int): Direction of the polar axis (-1 for clockwise, 1 for counterclockwise). Default is -1.
-            - `r_max_scatter` (float): Maximum radius for scatter points. Default is 1.
-            - `rticks` (list): Radial ticks for the polar plot. Default is [0, 1].
-            - `rlim_max` (float): Maximum radius for the plot. Default is None.
-
+        config: dict, optional
+            Configuration dictionary that overrides defaults.
+        
         Returns
         -------
         ax : matplotlib.axes._axes.Axes
@@ -486,7 +463,7 @@ class Circular:
         ```
         data = [30, 60, 90, 120, 150]
         circ = Circular(data, unit="degree")
-        circ.plot(marker_color="blue", marker_size=15)
+        circ.plot(config={"scatter": {"color" : "blue", "size": 15}})
         ```
 
         #### Rose diagram with density
@@ -501,7 +478,7 @@ class Circular:
         circ.plot(plot_grid=True, plot_spine=True, plot_mean=True)
         ```
         """
-        ax = circ_plot(self, ax=ax, **kwargs)
+        ax = circ_plot(self, ax=ax, config=config)
 
 
 class Axial(Circular):

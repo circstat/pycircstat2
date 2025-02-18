@@ -1,3 +1,5 @@
+import copy
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import ticker
@@ -8,69 +10,106 @@ from pycircstat2.descriptive import (
 )
 
 
+# Recursive function to merge user config into defaults
+def merge_dicts(defaults, overrides):
+    """Recursively merge overrides into defaults without modifying the originals.
+    
+    - If `overrides[key] == False`: The feature is explicitly disabled.
+    - If `overrides[key] == True`: The feature is enabled with default settings.
+    - If `overrides[key]` is a dictionary, it merges with the defaults, **overwriting any `False` values**.
+    """
+    merged = copy.deepcopy(defaults)  # Ensure defaults remain unchanged
+    for key, value in overrides.items():
+        if value is False:  # Explicitly disable the feature
+            merged[key] = False  
+        elif value is True:  # Enable feature with default settings
+            merged[key] = copy.deepcopy(defaults[key])
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            # Merge and ensure False values are correctly overridden
+            for sub_key, sub_value in value.items():
+                if isinstance(sub_value, dict) and isinstance(merged[key].get(sub_key), dict):
+                    merged[key][sub_key] = merge_dicts(merged[key][sub_key], sub_value)
+                else:
+                    merged[key][sub_key] = sub_value  # Overwrite
+        else:
+            merged[key] = value  # Override with new value
+    return merged
+
+
+DEFAULT_CIRC_PLOT_CONFIG = {
+
+    "figsize": (5, 5),
+    "projection": "polar",
+    "grid": True,
+    "spine": False,
+    "axis": True,
+    "outward": True,
+    "zero_location": "N",
+    "clockwise": -1,
+    "radius": {       
+        "ticks": [0, 1],
+        "lim_max": None,
+    },
+    "scatter": {
+        "marker": "o",
+        "color": "black",
+        "size": 10,
+        "r_start": 1,
+        },
+    "rose": {
+        "bins": 12,
+        "counts": False,
+    },
+    "density": {
+        "method": "nonparametric",
+        "color": "black",
+        "linestyle": "-",
+    },
+    "mean": {
+        "color": "black",
+        "linestyle": "-",
+        "kind": "arrow",
+        "ci": True,
+    },
+    "median": {
+        "color": "black",
+        "linestyle": "dotted",
+        "ci": True,
+    },
+}
+
+
 def circ_plot(
     circ_data,
     ax=None,
-    **kwargs,
+    config=None,
 ):
 
-    # process kwargs and assign defaults
-    outward = kwargs.pop("outward", True)
-    figsize = kwargs.pop("figsize", (5, 5))
-    projection = kwargs.pop("projection", "polar")
-    marker = kwargs.pop("marker", "o")
-    marker_color = kwargs.pop("marker_color", "black")
-    marker_size = kwargs.pop("marker_size", 10)
+    """Plots circular data with various visualization options.
 
-    bins = kwargs.pop("bins", 12)
+    Parameters
+    ----------
+    circ_data : Circular
+        A Circular object containing the data to plot.
+    ax : matplotlib.axes._axes.Axes, optional
+        The axis to plot on. If None, a new figure is created.
+    config : dict, optional
+        Configuration dictionary that overrides defaults.
 
-    plot_counts = kwargs.pop("plot_counts", False)
-    # plot_rlabel = kwargs.pop("plot_rlabel", False)
-    plot_grid = kwargs.pop("plot_grid", True)
-    plot_spine = kwargs.pop("plot_spine", False)
-    plot_axis = kwargs.pop("plot_axis", True)
+    Returns
+    -------
+    ax : matplotlib.axes._axes.Axes
+        The matplotlib Axes object containing the plot.
+    """
 
-    plot_density = kwargs.pop("plot_density", True)
-    plot_rose = kwargs.pop("plot_rose", True)
-
-    plot_mean = kwargs.pop("plot_mean", True)
-    if np.isclose(circ_data.r, 0):
-        plot_mean = False
-        # print("Mean is not plotted because `r` is close to 0")
-    mean_kwargs = kwargs.pop(
-        "mean_kwargs", {"color": "black", "linestyle": "-", "kind": "arrow"}
-    )
-
-    plot_mean_ci = kwargs.pop("plot_mean_ci", True)
-    if not hasattr(circ_data, "mean_ub") or np.isnan(circ_data.mean_ub):
-        plot_mean_ci = False
-        # print("Mean CI is not plotted because it is not computed")
-
-    plot_median = kwargs.pop("plot_median", True)
-    if plot_median and np.isnan(circ_data.median):
-        plot_median = False
-        # print("Median is not plotted because `median` is nan")
-
-    median_kwargs = kwargs.pop(
-        "median_kwargs", {"color": "black", "linestyle": "dotted"}
-    )
-
-    plot_median_ci = kwargs.pop("plot_median_ci", True)
-    if not hasattr(circ_data, "median_ub") or np.isnan(circ_data.median_ub):
-        plot_median_ci = False
-        # print("Median CI is not plotted because it is not computed.")
-
-    zero_location = kwargs.pop("zero_location", "N")
-    clockwise = kwargs.pop("clockwise", -1)
-    r_max_scatter = kwargs.pop("r_max_scatter", 1)
-    rticks = kwargs.pop("rticks", [0, 1])
-    rlim_max = kwargs.pop("rlim_max", None)
-
+    # Merge user config with defaults recursively
+    config = merge_dicts(DEFAULT_CIRC_PLOT_CONFIG, config or {})
+    
     # check axes
     if ax is None:
         fig, ax = plt.subplots(
-            figsize=figsize,
-            subplot_kw={"projection": projection},
+            figsize=config["figsize"],
+            subplot_kw={"projection": config["projection"]},
             layout="constrained",
         )
 
@@ -81,10 +120,10 @@ def circ_plot(
         alpha, counts = np.unique(circ_data.alpha.round(3), return_counts=True)
         alpha = np.repeat(alpha, counts)
 
-        if outward:
+        if config["outward"]:
             radii = np.hstack(
                 [
-                    r_max_scatter
+                    config["scatter"]["r_start"]
                     + 0.05
                     + np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
                     for f in counts
@@ -93,26 +132,28 @@ def circ_plot(
         else:
             radii = np.hstack(
                 [
-                    r_max_scatter
+                    config["scatter"]["r_start"]
                     - 0.05
                     - np.arange(0, 0.05 * int(f), 0.05)[: int(f)]
                     for f in counts
                 ]
             )
         ax.scatter(
-            alpha, radii, color=marker_color, marker=marker, s=marker_size
+            alpha, radii, 
+            marker=config["scatter"]["marker"], 
+            color=config["scatter"]["color"], 
+            s=config["scatter"]["size"]
         )
 
         # plot density
-        if plot_density:  # and not np.isclose(circ_data.r, 0):
-            kwargs_density = kwargs.pop("kwargs_density", {})
+        if config["density"]:  # and not np.isclose(circ_data.r, 0):
 
-            density_method = kwargs_density.pop("method", "nonparametric")
-            density_color = kwargs_density.pop("color", "black")
-            density_linestyle = kwargs_density.pop("linestyle", "-")
+            density_method = config["density"].get("method", "nonparametric")
+            density_color = config["density"].get("color", "black")
+            density_linestyle = config["density"].get("linestyle", "-")
 
             if density_method == "nonparametric":
-                h0 = kwargs_density.pop(
+                h0 = config["density"].get(
                     "h0", compute_smooth_params(circ_data.r, circ_data.n)
                 )
                 x, f = nonparametric_density_estimation(circ_data.alpha, h0)
@@ -124,7 +165,7 @@ def circ_plot(
 
             else:
                 raise ValueError(
-                    f"`{kwargs_density['method']}` in `kwargs_density` is not supported."
+                    f"`{config["density"]["method"]}` in `kwargs_density` is not supported."
                 )
 
             # save density to circ_data
@@ -137,23 +178,23 @@ def circ_plot(
                 color=density_color,
                 linestyle=density_linestyle,
             )
-            if rlim_max is None:
+            if config["radius"]["lim_max"] is None:
                 ax.set_ylim(0, f_.max())
             else:
-                ax.set_ylim(0, rlim_max)
+                ax.set_ylim(0, config["radius"]["lim_max"])
         else:
-            if rlim_max is None:
+            if config["radius"]["lim_max"] is None:
                 ax.set_ylim(0, radii.max() + 0.025)
             else:
-                ax.set_ylim(0, rlim_max)
+                ax.set_ylim(0, config["radius"]["lim_max"])
 
     # plot rose diagram
-    if plot_rose:
+    if config["rose"]:
 
         if not circ_data.grouped:
             alpha = circ_data.alpha
             w, beta = np.histogram(
-                alpha, bins=bins, range=(0, 2 * np.pi)
+                alpha, bins=config["rose"]["bins"], range=(0, 2 * np.pi)
             )  # np.histogram return bin edges
             beta = 0.5 * (beta[:-1] + beta[1:])
         else:
@@ -163,7 +204,7 @@ def circ_plot(
         w_sqrt = np.sqrt(w)
         w_norm = w_sqrt / w_sqrt.max()
 
-        width = kwargs.pop("width", 2 * np.pi / len(beta))
+        width = config.get("width", 2 * np.pi / len(beta))
 
         bars = ax.bar(
             beta,
@@ -175,7 +216,9 @@ def circ_plot(
             bottom=0,
             zorder=2,
         )
-        if plot_counts:
+        print(config["rose"]["counts"])
+        if config["rose"]["counts"]:
+            
             for i, v in enumerate(w):
 
                 angle = rotation = beta[i].round(3)
@@ -197,89 +240,89 @@ def circ_plot(
                         color="black",
                     )
 
-        if circ_data.grouped and plot_density:
+        if circ_data.grouped and config["density"]:
             x = np.linspace(0, 2 * np.pi, 100)
             f = circ_data.mixture_opt.predict_density(x=x, unit="radian") + 1
             ax.plot(x, f, color="black", linestyle="-")
-            if rlim_max is None:
+            if config["rlim_max"] is None:
                 ax.set_ylim(0, f.max())
             else:
-                ax.set_ylim(0, rlim_max)
+                ax.set_ylim(0, config["rlim_max"])
     else:
         w = circ_data.w
-        rticks = [1]  # overwrite
+        config["radius"]["ticks"] = [1]  # overwrite
 
-    if plot_mean:
+    if config["mean"]:
 
         radius = circ_data.r
 
         ax.plot(
             [0, circ_data.mean],
             [0, radius],
-            color=mean_kwargs.pop("color", "black"),
-            ls=mean_kwargs.pop("linestyle", "-"),
+            color=config["mean"].get("color", "black"),
+            ls=config["mean"].get("linestyle", "-"),
             label="mean",
             zorder=5,
         )
 
-    if plot_mean and plot_mean_ci:
+        if config["mean"]["ci"]:
 
-        if circ_data.mean_lb < circ_data.mean_ub:
-            x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub, num=50)
-        else:
-            x1 = np.linspace(
-                circ_data.mean_lb, circ_data.mean_ub + 2 * np.pi, num=50
+            if circ_data.mean_lb < circ_data.mean_ub:
+                x1 = np.linspace(circ_data.mean_lb, circ_data.mean_ub, num=50)
+            else:
+                x1 = np.linspace(
+                    circ_data.mean_lb, circ_data.mean_ub + 2 * np.pi, num=50
+                )
+
+            # plot arc
+            ax.plot(
+                x1,
+                np.ones_like(x1) * radius,
+                ls="-",
+                color="black",
+                zorder=5,
+                lw=2,
             )
+            # plot arc cap
+            ax.errorbar(x1[0], radius, yerr=0.03, capsize=0, color="black", lw=2)
+            ax.errorbar(x1[-1], radius, yerr=0.03, capsize=0, color="black", lw=2)
 
-        # plot arc
-        ax.plot(
-            x1,
-            np.ones_like(x1) * radius,
-            ls="-",
-            color="black",
-            zorder=5,
-            lw=2,
-        )
-        # plot arc cap
-        ax.errorbar(x1[0], radius, yerr=0.03, capsize=0, color="black", lw=2)
-        ax.errorbar(x1[-1], radius, yerr=0.03, capsize=0, color="black", lw=2)
-
-    if plot_median:
+    if config["median"]:
         ax.plot(
             [0, circ_data.median],
             [0, 0.95],
-            color=median_kwargs.pop("color", "black"),
-            ls=median_kwargs.pop("linestyle", "dotted"),
+            color=config["median"].get("color", "black"),
+            ls=config["median"].get("linestyle", "dotted"),
             label="median",
             zorder=5,
         )
 
-    if plot_median and plot_median_ci:
-        if circ_data.median_lb < circ_data.median_ub:
-            x1 = np.linspace(circ_data.median_lb, circ_data.median_ub, num=50)
-        else:
-            x1 = np.linspace(
-                circ_data.median_lb, circ_data.median_ub + 2 * np.pi, num=50
+        if config["median"]["ci"]:
+            if circ_data.median_lb < circ_data.median_ub:
+                x1 = np.linspace(circ_data.median_lb, circ_data.median_ub, num=50)
+            else:
+                x1 = np.linspace(
+                    circ_data.median_lb, circ_data.median_ub + 2 * np.pi, num=50
+                )
+            # plot arc
+            ax.plot(
+                x1,
+                np.ones_like(x1) - 0.05,
+                ls="dotted",
+                color="black",
+                zorder=5,
+                lw=2,
             )
-        # plot arc
-        ax.plot(
-            x1,
-            np.ones_like(x1) - 0.05,
-            ls="dotted",
-            color="black",
-            zorder=5,
-            lw=2,
-        )
-        # plot arc cap
-        ax.errorbar(x1[0], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
-        ax.errorbar(x1[-1], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
+            # plot arc cap
+            ax.errorbar(x1[0], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
+            ax.errorbar(x1[-1], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
 
-    ax.set_theta_zero_location(zero_location)
-    ax.set_theta_direction(clockwise)
-    ax.grid(plot_grid)
-    ax.axis(plot_axis)
-    ax.spines["polar"].set_visible(plot_spine)
-    ax.set_rgrids(rticks, ["" for _ in range(len(rticks))], fontsize=16)
+    ax.set_theta_zero_location(config["zero_location"])
+    ax.set_theta_direction(config["clockwise"])
+    ax.grid(config["grid"])
+    ax.axis(config["axis"])
+    ax.spines["polar"].set_visible(config["spine"])
+    ax.set_rgrids(config["radius"]["ticks"], ["" for _ in range(len(config["radius"]["ticks"]))], fontsize=16)
 
     if circ_data.unit == "hour":
         position_major = np.arange(0, 2 * np.pi, 2 * np.pi / 8)
@@ -293,7 +336,7 @@ def circ_plot(
     gridlines[-1].set_color("k")
     gridlines[-1].set_linewidth(1)
 
-    if plot_mean or plot_median:
+    if config["median"] or config["mean"]:
         ax.legend(frameon=False)
 
     return ax
