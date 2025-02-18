@@ -252,7 +252,7 @@ def circ_plot(
 
             else:
                 raise ValueError(
-                    f"`{config["density"]["method"]}` in `kwargs_density` is not supported."
+                    f"`{config['density']['method']}` in `density` is not supported."
                 )
 
             # save density to circ_data
