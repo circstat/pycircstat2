@@ -134,13 +134,13 @@ class MovM:
 
         return m, kappa, p
 
-    def fit(self, x: np.ndarray, verbose: Union[bool, int] = 0):
+    def fit(self, X: np.ndarray, verbose: Union[bool, int] = 0):
         """
         Fits the mixture of von Mises model to the given data using the EM algorithm.
 
         Parameters
         ----------
-        x : np.ndarray
+        X : np.ndarray
             Input data points in degrees or radians.
         verbose : bool or int, default=0
             If True, prints progress every iteration. If an integer, prints every `verbose` iterations.
@@ -156,22 +156,22 @@ class MovM:
         np.random.seed(self.random_seed)
 
         # meta
-        self.x = x
-        self.x_rad = x_rad = (
-            x if self.unit == "radian" else data2rad(x, self.n_intervals)
+        self.data = X
+        self.alpha = alpha = (
+            X if self.unit == "radian" else data2rad(X, self.n_intervals)
         )
-        self.n = n = len(x)
+        self.n = n = len(X)
 
         # init
-        m, kappa, p = self._initialize(x_rad, self.n_clusters)
+        m, kappa, p = self._initialize(alpha, self.n_clusters)
 
         # EM
         if verbose:
-            print(f"Iter".ljust(10) + f"nLL")
+            print("Iter".ljust(10) + "nLL")
         self.nLL = np.ones(self.n_iters) * np.nan
         for i in range(self.n_iters):
             # E step
-            gamma = self.compute_gamma(x_rad=self.x_rad, p=p, m=m, kappa=kappa)
+            gamma = self.compute_gamma(alpha=self.alpha, p=p, m=m, kappa=kappa)
             gamma_normed = gamma / np.sum(gamma, axis=0)
 
             # M step
@@ -184,7 +184,7 @@ class MovM:
                 np.array,
                 zip(
                     *[
-                        circ_mean_and_r(alpha=x_rad, w=gamma_normed[i])
+                        circ_mean_and_r(alpha=alpha, w=gamma_normed[i])
                         for i in range(self.n_clusters)
                     ]
                 ),
@@ -223,13 +223,13 @@ class MovM:
         self.p_ = p  # cluster probabilities
         self.kappa_ = kappa  # cluster kappas
         self.gamma_ = self.compute_gamma(
-            x_rad=self.x_rad, p=p, m=m, kappa=kappa
+            alpha=self.alpha, p=p, m=m, kappa=kappa
         )  # update gamma one last time
         self.labels_ = self.gamma_.argmax(axis=0)
 
     def compute_gamma(
         self,
-        x_rad: np.ndarray,
+        alpha: np.ndarray,
         p: np.ndarray,
         m: np.ndarray,
         kappa: np.ndarray,
@@ -244,7 +244,7 @@ class MovM:
         """
         gamma = np.vstack(
             [
-                p[i] * vonmises.pdf(x_rad, kappa=kappa[i], mu=m[i])
+                p[i] * vonmises.pdf(alpha, kappa=kappa[i], mu=m[i])
                 for i in range(self.n_clusters)
             ]
         )
@@ -311,10 +311,10 @@ class MovM:
         if x is None:
             x = np.linspace(0, 2 * np.pi, 100)
 
-        x_rad = x if unit == "radian" else data2rad(x, n_intervals)
+        alpha = x if unit == "radian" else data2rad(x, n_intervals)
 
         d = [
-            self.p_[i] * vonmises.pdf(x_rad, kappa=self.kappa_[i], mu=self.m_[i])
+            self.p_[i] * vonmises.pdf(alpha, kappa=self.kappa_[i], mu=self.m_[i])
             for i in range(self.n_clusters)
         ]
         return np.sum(d, axis=0)
@@ -333,10 +333,10 @@ class MovM:
         np.ndarray
             Predicted cluster labels.
         """
-        x_rad = x if self.unit == "radian" else data2rad(x, self.n_intervals)
+        alpha = x if self.unit == "radian" else data2rad(x, self.n_intervals)
 
         gamma = self.compute_gamma(
-            x_rad=x_rad, p=self.p_, m=self.m_, kappa=self.kappa_
+            alpha=alpha, p=self.p_, m=self.m_, kappa=self.kappa_
         )
 
         return gamma.argmax(axis=0)
@@ -404,7 +404,7 @@ class CircHAC:
         self.labels_ = None
         self.merges_ = None
 
-    def fit(self, alpha):
+    def fit(self, X):
         """
         Perform agglomerative clustering on `alpha`.
 
@@ -417,17 +417,17 @@ class CircHAC:
         -------
         self : AggCluster1D
         """
-        self.alpha = alpha = np.asarray(alpha)
+        self.data = X = np.asarray(X)
         if self.unit == "degree":
-            self.alpha_rad = alpha_rad = data2rad(alpha, k=self.n_intervals)
+            self.alpha = alpha = data2rad(X, k=self.n_intervals)
         else:
-            self.alpha_rad = alpha_rad = alpha
+            self.alpha = alpha = X
 
-        n = len(alpha_rad)
+        n = len(alpha)
         if n <= self.n_clusters:
             # trivial case
             self.labels_ = np.arange(n)
-            self.centers_ = alpha_rad.copy()
+            self.centers_ = alpha.copy()
             self.r_ = np.ones(n)
             # no merges
             self.merges_ = np.empty((0, 4))
@@ -444,7 +444,7 @@ class CircHAC:
             cluster_means = np.full(n, np.nan, dtype=float)
             cluster_sizes = np.zeros(n, dtype=int)
             for cval in np.unique(cid):
-                subset = alpha_rad[cid == cval]
+                subset = alpha[cid == cval]
                 if len(subset) == 0:
                     continue
                 m, _ = circ_mean_and_r(subset)
@@ -494,7 +494,7 @@ class CircHAC:
         self.centers_ = np.zeros(k, dtype=float)
         self.r_ = np.zeros(k, dtype=float)
         for i in range(k):
-            subset = alpha_rad[self.labels_ == i]
+            subset = alpha[self.labels_ == i]
             mean_i, r_i = circ_mean_and_r(subset)
             self.centers_[i] = mean_i
             self.r_[i] = r_i
@@ -517,15 +517,15 @@ class CircHAC:
         """
         alpha = np.asarray(alpha)
         if self.unit == "degree":
-            alpha_rad = data2rad(alpha, k=self.n_intervals)
+            alpha = data2rad(alpha, k=self.n_intervals)
         else:
-            alpha_rad = alpha
+            alpha = alpha
 
-        n_samples = len(alpha_rad)
+        n_samples = len(alpha)
         k = len(self.centers_)
         labels = np.zeros(n_samples, dtype=int)
         for i in range(n_samples):
-            a_i = alpha_rad[i]
+            a_i = alpha[i]
             # measure distance to each center
             best_c, best_d = None, np.inf
             for c in range(k):
@@ -606,7 +606,7 @@ class CircHAC:
         float
             The mean silhouette over all points.
         """
-        angles = self.alpha_rad
+        angles = self.alpha
         labels = self.labels_
         metric = self.metric
         n = len(angles)
@@ -641,3 +641,181 @@ class CircHAC:
             silhouette_values[i] = (b_i - a_i) / max(a_i, b_i) if max(a_i, b_i) > 0 else 0.0
 
         return silhouette_values.mean()
+    
+
+class CircKMeans:
+    """
+    K-Means clustering for circular (1D) data.
+
+    This is analogous to standard K-Means, but uses circular
+    distance and circular means. The algorithm is:
+
+    1) Initialize cluster centers (angles in radians).
+    2) Assignment step:
+       Assign each data point to the cluster with the minimal
+       circular distance.
+    3) Update step:
+       Recompute each cluster center as the circular mean of
+       the assigned points.
+    4) Repeat until convergence or max_iters.
+
+    Parameters
+    ----------
+    n_clusters : int, default=2
+        Number of clusters to form.
+    max_iter : int, default=100
+        Maximum number of iterations.
+    metric : {"center", "chord", "geodesic", "angularseparation"}, default="chord"
+        The distance measure used for assignment.
+    unit : {"degree","radian"}, default="degree"
+        Whether input data is in degrees or radians.
+        If "degree", we convert to radians internally.
+    n_intervals : int, default=360
+        For data conversion if unit="degree".
+    tol : float, default=1e-6
+        Convergence threshold. If centers move less than `tol` in total,
+        the algorithm stops.
+    random_seed : int, default=None
+        For reproducible initialization.
+
+    Attributes
+    ----------
+    centers_ : np.ndarray, shape (n_clusters,)
+        The final cluster center angles (in radians).
+    labels_ : np.ndarray, shape (n_samples,)
+        The assigned cluster indices for each data point.
+    inertia_ : float
+        The final sum of distances (or sum of squared distances) if you prefer,
+        from each point to its cluster center. By default, we store
+        sum of chosen distance measure.
+    """
+
+    def __init__(
+        self,
+        n_clusters=2,
+        max_iter=100,
+        metric="center",
+        unit="degree",
+        n_intervals=360,
+        tol=1e-6,
+        random_seed=None
+    ):
+        self.n_clusters = n_clusters
+        self.max_iter = max_iter
+        self.metric = metric
+        self.unit = unit
+        self.n_intervals = n_intervals
+        self.tol = tol
+        self.random_seed = random_seed
+
+        self.centers_ = None
+        self.labels_ = None
+        self.inertia_ = None
+
+    def fit(self, X):
+        """
+        Fit the K-means on 1D circular data.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Angles in degrees (if self.unit=="degree") or radians.
+
+        Returns
+        -------
+        self
+        """
+        self.data = X = np.asarray(X)
+        if self.unit == "degree":
+            self.alpha = alpha = data2rad(X, k=self.n_intervals)
+        else:
+            self.alpha = alpha = X
+
+        rng = np.random.default_rng(self.random_seed)
+
+        n_samples = len(alpha)
+        if n_samples < self.n_clusters:
+            # trivial: each point is its own cluster
+            self.labels_ = np.arange(n_samples)
+            self.centers_ = alpha.copy()
+            self.inertia_ = 0.0
+            return self
+
+        # 1) initialize cluster centers by picking random points from data
+        init_indices = rng.choice(n_samples, size=self.n_clusters, replace=False)
+        centers = alpha[init_indices]
+
+        labels = np.zeros(n_samples, dtype=int)
+        for iteration in range(self.max_iter):
+            # 2) assignment step
+            dist_mat = np.zeros((self.n_clusters, n_samples))
+            for c in range(self.n_clusters):
+                # measure distance from alpha to center[c]
+                dist_mat[c] = np.abs(circ_dist(alpha, centers[c], metric=self.metric))
+
+            labels_new = dist_mat.argmin(axis=0)
+
+            # 3) update step
+            new_centers = np.zeros_like(centers)
+            for c in range(self.n_clusters):
+                mask = (labels_new == c)
+                if np.any(mask):
+                    # circular mean of assigned points
+                    m, _ = circ_mean_and_r(alpha[mask])
+                    new_centers[c] = m
+                else:
+                    # if no points assigned, keep old center or random re-init
+                    new_centers[c] = centers[c]
+
+            # check for shift
+            shift = np.sum(np.abs(np.angle(np.exp(1j*centers) / np.exp(1j*new_centers))))
+            # or a simpler approach: sum of circ_dist(centers, new_centers)
+            # shift = float(np.sum(np.abs(circ_dist(centers, new_centers, metric=self.metric))))
+
+            labels = labels_new
+            centers = new_centers
+
+            if shift < self.tol:
+                break
+
+        # final
+        self.centers_ = centers
+        self.labels_ = labels
+
+        # compute final inertia => sum of distances from points to assigned center
+        total_dist = 0.0
+        for c in range(self.n_clusters):
+            mask = (labels == c)
+            if np.any(mask):
+                dvals = np.abs(circ_dist(alpha[mask], centers[c], metric=self.metric))
+                total_dist += dvals.sum()
+        self.inertia_ = total_dist
+
+    def predict(self, X):
+        """
+        Predict cluster assignment for new data.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+
+        Returns
+        -------
+        labels : np.ndarray, shape (n_samples,)
+        """
+        X = np.asarray(X)
+        if self.unit == "degree":
+            alpha = data2rad(X, k=self.n_intervals)
+        else:
+            alpha = X
+
+        n_samples = len(alpha)
+        labels = np.zeros(n_samples, dtype=int)
+        if self.centers_ is None:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        dist_mat = np.zeros((self.n_clusters, n_samples))
+        for c in range(self.n_clusters):
+            dist_mat[c] = np.abs(circ_dist(alpha, self.centers_[c], metric=self.metric))
+        labels = dist_mat.argmin(axis=0)
+        return labels

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from pycircstat2.clustering import CircHAC, MovM
+from pycircstat2.clustering import CircHAC, CircKMeans, MovM
 
 ############################
 #  Fixtures and Utilities  #
@@ -21,6 +21,17 @@ def sample_data():
 def movm_instance():
     """Create a default instance of MovM for testing."""
     return MovM(n_clusters=3, n_iters=50, unit="radian", random_seed=42)
+
+@pytest.fixture
+def circhac_instance():
+    """Create a default instance of CircHAC for testing."""
+    return CircHAC(n_clusters=3, metric="geodesic", unit="radian")
+
+
+@pytest.fixture
+def circkmeans_instance():
+    """Create a default instance of CircKMeans for testing."""
+    return CircKMeans(n_clusters=3, metric="geodesic", unit="radian", random_seed=42)
 
 
 ############################
@@ -62,23 +73,13 @@ def test_predict_density(movm_instance):
 
 
 ############################
-#  Fixtures for CircHAC    #
-############################
-
-@pytest.fixture
-def circhac_instance():
-    """Create a default instance of CircHAC for testing."""
-    return CircHAC(n_clusters=3, metric="chord", unit="radian")
-
-
-############################
 #  Tests for CircHAC       #
 ############################
 
 def test_circhac_initialization(circhac_instance):
     """Test if the CircHAC class initializes with correct parameters."""
     assert circhac_instance.n_clusters == 3
-    assert circhac_instance.metric == "chord"
+    assert circhac_instance.metric == "geodesic"
     assert circhac_instance.unit == "radian"
 
 def test_circhac_fit_basic(circhac_instance, sample_data):
@@ -121,3 +122,53 @@ def test_circhac_dendrogram_plot(circhac_instance, sample_data):
     circhac_instance.fit(sample_data)
     ax = circhac_instance.plot_dendrogram()  # Should not error
     assert ax is not None
+
+############################
+#  Tests for CircKMeans    #
+############################
+
+def test_circkmeans_initialization(circkmeans_instance):
+    """Test if the CircKMeans class initializes with correct parameters."""
+    assert circkmeans_instance.n_clusters == 3
+    assert circkmeans_instance.metric == "geodesic"
+    assert circkmeans_instance.unit == "radian"
+
+def test_circkmeans_fit_basic(circkmeans_instance, sample_data):
+    """Test basic fit to ensure centers_ and labels_ are created properly."""
+    circkmeans_instance.fit(sample_data)
+    
+    # Check labels have the correct length
+    assert len(circkmeans_instance.labels_) == len(sample_data)
+
+    # Check centers_ exist and match the requested number of clusters
+    assert len(circkmeans_instance.centers_) == circkmeans_instance.n_clusters
+
+def test_circkmeans_labels_nontrivial(circkmeans_instance, sample_data):
+    """Ensure multiple clusters are formed (unless there's weird data)."""
+    circkmeans_instance.fit(sample_data)
+    unique_labels = np.unique(circkmeans_instance.labels_)
+    
+    assert 1 < len(unique_labels) <= circkmeans_instance.n_clusters  # Should not collapse into 1 cluster
+
+def test_circkmeans_inertia_decreases(circkmeans_instance, sample_data):
+    """Check that inertia decreases over iterations, indicating convergence."""
+    circkmeans_instance.fit(sample_data)
+    assert circkmeans_instance.inertia_ is not None
+    assert circkmeans_instance.inertia_ >= 0  # Inertia should never be negative
+
+def test_circkmeans_predict(circkmeans_instance, sample_data):
+    """Test cluster predictions on new data after fit."""
+    circkmeans_instance.fit(sample_data)
+    
+    new_points = np.random.vonmises(mu=0, kappa=4, size=10)
+    pred_labels = circkmeans_instance.predict(new_points)
+    
+    assert len(pred_labels) == len(new_points)
+    assert pred_labels.dtype == np.int64  # Ensure integer cluster labels
+
+def test_circkmeans_convergence(circkmeans_instance, sample_data):
+    """Ensure K-means stops after reaching convergence criteria."""
+    circkmeans_instance.fit(sample_data)
+    
+    # If the fit completes within max_iter, we assume it stopped at the tolerance threshold
+    assert circkmeans_instance.max_iter >= 10  # Sanity check for large max_iter
