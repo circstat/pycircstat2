@@ -154,7 +154,7 @@ def circ_plot(
             - **If True**, uses default settings.
             - **If dict**, allows customization:
                 - **"method"** : str, default="nonparametric"  
-                    Method for density estimation ("nonparametric" or "MoVM").
+                    Method for density estimation ("nonparametric" or "MovM").
                 - **"color"** : str, default="black"  
                     Color of the density line.
                 - **"linestyle"** : str, default="-"  
@@ -248,7 +248,7 @@ def circ_plot(
                 )
                 x, f = nonparametric_density_estimation(circ_data.alpha, h0)
 
-            elif density_method == "MoVM":
+            elif density_method == "MovM":
 
                 x = np.linspace(0, 2 * np.pi, 100)
                 f = circ_data.mixture_opt.predict_density(x=x, unit="radian")
