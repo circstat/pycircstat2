@@ -2,14 +2,14 @@ from typing import Optional, Union
 
 import numpy as np
 
-from .descriptive import circ_kappa, circ_mean_and_r
+from .descriptive import circ_dist, circ_kappa, circ_mean_and_r
 from .distributions import vonmises
 from .utils import data2rad
 
 
-class MoVM:
+class MovM:
     """
-    Mixture of von Mises (MoVM) Clustering.
+    Mixture of von Mises (MovM) Clustering.
 
     This class implements the Expectation-Maximization (EM) algorithm for clustering 
     circular data using a mixture of von Mises distributions. It is analogous to 
@@ -54,16 +54,14 @@ class MoVM:
     Examples
     --------
         import numpy as np
-        from pycircstat2.clustering import MoVM
+        from pycircstat2.clustering import MovM
         np.random.seed(42)
         x1 = np.random.vonmises(mu=0, kappa=5, size=100)
         x2 = np.random.vonmises(mu=np.pi, kappa=10, size=100)
         x = np.concatenate([x1, x2])
         np.random.shuffle(x)
-        movm = MoVM(n_clusters=2, n_iters=200, unit="radian", random_seed=42)
+        movm = MovM(n_clusters=2, n_iters=200, unit="radian", random_seed=42)
         movm.fit(x, verbose=False)
-
-
     """
 
     def __init__(
@@ -86,6 +84,13 @@ class MoVM:
         self.unit = unit  # for data conversion
         self.random_seed = random_seed
         self.converged = False  # place holder
+
+        self.m_ = None  # cluster means
+        self.r_ = None  # cluster mean resultant vectors
+        self.p_ = None  # cluster probabilities
+        self.kappa_ = None  # cluster kappas
+        self.gamma_ = None  # update gamma one last time
+        self.labels_ = None # final cluster assignments
 
     def _initialize(
         self,
@@ -213,14 +218,14 @@ class MoVM:
                 )
 
         # save results
-        self.m = m  # cluster means
-        self.r = r  # cluster mean resultant vectors
-        self.p = p  # cluster probabilities
-        self.kappa = kappa  # cluster kappas
-        self.gamma = self.compute_gamma(
+        self.m_ = m  # cluster means
+        self.r_ = r  # cluster mean resultant vectors
+        self.p_ = p  # cluster probabilities
+        self.kappa_ = kappa  # cluster kappas
+        self.gamma_ = self.compute_gamma(
             x_rad=self.x_rad, p=p, m=m, kappa=kappa
         )  # update gamma one last time
-        self.labels = self.gamma.argmax(axis=0)
+        self.labels_ = self.gamma_.argmax(axis=0)
 
     def compute_gamma(
         self,
@@ -271,7 +276,7 @@ class MoVM:
         float
             The computed BIC value.
         """
-        nLL = self.compute_nLL(self.gamma)
+        nLL = self.compute_nLL(self.gamma_)
         nparams = self.n_clusters * 3 - 1  # n_means + n_kappas + (n_ps - 1)
         bic = 2 * nLL + np.log(self.n) * nparams
 
@@ -309,7 +314,7 @@ class MoVM:
         x_rad = x if unit == "radian" else data2rad(x, n_intervals)
 
         d = [
-            self.p[i] * vonmises.pdf(x_rad, kappa=self.kappa[i], mu=self.m[i])
+            self.p_[i] * vonmises.pdf(x_rad, kappa=self.kappa_[i], mu=self.m_[i])
             for i in range(self.n_clusters)
         ]
         return np.sum(d, axis=0)
@@ -331,7 +336,308 @@ class MoVM:
         x_rad = x if self.unit == "radian" else data2rad(x, self.n_intervals)
 
         gamma = self.compute_gamma(
-            x_rad=x_rad, p=self.p, m=self.m, kappa=self.kappa
+            x_rad=x_rad, p=self.p_, m=self.m_, kappa=self.kappa_
         )
 
         return gamma.argmax(axis=0)
+
+
+class CircHAC:
+    """
+    Hierarchical agglomerative clustering for circular (1D) data,
+    with optional dendrogram tracking.
+
+    Each merge is recorded: (clusterA, clusterB, distance, new_cluster_size).
+
+    This is a "center-merge" approach: each cluster is represented by its
+    circular mean, and we merge the two clusters with the smallest
+    *absolute* circular difference in means (using circ_dist).
+    The merges form a dendrogram we can plot or output.
+
+    Parameters
+    ----------
+    n_clusters : int, default=2
+        Number of clusters desired.
+    unit : {"radian", "degree"}, default="degree"
+        If "degree", data is converted to radians internally.
+    n_intervals : int, default=360
+        For data conversion if unit="degree".
+    metric : {"center", "geodesic", "angularseparation", "chord"}, default="center"
+        The distance metric used to measure the difference between cluster centers.
+        We'll take its absolute value so that it's a nonnegative distance.
+    random_seed : int, optional
+        Not used by default, but if you add any random steps, you may set it here.
+
+    Attributes
+    ----------
+    centers_ : np.ndarray, shape (k,)
+        Final cluster center angles (in radians).
+    r_ : np.ndarray, shape (k,)
+        Resultant vector length for each cluster.
+    labels_ : np.ndarray, shape (n_samples,)
+        Cluster assignment for each data point, in {0, ..., k-1}.
+    merges_ : np.ndarray, shape (m, 4)
+        Dendrogram merge history:
+        - merges_[step, 0] = ID of cluster A
+        - merges_[step, 1] = ID of cluster B
+        - merges_[step, 2] = distance used to merge
+        - merges_[step, 3] = new cluster size after merge
+        Note: these cluster IDs are the "old" ones, not necessarily 0..(k-1) at each step.
+    """
+
+    def __init__(
+        self,
+        n_clusters=2,
+        unit="degree",
+        n_intervals=360,
+        metric="center",
+        random_seed=None
+    ):
+        self.n_clusters = n_clusters
+        self.unit = unit
+        self.n_intervals = n_intervals
+        self.metric = metric
+        self.random_seed = random_seed
+
+        self.centers_ = None
+        self.r_ = None
+        self.labels_ = None
+        self.merges_ = None
+
+    def fit(self, alpha):
+        """
+        Perform agglomerative clustering on `alpha`.
+
+        Parameters
+        ----------
+        alpha : array-like of shape (n_samples,)
+            Angles in degrees or radians, depending on self.unit.
+
+        Returns
+        -------
+        self : AggCluster1D
+        """
+        self.alpha = alpha = np.asarray(alpha)
+        if self.unit == "degree":
+            self.alpha_rad = alpha_rad = data2rad(alpha, k=self.n_intervals)
+        else:
+            self.alpha_rad = alpha_rad = alpha
+
+        n = len(alpha_rad)
+        if n <= self.n_clusters:
+            # trivial case
+            self.labels_ = np.arange(n)
+            self.centers_ = alpha_rad.copy()
+            self.r_ = np.ones(n)
+            # no merges
+            self.merges_ = np.empty((0, 4))
+            return self
+
+        # each point is its own cluster
+        cid = np.arange(n, dtype=int)
+        nu = n  # number of active clusters
+
+        merges = []  # we'll accumulate (i, j, dist, new_size) here
+
+        while nu > self.n_clusters:
+            # compute cluster means
+            cluster_means = np.full(n, np.nan, dtype=float)
+            cluster_sizes = np.zeros(n, dtype=int)
+            for cval in np.unique(cid):
+                subset = alpha_rad[cid == cval]
+                if len(subset) == 0:
+                    continue
+                m, _ = circ_mean_and_r(subset)
+                cluster_means[cval] = m
+                cluster_sizes[cval] = len(subset)
+
+            # find best pair to merge
+            best_dist = np.inf
+            best_i, best_j = None, None
+            unique_ids = np.unique(cid)
+            if len(unique_ids) <= self.n_clusters:
+                # done
+                break
+
+            for i in unique_ids:
+                if np.isnan(cluster_means[i]):
+                    continue
+                for j in unique_ids:
+                    if j <= i or np.isnan(cluster_means[j]):
+                        continue
+                    dist_ij = circ_dist(cluster_means[i], cluster_means[j], metric=self.metric)
+                    dval = float(abs(dist_ij))  # ensure it's nonnegative
+                    if dval < best_dist:
+                        best_dist = dval
+                        best_i = i
+                        best_j = j
+
+            if best_i is None or best_j is None:
+                # can't find a merge => break
+                break
+
+            # record the merge in merges array
+            new_size = cluster_sizes[best_i] + cluster_sizes[best_j]
+            merges.append([best_i, best_j, best_dist, new_size])
+
+            # merge best_i into best_j
+            cid[cid == best_i] = best_j
+            nu -= 1
+
+        # at this point we have at most n_clusters distinct IDs
+        unique_ids = np.unique(cid)
+        label_map = {old_id: new_id for new_id, old_id in enumerate(unique_ids)}
+        self.labels_ = np.array([label_map[x] for x in cid], dtype=int)
+
+        # final centers, r_
+        k = len(unique_ids)
+        self.centers_ = np.zeros(k, dtype=float)
+        self.r_ = np.zeros(k, dtype=float)
+        for i in range(k):
+            subset = alpha_rad[self.labels_ == i]
+            mean_i, r_i = circ_mean_and_r(subset)
+            self.centers_[i] = mean_i
+            self.r_[i] = r_i
+
+        # store merges array
+        # shape: (# merges, 4)
+        self.merges_ = np.array(merges, dtype=object)
+
+    def predict(self, alpha):
+        """
+        Assign new angles to the closest cluster center.
+
+        Parameters
+        ----------
+        alpha : array-like of shape (n_samples,)
+
+        Returns
+        -------
+        labels : np.ndarray of shape (n_samples,)
+        """
+        alpha = np.asarray(alpha)
+        if self.unit == "degree":
+            alpha_rad = data2rad(alpha, k=self.n_intervals)
+        else:
+            alpha_rad = alpha
+
+        n_samples = len(alpha_rad)
+        k = len(self.centers_)
+        labels = np.zeros(n_samples, dtype=int)
+        for i in range(n_samples):
+            a_i = alpha_rad[i]
+            # measure distance to each center
+            best_c, best_d = None, np.inf
+            for c in range(k):
+                dist_ic = circ_dist(a_i, self.centers_[c], metric=self.metric)
+                dval = float(abs(dist_ic))
+                if dval < best_d:
+                    best_d = dval
+                    best_c = c
+            labels[i] = best_c
+        return labels
+
+    def plot_dendrogram(self, ax=None, **kwargs):
+        """
+        Plot a rudimentary dendrogram from merges_.
+
+        This is a basic approach that uses cluster IDs directly as "labels"
+        on the x-axis. Because cluster IDs might not be contiguous or in ascending
+        order, the result can look jumbled. A more sophisticated approach
+        would re-compute a consistent labeling for each step.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes, optional
+            If None, create a new figure/axes.
+        **kwargs : dict
+            Passed along to ax.plot(), e.g. color, linewidth, etc.
+
+        Returns
+        -------
+        ax : matplotlib Axes
+        """
+        import matplotlib.pyplot as plt
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(6, 4))
+        merges = self.merges_
+        if merges.size == 0:
+            ax.set_title("No merges recorded (maybe n <= n_clusters?).")
+            return ax
+
+        # merges_ is (step, 4): [clusterA, clusterB, dist, new_size]
+        # We want to plot something like a dendrogram:
+        #  - each row is a merge event
+        #  - x-axis might show cluster A and cluster B, y the 'distance'
+        # But cluster IDs might keep re-labelling, so a quick hack is we show them as is.
+
+        for step, (ca, cb, distval, new_size) in enumerate(merges):
+            # We'll draw a "u" connecting ca and cb at height distval
+            # Then the newly formed cluster could get ID=cb or something
+            # This is a naive approach that won't produce a fancy SciPy-like dendrogram
+            # but enough to illustrate what's happening.
+
+            x1, x2 = ca, cb
+            y = distval
+            # a line from (x1, 0) to (x1, y), from (x2, 0) to (x2, y),
+            # then a horizontal line across at y
+            # we can color them or style them with kwargs
+
+            ax.plot([x1, x1], [0, y], **kwargs)
+            ax.plot([x2, x2], [0, y], **kwargs)
+            ax.plot([x1, x2], [y, y], **kwargs)
+
+        ax.set_title("Rudimentary Dendrogram")
+        ax.set_xlabel("Cluster ID (raw internal IDs)")
+        ax.set_ylabel("Distance")
+        return ax
+
+
+    def silhouette_score(self):
+        """
+        Compute the average silhouette for a cluster assignment on circular data.
+        
+        angles: np.ndarray shape (n,) in radians
+        labels: np.ndarray shape (n,) in {0,1,...,K-1}
+        metric: "chord", "geodesic", "center", etc.
+
+        Returns
+        -------
+        float
+            The mean silhouette over all points.
+        """
+        angles = self.alpha_rad
+        labels = self.labels_
+        metric = self.metric
+        n = len(angles)
+        if n < 2:
+            return 0.0
+
+        silhouette_values = np.zeros(n, dtype=float)
+
+        # Precompute all pairwise distances
+        # shape => (n,n)
+        pairwise = circ_dist(angles[:,None], angles[None,:], metric=metric)
+        pairwise = np.abs(pairwise)  # ensure nonnegative
+
+        for i in range(n):
+            c_i = labels[i]
+            # points in cluster c_i
+            in_cluster_i = (labels == c_i)
+            # average distance to own cluster
+            # excluding the point itself
+            a_i = pairwise[i, in_cluster_i].mean() if in_cluster_i.sum() > 1 else 0.0
+
+            # find min average distance to another cluster
+            b_i = np.inf
+            for c_other in np.unique(labels):
+                if c_other == c_i:
+                    continue
+                in_other = (labels == c_other)
+                dist_i_other = pairwise[i, in_other].mean()
+                if dist_i_other < b_i:
+                    b_i = dist_i_other
+
+            silhouette_values[i] = (b_i - a_i) / max(a_i, b_i) if max(a_i, b_i) > 0 else 0.0
+
+        return silhouette_values.mean()

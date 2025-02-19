@@ -59,6 +59,9 @@ DEFAULT_CIRC_PLOT_CONFIG = {
     "rose": {
         "bins": 12,
         "counts": False,
+        "color": "gray",
+        "edgecolor": "black",
+        "alpha": 0.5,
     },
     "density": {
         "method": "nonparametric",
@@ -297,9 +300,9 @@ def circ_plot(
             beta,
             w_norm,
             width=width,
-            color="gray",
-            ec="black",
-            alpha=0.8,
+            color=config["rose"]["color"],
+            ec=config["rose"]["edgecolor"],
+            alpha=config["rose"]["alpha"],
             bottom=0,
             zorder=2,
         )
@@ -365,19 +368,19 @@ def circ_plot(
                 x1,
                 np.ones_like(x1) * radius,
                 ls="-",
-                color="black",
+                color=config["mean"]["color"],
                 zorder=5,
                 lw=2,
             )
             # plot arc cap
-            ax.errorbar(x1[0], radius, yerr=0.03, capsize=0, color="black", lw=2)
-            ax.errorbar(x1[-1], radius, yerr=0.03, capsize=0, color="black", lw=2)
+            ax.errorbar(x1[0], radius, yerr=0.03, capsize=0, color=config["mean"]["color"], lw=2)
+            ax.errorbar(x1[-1], radius, yerr=0.03, capsize=0, color=config["mean"]["color"], lw=2)
 
     if config["median"]:
         ax.plot(
             [0, circ_data.median],
             [0, 0.95],
-            color=config["median"].get("color", "black"),
+            color=config["median"]["color"],
             ls=config["median"].get("linestyle", "dotted"),
             label="median",
             zorder=5,
@@ -395,13 +398,13 @@ def circ_plot(
                 x1,
                 np.ones_like(x1) - 0.05,
                 ls="dotted",
-                color="black",
+                color=config["median"]["color"],
                 zorder=5,
                 lw=2,
             )
             # plot arc cap
-            ax.errorbar(x1[0], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
-            ax.errorbar(x1[-1], 0.95, yerr=0.03, capsize=0, color="black", lw=2)
+            ax.errorbar(x1[0], 0.95, yerr=0.03, capsize=0, color=config["median"]["color"], lw=2)
+            ax.errorbar(x1[-1], 0.95, yerr=0.03, capsize=0, color=config["median"]["color"], lw=2)
 
     ax.set_theta_zero_location(config["zero_location"])
     ax.set_theta_direction(config["clockwise"])

@@ -2,7 +2,7 @@ from typing import Optional, Union
 
 import numpy as np
 
-from .clustering import MoVM
+from .clustering import MovM
 from .descriptive import (
     angular_std,
     circ_kappa,
@@ -298,7 +298,7 @@ class Circular:
         self.mixtures = []
         if n_clusters_max > 1:
             for k in range(1, n_clusters_max + 1):
-                m = MoVM(
+                m = MovM(
                     n_clusters=k,
                     n_intervals=n_intervals,
                     unit="radian",
@@ -325,8 +325,8 @@ class Circular:
         if self.n_clusters_max > 1 and self.mixture_opt is not None:
             docs += (
                 f"  Unimodal?: Yes \n"
-                if len(self.mixture_opt.m) == 1
-                else f"  Unimodal?: No (n_clusters={len(self.mixture_opt.m)}) \n"
+                if len(self.mixture_opt.m_) == 1
+                else f"  Unimodal?: No (n_clusters={len(self.mixture_opt.m_)}) \n"
             )
 
         docs += f"  Unit: {unit}\n"
