@@ -358,6 +358,9 @@ class CircHAC:
     ----------
     n_clusters : int, default=2
         Number of clusters desired.
+    n_init_clusters : int or None, default=None
+        If None, every point starts as its own cluster (default HAC).
+        If a number, `CircKMeans` is used to pre-cluster data before HAC.
     unit : {"radian", "degree"}, default="degree"
         If "degree", data is converted to radians internally.
     n_intervals : int, default=360
@@ -388,12 +391,14 @@ class CircHAC:
     def __init__(
         self,
         n_clusters=2,
+        n_init_clusters=None, 
         unit="degree",
         n_intervals=360,
         metric="center",
         random_seed=None
     ):
         self.n_clusters = n_clusters
+        self.n_init_clusters = n_init_clusters
         self.unit = unit
         self.n_intervals = n_intervals
         self.metric = metric
@@ -404,18 +409,35 @@ class CircHAC:
         self.labels_ = None
         self.merges_ = None
 
+    def _initialize_clusters(self, X):
+        """Initializes clusters using CircKMeans or default HAC."""
+        n_samples = len(X)
+
+        # Default HAC: every point is its own cluster
+        if self.n_init_clusters is None or self.n_init_clusters >= n_samples:
+            return np.arange(n_samples), X  # Standard HAC
+
+        # Use CircKMeans for pre-clustering
+        kmeans = CircKMeans(n_clusters=self.n_init_clusters, unit="radian", metric=self.metric, random_seed=self.random_seed)
+        kmeans.fit(X)
+        
+        init_labels = kmeans.labels_
+        init_centers = kmeans.centers_
+        
+        return init_labels, init_centers
+
     def fit(self, X):
         """
-        Perform agglomerative clustering on `alpha`.
+        Perform agglomerative clustering on `X`.
 
         Parameters
         ----------
-        alpha : array-like of shape (n_samples,)
-            Angles in degrees or radians, depending on self.unit.
+        X : np.ndarray
+            Input angles in degrees or radians.
 
         Returns
         -------
-        self : AggCluster1D
+        self : CircHAC
         """
         self.data = X = np.asarray(X)
         if self.unit == "degree":
@@ -425,71 +447,53 @@ class CircHAC:
 
         n = len(alpha)
         if n <= self.n_clusters:
-            # trivial case
             self.labels_ = np.arange(n)
             self.centers_ = alpha.copy()
             self.r_ = np.ones(n)
-            # no merges
             self.merges_ = np.empty((0, 4))
             return self
 
-        # each point is its own cluster
-        cid = np.arange(n, dtype=int)
-        nu = n  # number of active clusters
+        # Step 1: Initialize with pre-clustering or start from scratch
+        cluster_ids, cluster_means = self._initialize_clusters(alpha)
+        cluster_sizes = np.ones(len(cluster_means), dtype=int)
 
-        merges = []  # we'll accumulate (i, j, dist, new_size) here
+        merges = []  # Track merge history
 
-        while nu > self.n_clusters:
-            # compute cluster means
-            cluster_means = np.full(n, np.nan, dtype=float)
-            cluster_sizes = np.zeros(n, dtype=int)
-            for cval in np.unique(cid):
-                subset = alpha[cid == cval]
-                if len(subset) == 0:
-                    continue
-                m, _ = circ_mean_and_r(subset)
-                cluster_means[cval] = m
-                cluster_sizes[cval] = len(subset)
+        while len(np.unique(cluster_ids)) > self.n_clusters:
+            # Compute cluster means
+            unique_clusters = np.unique(cluster_ids)
+            cluster_means_dict = {c: cluster_means[c] for c in unique_clusters}
 
-            # find best pair to merge
+            # Find best pair to merge
             best_dist = np.inf
             best_i, best_j = None, None
-            unique_ids = np.unique(cid)
-            if len(unique_ids) <= self.n_clusters:
-                # done
-                break
-
-            for i in unique_ids:
-                if np.isnan(cluster_means[i]):
-                    continue
-                for j in unique_ids:
-                    if j <= i or np.isnan(cluster_means[j]):
+            for i in unique_clusters:
+                for j in unique_clusters:
+                    if j <= i:
                         continue
-                    dist_ij = circ_dist(cluster_means[i], cluster_means[j], metric=self.metric)
-                    dval = float(abs(dist_ij))  # ensure it's nonnegative
-                    if dval < best_dist:
-                        best_dist = dval
-                        best_i = i
-                        best_j = j
+                    dist_ij = circ_dist(cluster_means_dict[i], cluster_means_dict[j], metric=self.metric)
+                    if dist_ij < best_dist:
+                        best_dist = dist_ij
+                        best_i, best_j = i, j
 
             if best_i is None or best_j is None:
-                # can't find a merge => break
-                break
+                break  # No valid merge found
 
-            # record the merge in merges array
+            # Record merge
             new_size = cluster_sizes[best_i] + cluster_sizes[best_j]
             merges.append([best_i, best_j, best_dist, new_size])
 
-            # merge best_i into best_j
-            cid[cid == best_i] = best_j
-            nu -= 1
+            # Merge clusters
+            cluster_ids[cluster_ids == best_j] = best_i
+            cluster_sizes[best_i] = new_size
+            cluster_means[best_i] = circ_mean_and_r(alpha[cluster_ids == best_i])[0]
 
-        # at this point we have at most n_clusters distinct IDs
-        unique_ids = np.unique(cid)
+        # Assign final cluster labels
+        unique_ids = np.unique(cluster_ids)
         label_map = {old_id: new_id for new_id, old_id in enumerate(unique_ids)}
-        self.labels_ = np.array([label_map[x] for x in cid], dtype=int)
+        self.labels_ = np.array([label_map[c] for c in cluster_ids], dtype=int)
 
-        # final centers, r_
+        # Compute final cluster centers and resultant lengths
         k = len(unique_ids)
         self.centers_ = np.zeros(k, dtype=float)
         self.r_ = np.zeros(k, dtype=float)
@@ -499,8 +503,7 @@ class CircHAC:
             self.centers_[i] = mean_i
             self.r_[i] = r_i
 
-        # store merges array
-        # shape: (# merges, 4)
+        # Store merges
         self.merges_ = np.array(merges, dtype=object)
 
     def predict(self, alpha):
