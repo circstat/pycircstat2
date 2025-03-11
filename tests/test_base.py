@@ -9,8 +9,8 @@ def test_Circular():
     # Ch26.2 Example 3 (Zar, 2010)
     data_zar_ex3_ch26 = load_data("D2", source="zar")
     circ_zar_ex3_ch26 = Circular(
-        data=data_zar_ex3_ch26["θ"].values,
-        w=data_zar_ex3_ch26["w"].values,
+        data=data_zar_ex3_ch26["θ"].values[:],
+        w=data_zar_ex3_ch26["w"].values[:],
         unit="degree",
     )
 

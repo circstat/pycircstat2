@@ -14,3 +14,4 @@ uv.lock
 dev/
 dist/
 docs/site/
+build/

@@ -23,7 +23,7 @@ class MovM:
         The number of von Mises distributions (clusters) to fit.
     n_iters : int, default=100
         Maximum number of iterations for the EM algorithm.
-    n_intervals : int, default=360
+    full_cycle : int, default=360
         Used for converting degree-based data into radians.
     unit : {"degree", "radian"}, default="degree"
         Specifies whether input data is in degrees or radians.
@@ -69,7 +69,7 @@ class MovM:
         burnin: int = 30,
         n_clusters: int = 5,
         n_iters: int = 100,
-        n_intervals: int = 360,
+        full_cycle: Union[int, float] = 360,
         unit: str = "degree",
         random_seed: int = 2046,
         threshold: float = 1e-16,
@@ -80,7 +80,7 @@ class MovM:
         self.threshold = threshold  # convergence threshold
         self.n_clusters = n_clusters  # number of clusters to estimate
         self.n_iters = n_iters  # maximum number of iterations for EM
-        self.n_intervals = n_intervals  # for data conversion
+        self.full_cycle = full_cycle  # for data conversion
         self.unit = unit  # for data conversion
         self.random_seed = random_seed
         self.converged = False  # place holder
@@ -158,7 +158,7 @@ class MovM:
         # meta
         self.data = X
         self.alpha = alpha = (
-            X if self.unit == "radian" else data2rad(X, self.n_intervals)
+            X if self.unit == "radian" else data2rad(X, self.full_cycle)
         )
         self.n = n = len(X)
 
@@ -286,7 +286,7 @@ class MovM:
         self,
         x: Optional[np.ndarray] = None,
         unit: Union[str, None] = None,
-        n_intervals: Union[float, int, None] = None,
+        full_cycle: Union[float, int, None] = None,
     )-> np.ndarray:
         """
         Predicts density estimates for given points.
@@ -297,7 +297,7 @@ class MovM:
             Points at which to estimate the density.
         unit : {"degree", "radian"}, optional
             Specifies whether input data is in degrees or radians.
-        n_intervals : int, optional
+        full_cycle : int, optional
             Number of intervals for data conversion.
 
         Returns
@@ -306,12 +306,12 @@ class MovM:
             Estimated density at the provided points.
         """
         unit = self.unit if unit is None else unit
-        n_intervals = self.n_intervals if n_intervals is None else n_intervals
+        full_cycle = self.full_cycle if full_cycle is None else full_cycle
 
         if x is None:
             x = np.linspace(0, 2 * np.pi, 100)
 
-        alpha = x if unit == "radian" else data2rad(x, n_intervals)
+        alpha = x if unit == "radian" else data2rad(x, full_cycle)
 
         d = [
             self.p_[i] * vonmises.pdf(alpha, kappa=self.kappa_[i], mu=self.m_[i])
@@ -333,7 +333,7 @@ class MovM:
         np.ndarray
             Predicted cluster labels.
         """
-        alpha = x if self.unit == "radian" else data2rad(x, self.n_intervals)
+        alpha = x if self.unit == "radian" else data2rad(x, self.full_cycle)
 
         gamma = self.compute_gamma(
             alpha=alpha, p=self.p_, m=self.m_, kappa=self.kappa_
@@ -363,7 +363,7 @@ class CircHAC:
         If a number, `CircKMeans` is used to pre-cluster data before HAC.
     unit : {"radian", "degree"}, default="degree"
         If "degree", data is converted to radians internally.
-    n_intervals : int, default=360
+    full_cycle : int, default=360
         For data conversion if unit="degree".
     metric : {"center", "geodesic", "angularseparation", "chord"}, default="center"
         The distance metric used to measure the difference between cluster centers.
@@ -393,14 +393,14 @@ class CircHAC:
         n_clusters=2,
         n_init_clusters=None, 
         unit="degree",
-        n_intervals=360,
+        full_cycle=360,
         metric="center",
         random_seed=None
     ):
         self.n_clusters = n_clusters
         self.n_init_clusters = n_init_clusters
         self.unit = unit
-        self.n_intervals = n_intervals
+        self.full_cycle = full_cycle
         self.metric = metric
         self.random_seed = random_seed
 
@@ -441,7 +441,7 @@ class CircHAC:
         """
         self.data = X = np.asarray(X)
         if self.unit == "degree":
-            self.alpha = alpha = data2rad(X, k=self.n_intervals)
+            self.alpha = alpha = data2rad(X, k=self.full_cycle)
         else:
             self.alpha = alpha = X
 
@@ -520,7 +520,7 @@ class CircHAC:
         """
         alpha = np.asarray(alpha)
         if self.unit == "degree":
-            alpha = data2rad(alpha, k=self.n_intervals)
+            alpha = data2rad(alpha, k=self.full_cycle)
         else:
             alpha = alpha
 
@@ -673,7 +673,7 @@ class CircKMeans:
     unit : {"degree","radian"}, default="degree"
         Whether input data is in degrees or radians.
         If "degree", we convert to radians internally.
-    n_intervals : int, default=360
+    full_cycle : int, default=360
         For data conversion if unit="degree".
     tol : float, default=1e-6
         Convergence threshold. If centers move less than `tol` in total,
@@ -699,7 +699,7 @@ class CircKMeans:
         max_iter=100,
         metric="center",
         unit="degree",
-        n_intervals=360,
+        full_cycle=360,
         tol=1e-6,
         random_seed=None
     ):
@@ -707,7 +707,7 @@ class CircKMeans:
         self.max_iter = max_iter
         self.metric = metric
         self.unit = unit
-        self.n_intervals = n_intervals
+        self.full_cycle = full_cycle
         self.tol = tol
         self.random_seed = random_seed
 
@@ -730,7 +730,7 @@ class CircKMeans:
         """
         self.data = X = np.asarray(X)
         if self.unit == "degree":
-            self.alpha = alpha = data2rad(X, k=self.n_intervals)
+            self.alpha = alpha = data2rad(X, k=self.full_cycle)
         else:
             self.alpha = alpha = X
 
@@ -808,7 +808,7 @@ class CircKMeans:
         """
         X = np.asarray(X)
         if self.unit == "degree":
-            alpha = data2rad(X, k=self.n_intervals)
+            alpha = data2rad(X, k=self.full_cycle)
         else:
             alpha = X
 

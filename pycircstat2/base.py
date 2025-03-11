@@ -46,14 +46,15 @@ class Circular:
         Unit of the input data. Must be one of {"degree", "radian", "hour"}.
         Default is "degree".
 
-    n_intervals : int, float, or None, optional
-        Number of intervals in a full cycle. If None, the value is inferred based on the unit:
+    full_cycle : int, float, or None, optional
+        The total range of values that complete one full cycle in the chosen unit.
+        If None, the value is inferred based on the unit:
 
         - 360 for degrees,
         - $2\pi$ for radians,
         - 24 for hours.
 
-        Custom intervals require explicit input.
+        Custom values can be set explicitly for other units.
         Default is None.
 
     n_clusters_max : int, optional
@@ -149,7 +150,7 @@ class Circular:
         w: Optional[Union[np.ndarray, list]] = None,  # frequency
         bins: Optional[Union[int, np.ndarray]] = None,
         unit: str = "degree",
-        n_intervals: Optional[Union[
+        full_cycle: Optional[Union[
             int, float
         ]] = None,  # number of intervals in the full cycle
         n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
@@ -158,19 +159,19 @@ class Circular:
     ):
         # meta
         self.unit = unit
-        if n_intervals is None:
+        if full_cycle is None:
             if unit == "degree":
-                self.n_intervals = n_intervals = 360
+                self.full_cycle = full_cycle = 360
             elif unit == "radian":
-                self.n_intervals = n_intervals = 2 * np.pi
+                self.full_cycle = full_cycle = 2 * np.pi
             elif unit == "hour":
-                self.n_intervals = n_intervals = 24
+                self.full_cycle = full_cycle = 24
             else:
                 raise ValueError(
-                    "You need to provide a value for `n_intervals` if it is not `degree`, `radian` or hour."
+                    "You need to provide a value for `full_cycle` if it is not `degree` or `hour`."
                 )
         else:
-            self.n_intervals = n_intervals
+            self.full_cycle = full_cycle
 
         self.n_clusters_max = n_clusters_max
         self.kwargs_median = kwargs_median = {
@@ -185,7 +186,7 @@ class Circular:
 
         # data
         self.data = data = np.array(data) if isinstance(data, list) else data
-        self.alpha = alpha = data2rad(data, n_intervals) if rotate is None else rotate_data(data2rad(data, n_intervals), rotate, unit="radian")
+        self.alpha = alpha = np.array(data2rad(data, full_cycle)) if rotate is None else rotate_data(np.array(data2rad(data, full_cycle)), rotate, unit="radian")
 
         # data preprocessing
         if bins is None:
@@ -198,7 +199,7 @@ class Circular:
                 assert len(w) == len(
                     np.arange(0, 2 * np.pi, 2 * np.pi / len(w))
                 ), "Grouped data should included empty bins."
-                self.w = np.array(w) if isinstance(w, list) else w
+                self.w = w = np.asarray(w)
                 self.grouped = grouped = True
                 self.bin_size = bin_size = np.diff(alpha).min()
                 self.alpha_lb = alpha - bin_size / 2
@@ -210,7 +211,7 @@ class Circular:
                 w, alpha = np.histogram(
                     alpha, bins=bins, range=(0, 2 * np.pi)
                 )  # np.histogram return bin edges
-            self.w = w
+            self.w = w = np.asarray(w)
             self.alpha_lb = alpha[:-1]  # bin lower bound
             self.alpha_ub = alpha[1:]  # bin upper bound
             self.alpha = alpha = 0.5 * (alpha[:-1] + alpha[1:])  # get bin centers
@@ -288,7 +289,7 @@ class Circular:
         # it's unclear how to do it for grouped data.
         if not grouped and not np.isnan(median):
             self.median_lb, self.median_ub, self.median_ci_level = circ_median_ci(
-                median=median, alpha=alpha
+                median=float(median), alpha=alpha
             )
 
         self.skewness = circ_skewness(alpha=alpha, w=w)
@@ -300,7 +301,7 @@ class Circular:
             for k in range(1, n_clusters_max + 1):
                 m = MovM(
                     n_clusters=k,
-                    n_intervals=n_intervals,
+                    full_cycle=full_cycle,
                     unit="radian",
                     random_seed=0,
                 )
@@ -314,17 +315,17 @@ class Circular:
 
     def __repr__(self):
         unit = self.unit
-        k = self.n_intervals
+        k = self.full_cycle
 
         docs = "Circular Data\n"
         docs += "=============\n\n"
 
         docs += "Summary\n"
         docs += "-------\n"
-        docs += f"  Grouped?: Yes\n" if self.grouped else f"  Grouped?: No\n"
+        docs += "  Grouped?: Yes\n" if self.grouped else "  Grouped?: No\n"
         if self.n_clusters_max > 1 and self.mixture_opt is not None:
             docs += (
-                f"  Unimodal?: Yes \n"
+                "  Unimodal?: Yes \n"
                 if len(self.mixture_opt.m_) == 1
                 else f"  Unimodal?: No (n_clusters={len(self.mixture_opt.m_)}) \n"
             )
@@ -332,10 +333,7 @@ class Circular:
         docs += f"  Unit: {unit}\n"
         docs += f"  Sample size: {self.n}\n"
 
-        if hasattr(self, "d"):
-            docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ± {rad2data(self.d, k=k):.02f} ( p={self.mean_test_result.pval:.04f} {significance_code(self.mean_test_result.pval)} ) \n"
-        else:
-            docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ( p={self.mean_test_result.pval:.04f} {significance_code(self.mean_test_result.pval)} ) \n"
+        docs += f"  Angular mean: {rad2data(self.mean, k=k):.02f} ( p={self.mean_test_result.pval:.04f} {significance_code(self.mean_test_result.pval)} ) \n"
 
         if hasattr(self, "mean_lb") and not np.isnan(self.mean_lb):
             docs += f"  Angular mean CI ({self.mean_ci_level:.2f}): {rad2data(self.mean_lb, k=k):.02f} - {rad2data(self.mean_ub, k=k):.02f}\n"
@@ -351,7 +349,7 @@ class Circular:
         docs += f"  Skewness: {self.skewness:0.3f}\n"
         docs += f"  Kurtosis: {self.kurtosis:0.3f}\n"
 
-        docs += f"\n"
+        docs += "\n"
 
         docs += "Signif. codes:\n"
         docs += "--------------\n"
@@ -478,12 +476,14 @@ class Axial(Circular):
         w: Union[np.ndarray, list, None] = None,  # frequency
         bins: Union[int, np.ndarray, None] = None,
         unit: str = "degree",
-        n_intervals: Union[
+        full_cycle: Union[
             int, float, None
         ] = None,  # number of intervals in the full cycle
         n_clusters_max: int = 1,  # number of clusters to be tested for mixture of von Mises
         **kwargs,
     ):
+        
+        data = np.array(data) if isinstance(data, list) else data
         # doubling original data and reducing them modulo 360 degrees
         if unit == "degree":
             data_double = 2 * data % 360
@@ -492,14 +492,14 @@ class Axial(Circular):
         elif unit == "hour":
             data_double = 2 * data % 24
         else:
-            data_double = 2 * data % n_intervals
+            data_double = 2 * data % full_cycle
 
         super().__init__(
             data=data_double,
             w=w,
             bins=bins,
             unit=unit,
-            n_intervals=n_intervals,
+            full_cycle=full_cycle,
             n_clusters_max=n_clusters_max,
             **kwargs,
         )
@@ -507,7 +507,7 @@ class Axial(Circular):
         self.data_double = data_double
         self.data = data
         self.alpha_double = self.alpha
-        self.alpha = data2rad(data, k=self.n_intervals)
+        self.alpha = data2rad(data, k=self.full_cycle)
         self.mean /= 2
         self.mean_lb /= 2
         self.mean_ub /= 2

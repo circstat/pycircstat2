@@ -14,9 +14,9 @@ from .descriptive import (
     circ_mean_and_r,
     circ_mean_ci,
     circ_median,
+    circ_pairdist,
     circ_r,
     circ_range,
-    circ_pairdist,
 )
 from .utils import A1inv, angmod, angular_distance, significance_code
 
@@ -121,7 +121,7 @@ def rayleigh_test(
             mb = np.sum(x, axis=0)
             tb[i] = np.sum(mb**2) / n
 
-        bootstrap_pval = (np.sum(tb > z) + 1) / (B + 1)
+        bootstrap_pval = float((np.sum(tb > z) + 1) / (B + 1))
     else:
         bootstrap_pval = None
 
@@ -133,7 +133,7 @@ def rayleigh_test(
         print("")
         print(f"Test Statistics  (ρ | z-score): {r:.5f} | {z:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
-        if B > 1:
+        if B > 1 and bootstrap_pval is not None:
             print(
                 f"Bootstrap P-value: {bootstrap_pval:.5f} {significance_code(bootstrap_pval)}"
             )
@@ -254,14 +254,13 @@ def V_test(
     """
 
     if mean is None or r is None or n is None:
-        assert isinstance(alpha, np.ndarray), (
-            "If `mean`, `r` or `n` is None, then `alpha` (and `w`) is needed."
-        )
+        if alpha is None:
+            raise ValueError("If `mean`, `r` or `n` is None, then `alpha` (and `w`) is needed.")
         if w is None:
             w = np.ones_like(alpha)
-        n = np.sum(w)
+        n = int(np.sum(w))
         mean, r = circ_mean_and_r(alpha, w)
-
+        
     R = n * r
     V = R * np.cos(mean - angle)  # eq(27.5)
     u = V * np.sqrt(2 / n)  # eq(27.6)
@@ -341,7 +340,7 @@ def one_sample_test(
     if verbose:
         print("One-Sample Test for the Mean Angle")
         print("----------------------------------")
-        print(f"H0: μ = μ0")
+        print("H0: μ = μ0")
         print(f"HA: μ ≠ μ0 and μ0 = {angle:.5f} rad")
         print("")
         if reject:
@@ -397,7 +396,7 @@ def omnibus_test(
     lines = np.linspace(0, np.pi, scale * 360)
     n = len(alpha)
 
-    lines_rotated = angmod((lines[:, None] - alpha)).round(5)
+    lines_rotated = np.round(angmod((lines[:, None] - alpha)), 5)
 
     # # count number of points on the right half circle, excluding the boundaries
     right = n - np.logical_and(
@@ -459,10 +458,10 @@ def batschelet_test(
     from scipy.stats import binomtest
 
     n = len(alpha)
-    angle_diff = angmod(((angle + 0.5 * np.pi) - alpha)).round(5)
+    angle_diff = np.round(angmod(((angle + 0.5 * np.pi) - alpha)), 5)
     m = np.logical_and(angle_diff > 0.0, angle_diff < np.round(np.pi, 5)).sum()
     C = n - m
-    pval = binomtest(C, n=n, p=0.5).pvalue
+    pval = float(binomtest(C, n=n, p=0.5).pvalue)
 
     if verbose:
         print("Batschelet Test for Uniformity")
@@ -478,7 +477,7 @@ def batschelet_test(
 
 def symmetry_test(
     alpha: np.ndarray,
-    median: Optional[Union[int, float]] = None,
+    median: Optional[float] = None,
     verbose: bool = False,
 ) -> tuple[float, float]:
     """Non-parametric test for symmetry around the median. Works by performing a
@@ -512,18 +511,19 @@ def symmetry_test(
     """
 
     if median is None:
-        median = circ_median(alpha=alpha)
+        median = float(circ_median(alpha=alpha))
 
     d = (alpha - median).round(5)
+    
     res = wilcoxon(d, alternative="two-sided")
-    test_statistic = res.statistic
-    pval = res.pvalue
+    test_statistic = float(res.statistic)
+    pval = float(res.pvalue)
 
     if verbose:
         print("Symmetry Test")
         print("------------------------------")
-        print(f"H0: symmetrical around median")
-        print(f"HA: not symmetrical around median")
+        print("H0: symmetrical around median")
+        print("HA: not symmetrical around median")
         print("")
         print(f"Test Statistics: {test_statistic:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -565,7 +565,7 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, flo
 
     k = len(circs)
     N = np.sum([circ.n for circ in circs])
-    rw = np.mean([circ.r for circ in circs])
+    rw = np.mean([circ.r for circ in circs]).astype(float)
 
     K = 1 + 3 / 8 / circ_kappa(rw)
 
@@ -575,7 +575,7 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, flo
         w=np.hstack([circ.w for circ in circs]),
     )
     F = K * (N - k) * (np.sum(Rs) - R) / (N - np.sum(Rs)) / (k - 1)
-    pval = f.sf(F, k - 1, N - k)
+    pval = float(f.sf(F, k - 1, N - k))
 
     if verbose:
         print("The Watson-Williams Test for multiple samples")
@@ -733,7 +733,7 @@ def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, floa
             W += (C**2 + S**2) / circs[i].n
         W *= 2
 
-    pval = chi2.sf(W, df=2 * (k - 1))
+    pval = float(chi2.sf(W, df=2 * (k - 1)))
 
     if verbose:
         print("The Wheeler and Watson Two/Multi-Sample Test")
@@ -776,11 +776,11 @@ def wallraff_test(
     P637-638, Section 27.8, Example 27.13 of Zar, 2010
     """
 
-    assert len(circs) == 2, (
-        "Current implementation only supports two-sample comparision."
-    )
+    if len(circs) != 2:
+        raise ValueError("Current implementation only supports two-sample comparision.")
 
-    angles = np.ones(len(circs)) * angle if isinstance(angle, float) else angle
+    angles = np.ones_like(circs) * angle
+
     ns = [c.n for c in circs]
     ad = [angular_distance(a=c.alpha, b=angles[i]) for (i, c) in enumerate(circs)]
 
@@ -795,7 +795,7 @@ def wallraff_test(
     U = np.min([U1, U2])
 
     z = (U - np.prod(ns) / 2 + 0.5) / np.sqrt(np.prod(ns) * (N + 1) / 12)
-    pval = 2 * norm.cdf(z)
+    pval = float(2 * norm.cdf(z))
 
     if verbose:
         print("Wallraff test of angular distances / dispersion")
@@ -1212,16 +1212,16 @@ def watson_test(
         return U2
 
     n = len(alpha)
-    U2o = compute_U2(alpha)
+    U2o = float(compute_U2(alpha))
 
     if n_simulation == 1:
         m = np.arange(1, 51)
-        pval = 2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o))
+        pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
     else:
         np.random.seed(seed)
         x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
         U2s = np.array(([compute_U2(x[:, i]) for i in range(n_simulation)]))
-        pval = (np.sum(U2s > U2o) + 1) / (n_simulation + 1)
+        pval = float((np.sum(U2s > U2o) + 1) / (n_simulation + 1))
 
     if verbose:
         print("Watson's One-Sample U2 Test of Circular Uniformity")
@@ -1370,7 +1370,7 @@ def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
         * comb(n, index)
         * (1 - index * (1 - range_stat / (2 * np.pi))) ** (n - 1)
     )
-    p_value = np.sum(sequence)
+    p_value = float(np.sum(sequence))
 
     return range_stat, p_value
 
@@ -1421,7 +1421,7 @@ def binomial_test(alpha: np.ndarray, md: float) -> float:
     n_max = max(n1, n2)
 
     # Binomial p-value
-    pval = binom.cdf(n_min, n, 0.5) + (1 - binom.cdf(n_max - 1, n, 0.5))
+    pval = float(binom.cdf(n_min, n, 0.5) + (1 - binom.cdf(n_max - 1, n, 0.5)))
 
     return pval
 
@@ -1487,7 +1487,8 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
         f_stat = 1 / f_stat
         pval = 2 * (1 - f.cdf(f_stat, n2, n1))
 
-    return f_stat, pval
+
+    return f_stat, float(pval)
 
 
 def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
@@ -1704,7 +1705,7 @@ def harrison_kanji_test(
     n = len(df)
 
     # Total resultant vector length
-    tr = n * circ_r(df["dependent"])
+    tr = n * circ_r(np.array(df["dependent"].values))
     kk = circ_kappa(tr / n)
 
     # Compute mean resultants per group
@@ -1718,36 +1719,34 @@ def harrison_kanji_test(
     gr = df.groupby(fn[0])
     pn = gr.count()["dependent"]
     pr = gr.agg(circ_r)["dependent"] * pn
-    pm = gr.agg(circ_mean)["dependent"]
 
     # Factor B
     gr = df.groupby(fn[1])
     qn = gr.count()["dependent"]
     qr = gr.agg(circ_r)["dependent"] * qn
-    qm = gr.agg(circ_mean)["dependent"]
 
     if kk > 2:  # Large kappa approximation
-        eff_1 = sum(pr**2 / cn.sum(axis=1)) - tr**2 / n
+        eff_1 = sum(pr**2 / np.sum(cn, axis=1)) - tr**2 / n
         df_1 = p - 1
         ms_1 = eff_1 / df_1
 
-        eff_2 = sum(qr**2 / cn.sum(axis=0)) - tr**2 / n
+        eff_2 = sum(qr**2 / np.sum(cn, axis=0)) - tr**2 / n
         df_2 = q - 1
         ms_2 = eff_2 / df_2
 
         eff_t = n - tr**2 / n
         df_t = n - 1
-        m = cn.values.mean()
+        m = np.asarray(cn.values).mean()
 
         if inter:
             beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk**2)))
 
-            eff_r = n - (cr**2.0 / cn).values.sum()
+            eff_r = n - np.asarray((cr**2.0 / cn).values).sum()
             df_r = p * q * (m - 1)
             ms_r = eff_r / df_r
 
             eff_i = (
-                (cr**2.0 / cn).values.sum()
+                np.asarray((cr**2.0 / cn).values).sum()
                 - sum(qr**2.0 / qn)
                 - sum(pr**2.0 / pn)
                 + tr**2 / n
@@ -1784,7 +1783,7 @@ def harrison_kanji_test(
         p2 = 1 - chi2.cdf(chi2_val, df=df_2)
 
         chiI = kappa_factor * (
-            (cr**2.0 / cn).values.sum()
+            np.asarray((cr**2.0 / cn).values).sum()
             - sum(pr**2.0 / pn)
             - sum(qr**2.0 / qn)
             + tr**2 / n
@@ -1792,7 +1791,7 @@ def harrison_kanji_test(
         df_i = (p - 1) * (q - 1)
         pI = chi2.sf(chiI, df=df_i)
 
-    pval = (p1.squeeze(), p2.squeeze(), pI.squeeze())
+    pval = float(p1.squeeze()), float(p2.squeeze()), float(np.squeeze(pI))
 
     # Construct ANOVA Table
     if kk > 2:
@@ -1802,7 +1801,7 @@ def harrison_kanji_test(
                 "DoF": [df_1, df_2, df_i, df_r, df_t],
                 "SS": [eff_1, eff_2, eff_i, eff_r, eff_t],
                 "MS": [ms_1, ms_2, ms_i, ms_r, np.nan],
-                "F": [F1.squeeze(), F2.squeeze(), FI, np.nan, np.nan],
+                "F": [np.squeeze(F1), np.squeeze(F2), FI, np.nan, np.nan],
                 "p": list(pval) + [np.nan, np.nan],
             }
         ).set_index("Source")

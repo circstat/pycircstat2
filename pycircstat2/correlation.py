@@ -118,10 +118,12 @@ def _circ_corrcc_fl(
     """
 
     if isinstance(a, Circular):
-        a = a.alpha
+        a_alpha = np.array(a.alpha)
     if isinstance(b, Circular):
-        b = b.alpha
-    assert len(a) == len(b), "`a` and `b` must be the same length."
+        b_alpha = np.array(b.alpha)
+
+    if len(a_alpha) != len(b_alpha):
+        raise ValueError("`a` and `b` must be the same length.")
 
     def _corr(a, b):
         aij = np.triu(a[:, None] - a).flatten()
@@ -131,13 +133,13 @@ def _circ_corrcc_fl(
         raa = num / den
         return raa
 
-    r = _corr(a, b)
+    r = _corr(a_alpha, b_alpha)
 
     if test:
         # jackknife test (Upton & Fingleton, 1989)
         # compute raa an additional n times, each time leaving out one pair of observations
-        n = len(a)
-        raas = [_corr(np.delete(a, i), np.delete(b, i)) for i in range(n)]
+        n = len(a_alpha)
+        raas = [_corr(np.delete(a_alpha, i), np.delete(b_alpha, i)) for i in range(n)]
         m_raas = np.mean(raas)
         s2_raas = np.var(raas, ddof=1)
         z = norm.ppf(0.975)
@@ -226,17 +228,17 @@ def _circ_corrcc_np(
 ) -> CorrelationResult:
     """Nonparametric angular-angular correlation."""
 
-    if isinstance(a, Circular):
-        a = a.alpha
-    if isinstance(b, Circular):
-        b = b.alpha
-    assert len(a) == len(b), "`a` and `b` must be the same length."
+    a_alpha = np.array(a.alpha) if isinstance(a, Circular) else a
+    b_alpha = np.array(b.alpha) if isinstance(b, Circular) else b
 
-    n = len(a)
+    if len(a_alpha) != len(b_alpha):
+        raise ValueError("`a` and `b` must be the same length.")
+
+    n = len(a_alpha)
     C = 2 * np.pi / n
 
-    rank_a = rankdata(a)
-    rank_b = rankdata(b)
+    rank_a = rankdata(a_alpha)
+    rank_b = rankdata(b_alpha)
     rank_diff = rank_a - rank_b
     rank_sum = rank_a + rank_b
 
@@ -247,7 +249,6 @@ def _circ_corrcc_np(
 
     r = r1 - r2
 
-    n = len(a)
     reject = (n - 1) * r > 2.99 + 2.16 / n
     return CorrelationResult(r=r, reject_null=reject)
 
@@ -285,11 +286,12 @@ def circ_corrcl(
     P658-659, Section 27.15(b) of Example 27.21 (Zar, 2010).
     """
 
-    if isinstance(a, Circular):
-        a = a.alpha
-    assert len(a) == len(x), "`a` and `x` must be the same length."
+    a_alpha = np.array(a.alpha) if isinstance(a, Circular) else a
 
-    n = len(a)
+    if len(a_alpha) != len(x):
+        raise ValueError("`a` and `x` must be the same length.")
+
+    n = len(a_alpha)
 
     rxc = np.corrcoef(np.cos(a), x)[0, 1]
     rxs = np.corrcoef(x, np.sin(a))[0, 1]

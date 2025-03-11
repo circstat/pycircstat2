@@ -167,7 +167,7 @@ class CLRegression:
 
                 # Step 2: Update beta
                 G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
-                A = np.eye(n) * (kappa * A1(kappa))
+                A = np.eye(n) * (kappa * A1(np.asarray(kappa)))
                 u = kappa * np.sin(raw_deviation - mu)
                 beta_new = np.linalg.solve(G.T @ A @ G, G.T @ (u + A @ G @ beta))
                 alpha_new, gamma_new = np.nan, np.nan

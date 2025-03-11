@@ -32,9 +32,12 @@ def data2rad(
 
 
 def rad2data(
-    rad: Union[np.ndarray, float, int], k: Union[float, int] = 360
+    rad: Union[np.ndarray, float, int], k: Union[float, int, None] = 360
 ) -> Union[np.ndarray, float]:
-    return k * rad / (2 * np.pi)  # eq(26.12), zar 2010
+    if k is None:
+        return rad
+    else:
+        return k * rad / (2 * np.pi)  # eq(26.12), zar 2010
 
 
 def time2float(x: Union[np.ndarray, list, str], sep: str = ":") -> np.ndarray:
@@ -50,8 +53,8 @@ def time2float(x: Union[np.ndarray, list, str], sep: str = ":") -> np.ndarray:
 
 
 def angmod(
-    rad: Union[np.ndarray, float, int], bounds: list = [0, 2 * np.pi]
-) -> Union[np.ndarray, float]:
+    rad: Union[np.ndarray, float, np.float64, int], bounds: list = [0, 2 * np.pi]
+) -> Union[np.ndarray, float, np.float64]:
     """
     Normalize angles to a specified range.
 
@@ -106,11 +109,12 @@ def angular_distance(a: Union[np.ndarray, list, float], b: float) -> np.ndarray:
     P642, Section 27.2, Zar, 2010
     """
 
-    a = np.array(a) if type(a) is list else a
+    if isinstance(a, list):
+        a = np.asarray(a)
 
     c = angmod(a - b)
     d = 2 * np.pi - c
-    e = np.min([c, d], axis=0)
+    e = np.min(np.array([c, d]), axis=0)
 
     return e
 
@@ -133,8 +137,7 @@ def load_data(
     name: str,
     source: str = "fisher",
     print_meta: bool = False,
-    return_meta: bool = False,
-) -> Union[pd.DataFrame, tuple]:
+) -> pd.DataFrame:
     __source__ = ["fisher", "zar", "mardia", "pewsey", "jammalamadaka"]
 
     # check source
@@ -145,20 +148,17 @@ def load_data(
 
     # load data
     data_files = importlib_resources.files("pycircstat2")
-    csv_path = data_files / f"data/{source}/{name}.csv"
+    csv_path = str(data_files / f"data/{source}/{name}.csv")
     csv_data = pd.read_csv(csv_path, index_col=0)
 
-    json_path = data_files / f"data/{source}/{name}.csv-metadata.json"
+    json_path = str(data_files / f"data/{source}/{name}.csv-metadata.json")
     with open(json_path) as f:
         json_data = json.load(f)
 
     if print_meta:
         print(json.dumps(json_data, indent=4, ensure_ascii=False))
 
-    if return_meta:
-        return csv_data, json_data
-    else:
-        return csv_data
+    return csv_data
 
 
 def is_within_circular_range(value: float, lb: float, ub: float) -> bool:
@@ -227,7 +227,7 @@ def rotate_data(alpha: np.ndarray, angle: float, unit: str = "radian") -> np.nda
     # Convert back to the original unit
     rotated_alpha = rad2data(rotated_alpha_rad, k=n_intervals)
 
-    return rotated_alpha
+    return np.asarray(rotated_alpha)
 
 
 def A1(kappa: np.ndarray) -> np.ndarray:

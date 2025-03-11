@@ -416,7 +416,7 @@ def circ_plot(
     if circ_data.unit == "hour":
         position_major = np.arange(0, 2 * np.pi, 2 * np.pi / 8)
         position_minor = np.arange(0, 2 * np.pi, 2 * np.pi / 24)
-        labels = [f"{i}:00" for i in np.arange(0, circ_data.n_intervals, 3)]
+        labels = [f"{i}:00" for i in np.arange(0, circ_data.full_cycle, 3)]
         ax.xaxis.set_major_locator(ticker.FixedLocator(position_major))
         ax.xaxis.set_minor_locator(ticker.FixedLocator(position_minor))
         ax.xaxis.set_major_formatter(ticker.FixedFormatter(labels))
