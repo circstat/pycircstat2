@@ -25,7 +25,7 @@ A rework of [pycircstat](https://github.com/circstat/pycircstat).
     data = [30, 60, 90, 120, 150]
     circ = Circular(data, unit="degree")
     print(circ.summary())
-    circ.plot(plot_rose=True, plot_mean=True)
+    circ.plot(config={"rose": True, "mean": True})
     ```
 
 - **Compatibility with Legacy APIs**  
