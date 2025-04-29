@@ -826,7 +826,7 @@ def circ_mean_ci(
     \delta = \arccos\left(\sqrt{\frac{2n(2R^{2} - n\chi^{2}_{\alpha, 1})}{4n - \chi^{2}_{\alpha, 1}}} /R \right)
     $$
 
-    For r $ge$ 0.9,
+    For r $\ge$ 0.9,
 
     $$
     \delta = \arccos \left(\sqrt{n^2 - (n^2 - R^2)e^{\chi^2_{\alpha, 1}/n} } /R \right)
@@ -879,6 +879,8 @@ def circ_mean_ci(
     - Section 26.7, Zar (2010)
     - Section 4.4.4a/b, Fisher (1993)
     """
+
+
 
     #  n > 8, according to Ch 26.7 (Zar, 2010)
     if method == "approximate":
@@ -947,10 +949,17 @@ def _circ_mean_ci_dispersion(
             f"n={n} is too small (< 25) for computing CI with circular dispersion."
         )
 
-    # TODO: sometime return nan because x in arcsin(x) is larger than 1.
-    # Should we centered the data here? <- No.
+    delta = circ_dispersion(alpha=alpha, w=w)
+    z = norm.ppf(1 - 0.5 * (1 - ci))
+    inner = np.sqrt(delta / n) * z
+
+    if inner >= 1:
+        raise ValueError(
+            "Data are too dispersed, likely close to uniform.  CI undefined."
+        )
+
     d = np.arcsin(
-        np.sqrt(circ_dispersion(alpha=alpha, w=w) / n) * norm.ppf(1 - 0.5 * (1 - ci))
+        inner
     )
     lb = mean - d
     ub = mean + d
@@ -1016,37 +1025,40 @@ def _circ_mean_ci_approximate(
     if n is None:
         raise ValueError("Sample size `n` is missing.")
 
+    if not (8 <= n):
+        raise ValueError("n must be ≥ 8 for the approximation (Zar 26.6).")
+
     R = n * r
+    chi2_critical = chi2.isf(1 - ci, 1)
+    r_min = np.sqrt(chi2_critical / (2 * n))
 
-    # Zar cited (Upton, 1986) that n can be as small as 8
-    # but I encountered a few cases where n<11 will result in negative
-    # value within `inner`.
-    if n >= 8:  #
-        if r <= 0.9:  # eq(26.24)
-            inner = (
-                np.sqrt(
-                    (2 * n * (2 * R**2 - n * chi2.isf(0.05, 1)))
-                    / (4 * n - chi2.isf(1 - ci, 1))
-                )
-                / R
-            )
-        else:  # eq(26.25)
-            inner = np.sqrt(n**2 - (n**2 - R**2) * np.exp(chi2.isf(1 - ci, 1) / n)) / R
-
-        d = np.arccos(inner)
-        
-        lb = float(mean - d)
-        ub = float(mean + d)
-
-        if not is_within_circular_range(mean, lb, ub):
-            lb, ub = ub, lb
-
-        return (lb, ub)
-
-    else:
+    if r < r_min:
         raise ValueError(
-            f"n={n} is too small (<= 8) for computing CI with approximation method."
+            f"Resultant length r={r:.4g} is too small for the "
+            f"approximate CI (must be > {r_min:.4g}). "
+            "Switch to the bootstrap (8 ≤ n < 25) or dispersion (n ≥ 25) method."
         )
+
+    if r <= 0.9:  # eq(26.24)
+        inner = (
+            np.sqrt(
+                (2 * n * (2 * R**2 - n * chi2_critical))
+                / (4 * n - chi2_critical)
+            )
+            / R
+        )
+    else:  # eq(26.25)
+        inner = np.sqrt(n**2 - (n**2 - R**2) * np.exp(chi2_critical / n)) / R
+
+    d = np.arccos(inner)
+    
+    lb = float(mean - d)
+    ub = float(mean + d)
+
+    if not is_within_circular_range(mean, lb, ub):
+        lb, ub = ub, lb
+
+    return (lb, ub)
 
 
 def _circ_mean_ci_bootstrap(
@@ -1057,6 +1069,21 @@ def _circ_mean_ci_bootstrap(
     """
     Implementation of Section 8.3 (Fisher, 1993, P207)
     """
+    # sanity-check: is a mean direction identifiable?
+    n = len(alpha)
+    r = circ_r(alpha)
+
+    # classic Rayleigh test approximation, avoids import cycles
+    z_stat = n * r**2                  # Rayleigh's Z
+    p_val  = np.exp(-z_stat)           # p ≈ e^(−Z)  (valid for n ≥ 10)
+
+    if p_val > 0.05:                   # data look uniform ⇒ no mean dir.
+        raise ValueError(
+            "Bootstrap CI not computed: resultant length r={:.4f} "
+            "(Rayleigh p≈{:.3f}) is too small. "
+            "Sample may be uniform, so the mean direction is undefined."
+            .format(r, p_val)
+        )
 
     # Precompute z0 and v0 from original data
     # algo 1

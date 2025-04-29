@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from pycircstat2 import Circular, load_data
 from pycircstat2.descriptive import (
@@ -178,6 +179,20 @@ def test_circ_mean_ci():
     # method: bootstrap (from P78, Fisher, 1993)
     # but how to test boostrap?
 
+    # test uniform distributed data (all method should raise errors)
+    from pycircstat2.distributions import circularuniform
+    rng = np.random.default_rng(seed=25)
+    d_uni = circularuniform.rvs(size=25)
+
+    with pytest.raises(ValueError):
+        circ_mean_ci(alpha=d_uni, method="approximate")
+
+    with pytest.raises(ValueError):
+        circ_mean_ci(alpha=d_uni, method="bootstrap")
+
+    with pytest.raises(ValueError):
+        circ_mean_ci(alpha=d_uni, method="dispersion")
+    
 
 def test_circ_median_ci():
     d_ex3 = load_data("B6", "fisher")
