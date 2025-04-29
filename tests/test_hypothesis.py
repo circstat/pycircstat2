@@ -104,6 +104,18 @@ def test_omnibus_test():
 
     np.testing.assert_approx_equal(pval, 0.0043, significant=2)
 
+    # test large sample size 
+    # (factorial division overflow while computing p-val)
+    # fixed in PR 12
+    from pycircstat2.distributions import circularuniform, vonmises
+    d0 = vonmises.rvs(mu=0, kappa=1, size=10_000)
+    d1 = circularuniform.rvs(size=10_000)
+
+    _, pval = omnibus_test(alpha=d0)
+    assert pval < 0.05, "Expected significant p-value for von Mises distribution"
+    _, pval = omnibus_test(alpha=d1)
+    assert pval > 0.05, "Expected non-significant p-value for uniform distribution"
+
 
 def test_batschelet_test():
     data_zar_ex5_ch27 = load_data("D8", source="zar")
