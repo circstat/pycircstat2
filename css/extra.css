@@ -1,0 +1,19 @@
+/* Prevent table cells from wrapping */
+.md-typeset table {
+    width: 100%;
+    white-space: nowrap;
+}
+
+/* Ensure the table container allows horizontal scrolling if needed */
+.md-typeset__table {
+    overflow-x: auto;
+    display: block;
+}
+
+/* Optional: Keep the header fixed for large tables */
+.md-typeset table th {
+    position: sticky;
+    top: 0;
+    background: white;
+    z-index: 2;
+}
