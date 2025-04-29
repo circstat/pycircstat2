@@ -361,13 +361,15 @@ def omnibus_test(
     verbose: bool = False,
 ) -> tuple[float, float]:
     """
-    A simple alternative to the Rayleigh test, aka Hodges-Ajne test,
-    which does not assume sampling from a specific distribution. This
-    is called an "omnibus test" because it works well for unimodal,
-    bimodal, and multimodal distributions (for ungrouped data).
+    Hodges–Ajne omnibus test for circular uniformity.
 
     - H0: The population is uniformly distributed around the circle
     - H1: The population is not uniformly distributed.
+
+    This test is distribution-free and handles uni-, bi-, and multimodal
+    alternatives.  The classical p-value involves factorials and
+    overflows for large *n*.  We therefore compute it in log-space
+    (``math.lgamma``) and exponentiate at the very end.
 
     Parameters
     ----------
@@ -403,12 +405,41 @@ def omnibus_test(
         lines_rotated > 0.0, lines_rotated < np.round(np.pi, 5)
     ).sum(1)
     m = int(np.min(right))
-    pval = (
-        (n - 2 * m)
-        * math.factorial(n)
-        / (math.factorial(m) * math.factorial(n - m))
-        / 2 ** (n - 1)
+
+    # ------------------------------------------------------------------
+    # 2. p-value   ———  analytical formula and its log form
+    # ------------------------------------------------------------------
+    #     Classical (Zar 2010, eq. 27-4):
+    #
+    #         p  =  (n − 2m) · n! / [ m! · (n − m)! · 2^(n−1) ]            …(1)
+    #       # pval = (
+    #       #    (n - 2 * m)
+    #       #    * math.factorial(n)
+    #       #    / (math.factorial(m) * math.factorial(n - m))
+    #       #    / 2 ** (n - 1)
+    #       # ) # eq(27.7)
+
+    #     Taking natural logs and using  Γ(k+1) = k!  with  log Γ = lgamma:
+    #
+    #         ln p  =  ln(n − 2m)
+    #                 + lgamma(n + 1)
+    #                 − lgamma(m + 1)
+    #                 − lgamma(n − m + 1)
+    #                 − (n − 1)·ln 2                                        …(2)
+    #
+    #     Eq. (2) is numerically safe for very large n; we exponentiate at
+    #     the end, knowing the result may under-flow to 0.0 in double precision.
+    # ------------------------------------------------------------------
+
+    logp = (
+        math.log(n - 2*m)                     
+        + math.lgamma(n + 1)                 
+        - math.lgamma(m + 1)                  
+        - math.lgamma(n - m + 1)              
+        - (n - 1)*math.log(2.0)               
     )
+    pval = np.exp(logp)
+    
     A = np.pi * np.sqrt(n) / (2 * (n - 2 * m))
 
     if verbose:
