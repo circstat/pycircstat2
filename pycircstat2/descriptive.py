@@ -522,6 +522,7 @@ def circ_median(
     method: str = "deviation",
     return_average: bool = True,
     average_method: str = "all",
+    verbose: bool = False,
 ) -> Union[float, np.ndarray]:
     r"""
     Circular median.
@@ -567,12 +568,9 @@ def circ_median(
     # edge cases for early exit
     # if all points coincide, return the first point
     if np.isclose(circ_r(alpha, w), 1.0, atol=1e-12):
+        if verbose:
+            print("All points coincide, returning the first point as median.")
         return alpha[0]
-
-    # if all points are uniformly distributed, return NaN
-    from pycircstat2.hypothesis import rayleigh_test
-    if rayleigh_test(alpha, w=w).pval > 0.05:
-        return np.nan
 
     # grouped data
     if not np.all(w == 1):

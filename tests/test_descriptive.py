@@ -125,12 +125,7 @@ def test_circ_median():
     m = circ_median(angles)
     np.testing.assert_allclose(np.rad2deg(m) % 360, 30.0, atol=1e-12)
 
-    # 2) random sample from a uniform distribution  → NaN
-    rng = np.random.default_rng(0)
-    uniform_sample = rng.random(100) * 2*np.pi
-    assert np.isnan(circ_median(uniform_sample))
-
-    # 3) perfectly symmetric bimodal sample  → NaN
+    # 2) perfectly symmetric bimodal sample  → NaN
     bimodal = np.deg2rad([0, 0, 90, 90])
     assert np.isnan(circ_median(bimodal))
 
