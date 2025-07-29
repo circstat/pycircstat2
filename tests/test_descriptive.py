@@ -119,6 +119,12 @@ def test_circ_median():
 
     np.testing.assert_approx_equal(np.rad2deg(median), 313.8, significant=2)
 
+    # edge case: all angles are the same
+    angles_degree = np.array([30 for _ in range(10)])
+    angles_radians = np.deg2rad(angles_degree)
+
+    median = circ_median(angles_radians)
+    np.testing.assert_approx_equal(np.rad2deg(median), 30.0, significant=1)
 
 def test_circ_mean_deviation():
 
