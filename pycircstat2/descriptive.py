@@ -704,7 +704,7 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
     # data point(s) with minimal circular mean deviation is/are potential median(s);
     idx_candidates = np.where(angdist == angdist.min())[0]
     # if the values of alpha are the same, then the median is just the number itself
-    if len(set(alpha)) == 1:
+    if np.allclose(np.mod(alpha - alpha[0], 2 * np.pi), 0):
         median = alpha[0]
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Return Nan.
