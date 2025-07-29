@@ -677,7 +677,10 @@ def _circ_median_count(alpha: np.ndarray) -> Union[float,np.ndarray]:
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Retrun Nan.
     if len(idx_candidates) == len(alpha):
-        median = np.nan
+        if np.isclose(circ_r(alpha), 1.0, atol=1e-12):
+            median = alpha[0]          # all points coincide
+        else:
+            median = np.nan            # probably uniform
     # if number of potential median is 1, return it as median
     elif len(idx_candidates) == 1:
         median = alpha[idx_candidates][0]
@@ -706,7 +709,10 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Retrun Nan.
     if len(idx_candidates) == len(alpha):
-        median = np.nan
+        if np.isclose(circ_r(alpha), 1.0, atol=1e-12):
+            median = alpha[0]          # all points coincide
+        else:
+            median = np.nan            # probably uniform
     # if number of potential median is 1, return it as median
     elif len(idx_candidates) == 1:
         median = alpha[idx_candidates][0]
