@@ -522,6 +522,7 @@ def circ_median(
     method: str = "deviation",
     return_average: bool = True,
     average_method: str = "all",
+    verbose: bool = False,
 ) -> Union[float, np.ndarray]:
     r"""
     Circular median.
@@ -563,6 +564,13 @@ def circ_median(
 
     if w is None:
         w = np.ones_like(alpha)
+
+    # edge cases for early exit
+    # if all points coincide, return the first point
+    if np.isclose(circ_r(alpha, w), 1.0, atol=1e-12):
+        if verbose:
+            print("All points coincide, returning the first point as median.")
+        return alpha[0]
 
     # grouped data
     if not np.all(w == 1):
@@ -677,7 +685,7 @@ def _circ_median_count(alpha: np.ndarray) -> Union[float,np.ndarray]:
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Retrun Nan.
     if len(idx_candidates) == len(alpha):
-        median = np.nan
+        median = np.nan           
     # if number of potential median is 1, return it as median
     elif len(idx_candidates) == 1:
         median = alpha[idx_candidates][0]
@@ -706,7 +714,7 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
     # if number of potential median is the same as the number of data point
     # meaning that the data is more or less uniformly distributed. Retrun Nan.
     if len(idx_candidates) == len(alpha):
-        median = np.nan
+        median = np.nan            
     # if number of potential median is 1, return it as median
     elif len(idx_candidates) == 1:
         median = alpha[idx_candidates][0]
