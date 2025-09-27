@@ -1,4 +1,5 @@
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Union
 
@@ -18,7 +19,13 @@ from .descriptive import (
     circ_r,
     circ_range,
 )
-from .utils import A1inv, angmod, angular_distance, significance_code
+from .utils import (
+    A1inv,
+    angmod,
+    angular_distance,
+    is_within_circular_range,
+    significance_code,
+)
 
 ###################
 # One-Sample Test #
@@ -96,32 +103,50 @@ def rayleigh_test(
     P625, Section 27.1, Example 27.1 of Zar, 2010
     """
 
-    if r is None:
-        assert isinstance(alpha, np.ndarray), (
-            "If `r` is None, then `alpha` (and `w`) is needed."
-        )
-        if w is None:
-            w = np.ones_like(alpha)
-        n = np.sum(w, dtype=int)
-        r = circ_r(alpha, w)
+    if B <= 0:
+        raise ValueError("`B` must be a positive integer.")
 
-    if n is None:
-        raise ValueError("Sample size `n` is missing.")
+    if r is None:
+        if alpha is None:
+            raise ValueError("If `r` is None, then `alpha` (and optionally `w`) is required.")
+        alpha = np.asarray(alpha, dtype=float)
+        if alpha.size == 0:
+            raise ValueError("`alpha` must contain at least one angle.")
+        if w is None:
+            w = np.ones_like(alpha, dtype=float)
+        else:
+            w = np.asarray(w, dtype=float)
+            if w.shape != alpha.shape:
+                raise ValueError("`w` must have the same shape as `alpha`.")
+        n_total = float(np.sum(w))
+        if n_total <= 0:
+            raise ValueError("Sample size inferred from `w` must be positive.")
+        if not np.isclose(n_total, round(n_total)):
+            raise ValueError("Rayleigh's test requires integer sample sizes when weights are used.")
+        n = int(round(n_total))
+        r = circ_r(alpha, w)
+    else:
+        r = float(r)
+
+    if n is None or n <= 0:
+        raise ValueError("Sample size `n` must be provided and positive when `r` is given.")
+
+    if not (0.0 <= r <= 1.0):
+        raise ValueError("`r` must lie in the interval [0, 1].")
 
     R = n * r
     z = n * r**2  # eq(27.2)
 
     pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
 
+    bootstrap_pval: Optional[float]
     if B > 1:
-        tb = np.zeros(B)
-        for i in range(B):
-            x = np.random.normal(size=(n, 1))
-            x /= np.linalg.norm(x, axis=1, keepdims=True)  # Normalize to unit sphere
-            mb = np.sum(x, axis=0)
-            tb[i] = np.sum(mb**2) / n
-
-        bootstrap_pval = float((np.sum(tb > z) + 1) / (B + 1))
+        rng = np.random.default_rng()
+        uniforms = rng.uniform(0.0, 2 * np.pi, size=(B, n))
+        unit_vectors = np.exp(1j * uniforms)
+        resultant_lengths = np.abs(np.sum(unit_vectors, axis=1))
+        bootstrap_stats = (resultant_lengths**2) / n
+        bootstrap_pval = float((np.count_nonzero(bootstrap_stats >= z) + 1) / (B + 1))
     else:
         bootstrap_pval = None
 
@@ -183,7 +208,13 @@ def chisquare_test(w: np.ndarray, verbose: bool = False) -> ChiSquareTestResult:
     """
     from scipy.stats import chisquare
 
-    res = chisquare(w)
+    frequencies = np.asarray(w, dtype=float)
+    if frequencies.ndim != 1 or frequencies.size == 0:
+        raise ValueError("`w` must be a one-dimensional array with at least one element.")
+    if np.any(frequencies < 0):
+        raise ValueError("`w` must contain non-negative frequencies.")
+
+    res = chisquare(frequencies)
     chi2 = res.statistic
     pval = res.pvalue
 
@@ -253,24 +284,43 @@ def V_test(
     P627, Section 27.1, Example 27.2 of Zar, 2010
     """
 
+    angle = float(angle)
+
     if mean is None or r is None or n is None:
         if alpha is None:
-            raise ValueError("If `mean`, `r` or `n` is None, then `alpha` (and `w`) is needed.")
+            raise ValueError("If `mean`, `r`, or `n` is None, then `alpha` (and optionally `w`) is required.")
+        alpha = np.asarray(alpha, dtype=float)
+        if alpha.size == 0:
+            raise ValueError("`alpha` must contain at least one angle.")
         if w is None:
-            w = np.ones_like(alpha)
+            w = np.ones_like(alpha, dtype=float)
+        else:
+            w = np.asarray(w, dtype=float)
+            if w.shape != alpha.shape:
+                raise ValueError("`w` must have the same shape as `alpha`.")
         n = int(np.sum(w))
+        if n <= 0:
+            raise ValueError("Sample size inferred from `w` must be positive.")
         mean, r = circ_mean_and_r(alpha, w)
-        
+    else:
+        mean = float(mean)
+        r = float(r)
+        if n <= 0:
+            raise ValueError("`n` must be positive.")
+
+    if not (0.0 <= r <= 1.0):
+        raise ValueError("`r` must lie in the interval [0, 1].")
+
     R = n * r
-    V = R * np.cos(mean - angle)  # eq(27.5)
-    u = V * np.sqrt(2 / n)  # eq(27.6)
-    pval = 1 - norm().cdf(u)
+    V = R * np.cos(angmod(mean - angle, bounds=[-np.pi, np.pi]))  # eq(27.5)
+    u = V * np.sqrt(2.0 / n)  # eq(27.6)
+    pval = float(norm.sf(u))
 
     if verbose:
         print("Modified Rayleigh's Test of Uniformity")
         print("--------------------------------------")
         print("H0: ρ = 0")
-        print("HA: ρ ≠ 0 and μ = {angle:.5f} rad")
+        print(f"HA: ρ ≠ 0 and μ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {V:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -325,17 +375,23 @@ def one_sample_test(
     """
 
     if lb is None or ub is None:
-        assert isinstance(alpha, np.ndarray), (
-            "If `ub` or `lb` is None, then `alpha` (and `w`) is needed."
-        )
+        if alpha is None:
+            raise ValueError("If `lb` or `ub` is None, then `alpha` (and optionally `w`) is required.")
+        alpha = np.asarray(alpha, dtype=float)
+        if alpha.size == 0:
+            raise ValueError("`alpha` must contain at least one angle.")
         if w is None:
-            w = np.ones_like(alpha)
+            w = np.ones_like(alpha, dtype=float)
+        else:
+            w = np.asarray(w, dtype=float)
+            if w.shape != alpha.shape:
+                raise ValueError("`w` must have the same shape as `alpha`.")
         lb, ub = circ_mean_ci(alpha=alpha, w=w)
 
-    if lb < angle < ub:
-        reject = False  # not able reject null (mean angle == angle)
-    else:
-        reject = True  # reject null (mean angle == angle)
+    lb = float(lb)
+    ub = float(ub)
+
+    reject = not is_within_circular_range(angle, lb, ub)
 
     if verbose:
         print("One-Sample Test for the Mean Angle")
@@ -395,15 +451,22 @@ def omnibus_test(
     P629-630, Section 27.2, Example 27.4 of Zar, 2010
     """
 
-    lines = np.linspace(0, np.pi, scale * 360)
-    n = len(alpha)
+    if scale <= 0:
+        raise ValueError("`scale` must be a positive integer.")
 
-    lines_rotated = np.round(angmod((lines[:, None] - alpha)), 5)
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
+
+    lines = np.linspace(0.0, np.pi, scale * 360, endpoint=False)
+    n = alpha.size
+
+    lines_rotated = angmod(lines[:, None] - alpha)
 
     # # count number of points on the right half circle, excluding the boundaries
     right = n - np.logical_and(
-        lines_rotated > 0.0, lines_rotated < np.round(np.pi, 5)
-    ).sum(1)
+        lines_rotated > 0.0, lines_rotated < np.pi
+    ).sum(axis=1)
     m = int(np.min(right))
 
     # ------------------------------------------------------------------
@@ -431,16 +494,21 @@ def omnibus_test(
     #     the end, knowing the result may under-flow to 0.0 in double precision.
     # ------------------------------------------------------------------
 
-    logp = (
-        math.log(n - 2*m)                     
-        + math.lgamma(n + 1)                 
-        - math.lgamma(m + 1)                  
-        - math.lgamma(n - m + 1)              
-        - (n - 1)*math.log(2.0)               
-    )
-    pval = np.exp(logp)
-    
-    A = np.pi * np.sqrt(n) / (2 * (n - 2 * m))
+    denom = n - 2 * m
+    if denom <= 0:
+        logp = -np.inf
+        pval = 0.0
+        A = np.inf
+    else:
+        logp = (
+            math.log(denom)
+            + math.lgamma(n + 1)
+            - math.lgamma(m + 1)
+            - math.lgamma(n - m + 1)
+            - (n - 1) * math.log(2.0)
+        )
+        pval = float(np.exp(logp))
+        A = np.pi * np.sqrt(n) / (2 * denom)
 
     if verbose:
         print('Hodges-Ajne ("omnibus") Test for Uniformity')
@@ -488,10 +556,16 @@ def batschelet_test(
 
     from scipy.stats import binomtest
 
-    n = len(alpha)
-    angle_diff = np.round(angmod(((angle + 0.5 * np.pi) - alpha)), 5)
-    m = np.logical_and(angle_diff > 0.0, angle_diff < np.round(np.pi, 5)).sum()
-    C = n - m
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
+
+    angle = float(angle)
+
+    n = alpha.size
+    angle_diff = angmod((angle + 0.5 * np.pi) - alpha)
+    m = np.logical_and(angle_diff > 0.0, angle_diff < np.pi).sum()
+    C = int(n - m)
     pval = float(binomtest(C, n=n, p=0.5).pvalue)
 
     if verbose:
@@ -541,11 +615,17 @@ def symmetry_test(
     P631-632, Section 27.3, Example 27.6 of Zar, 2010
     """
 
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
+
     if median is None:
         median = float(circ_median(alpha=alpha))
+    else:
+        median = float(median)
 
-    d = (alpha - median).round(5)
-    
+    d = angmod(alpha - median, bounds=[-np.pi, np.pi])
+
     res = wilcoxon(d, alternative="two-sided")
     test_statistic = float(res.statistic)
     pval = float(res.pvalue)
@@ -594,9 +674,14 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, flo
     P632-636, Section 27.4, Example 27.7/8 of Zar, 2010
     """
 
+    if len(circs) < 2:
+        raise ValueError("At least two samples are required for the Watson-Williams test.")
+
     k = len(circs)
     N = np.sum([circ.n for circ in circs])
-    rw = np.mean([circ.r for circ in circs]).astype(float)
+    if N <= k:
+        raise ValueError("Combined sample size must exceed the number of groups.")
+    rw = float(np.mean([circ.r for circ in circs]))
 
     K = 1 + 3 / 8 / circ_kappa(rw)
 
@@ -658,18 +743,29 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple[float, float]:
 
     from scipy.stats import rankdata
 
-    def cumfreq(alpha, circ):
-        indices = np.squeeze(
-            [np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)]
-        )
-        indices = np.hstack([0, indices, len(alpha)])
-        freq_cumsum = rankdata(np.repeat(circ.alpha, circ.w), method="max") / circ.n
+    def cumfreq(alpha_unique, circ):
+        weights = getattr(circ, "w", None)
+        if weights is None:
+            weights = np.ones_like(circ.alpha, dtype=int)
+        else:
+            weights = np.asarray(weights, dtype=float)
+            if not np.all(np.isclose(weights, np.round(weights))):
+                raise ValueError("Watson's U2 test requires integer bin frequencies.")
+            weights = weights.astype(int)
+        sample = np.repeat(circ.alpha, weights)
+        if sample.size == 0:
+            raise ValueError("Each sample must contain at least one observation.")
+
+        # Map sample values to indices in the combined unique array using tolerance
+        idx = [np.where(np.isclose(alpha_unique, val, atol=1e-10))[0] for val in sample]
+        idx = np.concatenate(idx)
+        idx = np.hstack([0, idx, alpha_unique.size])
+
+        freq_cumsum = rankdata(sample, method="max") / circ.n
         freq_cumsum = np.hstack([0, freq_cumsum])
 
-        tiles = np.diff(indices)
-        cf = np.repeat(freq_cumsum, tiles)
-
-        return cf
+        tiles = np.diff(idx)
+        return np.repeat(freq_cumsum, tiles)
 
     a, t = np.unique(
         np.hstack([np.repeat(c.alpha, c.w) for c in circs]), return_counts=True
@@ -755,7 +851,7 @@ def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, floa
         S = np.sum(np.sin(circ_ranks[0]))
         W = 2 * (N - 1) * (C**2 + S**2) / np.prod([c.n for c in circs])
 
-    elif k > 3:
+    elif k >= 3:
         W = 0
         for i in range(k):
             circ_rank = circ_ranks[i]
@@ -779,7 +875,9 @@ def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, floa
 
 
 def wallraff_test(
-    circs: list, angle=float, verbose: bool = False
+    circs: list,
+    angle: float = 0.0,
+    verbose: bool = False,
 ) -> tuple[float, float]:
     """Wallraff test of angular distances / dispersion against a specified angle.
 
@@ -808,14 +906,20 @@ def wallraff_test(
     """
 
     if len(circs) != 2:
-        raise ValueError("Current implementation only supports two-sample comparision.")
+        raise ValueError("Current implementation only supports two-sample comparison.")
 
-    angles = np.ones_like(circs) * angle
+    angle_arr = np.asarray(angle, dtype=float)
+    if angle_arr.ndim == 0:
+        angles = np.repeat(angle_arr, len(circs))
+    else:
+        if angle_arr.size != len(circs):
+            raise ValueError("`angle` must be a scalar or have the same length as `circs`.")
+        angles = angle_arr
 
     ns = [c.n for c in circs]
-    ad = [angular_distance(a=c.alpha, b=angles[i]) for (i, c) in enumerate(circs)]
+    distances = [angular_distance(c.alpha, angles[i]) for i, c in enumerate(circs)]
 
-    rs = rankdata(np.hstack(ad))
+    rs = rankdata(np.hstack(distances))
 
     N = np.sum(ns)
 
@@ -826,7 +930,7 @@ def wallraff_test(
     U = np.min([U1, U2])
 
     z = (U - np.prod(ns) / 2 + 0.5) / np.sqrt(np.prod(ns) * (N + 1) / 12)
-    pval = float(2 * norm.cdf(z))
+    pval = float(2 * norm.sf(abs(z)))
 
     if verbose:
         print("Wallraff test of angular distances / dispersion")
@@ -1026,6 +1130,15 @@ def angular_randomisation_test(
     International Journal of Nonlinear Analysis and Applications, 13(1), 2703-2711.
     """
 
+    if len(circs) != 2:
+        raise ValueError("The Angular Randomization Test requires exactly two samples.")
+    if n_simulation <= 0:
+        raise ValueError("`n_simulation` must be a positive integer.")
+
+    samples = [np.asarray(c.alpha, dtype=float) for c in circs]
+    if any(sample.size == 0 for sample in samples):
+        raise ValueError("Each sample must contain at least one observation.")
+
     def art_statistic(S1: np.ndarray, S2: np.ndarray) -> float:
         """
         Compute the Angular Randomisation Test (ART) statistic for two groups of circular data.
@@ -1050,26 +1163,22 @@ def angular_randomisation_test(
         # Scale the total distance and return
         return scaling_factor * total_distance
 
-    # number of samples
-    k = len(circs)
-    if k != 2:
-        raise ValueError("The Angular Randomization Test requires exactly two samples.")
-
     # 1. Compute observed test statistic T*₀
-    observed_stat = art_statistic(circs[0].alpha, circs[1].alpha)
+    observed_stat = art_statistic(samples[0], samples[1])
 
     # Initialize counter for permutations more extreme than observed
     n_extreme = 1  # Start at 1 to count the observed statistic
 
     # Combine samples for permutation
-    combined_data = np.concatenate([circs[0].alpha, circs[1].alpha])
-    n1 = len(circs[0].alpha)
+    combined_data = np.concatenate(samples)
+    n1 = samples[0].size
 
     # Perform permutation test
+    rng = np.random.default_rng()
 
     for _ in range(n_simulation):
         # Randomly permute the combined data
-        permuted_data = np.random.permutation(combined_data)
+        permuted_data = rng.permutation(combined_data)
 
         # Split into two groups of original sizes
         perm_S1 = permuted_data[:n1]
@@ -1144,33 +1253,41 @@ def kuiper_test(
     https://rdrr.io/cran/Directional/src/R/kuiper.R
     """
 
-    def compute_V(alpha):
-        alpha = np.sort(alpha) / (2 * np.pi)  #
-        n = len(alpha)
-        i = np.arange(1, n + 1)
+    if n_simulation <= 0:
+        raise ValueError("`n_simulation` must be a positive integer.")
 
-        D_plus = np.max(i / n - alpha)
-        D_minus = np.max(alpha - (i - 1) / n)
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
+
+    def compute_V(sample):
+        ordered = np.sort(sample) / (2 * np.pi)
+        n = ordered.size
+        indices = np.arange(1, n + 1, dtype=float)
+
+        D_plus = np.max(indices / n - ordered)
+        D_minus = np.max(ordered - (indices - 1) / n)
         f = np.sqrt(n) + 0.155 + 0.24 / np.sqrt(n)
         V = f * (D_plus + D_minus)
-        return V, f
+        return float(V), float(f)
 
-    n = n = len(alpha)
+    n = alpha.size
     Vo, f = compute_V(alpha)
 
     if n_simulation == 1:
         # asymptotic p-value
-        m = np.arange(1, 50) ** 2
+        m = (np.arange(1, 50, dtype=float)) ** 2
         a1 = 4 * m * Vo**2
         a2 = np.exp(-2 * m * Vo**2)
         b1 = 2 * (a1 - 1) * a2
         b2 = 8 * Vo / (3 * f) * m * (a1 - 3) * a2
-        pval = np.sum(b1 - b2)
+        pval = float(np.sum(b1 - b2))
     else:
-        np.random.seed(seed)
-        x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
-        Vs = np.array(([compute_V(x[:, i])[0] for i in range(n_simulation)]))
-        pval = (np.sum(Vs > Vo) + 1) / (n_simulation + 1)
+        rng = np.random.default_rng(seed)
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
+        x = np.sort(uniforms, axis=0)
+        Vs = np.array([compute_V(x[:, i])[0] for i in range(n_simulation)])
+        pval = float((np.count_nonzero(Vs >= Vo) + 1) / (n_simulation + 1))
 
     if verbose:
         print("Kuiper's Test of Circular Uniformity")
@@ -1230,29 +1347,34 @@ def watson_test(
     kuiper_test(); rao_spacing_test()
     """
 
-    def compute_U2(alpha):
-        alpha = np.sort(alpha)
-        n = len(alpha)
-        i = np.arange(1, n + 1)
+    if n_simulation <= 0:
+        raise ValueError("`n_simulation` must be a positive integer.")
 
-        u = alpha / 2 / np.pi
-        # u2 = u**2
-        # iu = i * u
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
 
-        U2 = np.sum(((u - (i - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (12 * n)
-        return U2
+    def compute_U2(sample):
+        ordered = np.sort(sample)
+        n = ordered.size
+        indices = np.arange(1, n + 1, dtype=float)
 
-    n = len(alpha)
-    U2o = float(compute_U2(alpha))
+        u = ordered / (2 * np.pi)
+        U2 = np.sum(((u - (indices - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (12 * n)
+        return float(U2)
+
+    n = alpha.size
+    U2o = compute_U2(alpha)
 
     if n_simulation == 1:
         m = np.arange(1, 51)
         pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
     else:
-        np.random.seed(seed)
-        x = np.sort(np.random.uniform(low=0, high=2 * np.pi, size=[n, n_simulation]), 0)
-        U2s = np.array(([compute_U2(x[:, i]) for i in range(n_simulation)]))
-        pval = float((np.sum(U2s > U2o) + 1) / (n_simulation + 1))
+        rng = np.random.default_rng(seed)
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
+        x = np.sort(uniforms, axis=0)
+        U2s = np.array([compute_U2(x[:, i]) for i in range(n_simulation)])
+        pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_simulation + 1))
 
     if verbose:
         print("Watson's One-Sample U2 Test of Circular Uniformity")
@@ -1310,50 +1432,53 @@ def rao_spacing_test(
     https://movementecologyjournal.biomedcentral.com/articles/10.1186/s40462-019-0160-x
     """
 
-    def compute_U(alpha):
-        n = len(alpha)
-        f = np.sort(alpha)
-        T = np.hstack([f[1:] - f[:-1], 2 * np.pi - f[-1] + f[0]])
-        U = 0.5 * np.sum(np.abs(T - (2 * np.pi / n)))
-        return U
+    if n_simulation <= 0:
+        raise ValueError("`n_simulation` must be a positive integer.")
+
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
+
+    def compute_U(sample):
+        ordered = np.sort(sample)
+        n_local = ordered.size
+        spacings = np.hstack([ordered[1:] - ordered[:-1], 2 * np.pi - ordered[-1] + ordered[0]])
+        return 0.5 * np.sum(np.abs(spacings - (2 * np.pi / n_local)))
 
     if w is not None:
-        n = np.sum(w)
-        m = len(alpha)
-        alpha = np.repeat(alpha, w)
+        w = np.asarray(w, dtype=float)
+        if np.any(w < 0):
+            raise ValueError("`w` must contain non-negative frequencies.")
+        if not np.all(np.isclose(w, np.round(w))):
+            raise ValueError("`w` must contain integer frequencies.")
+        w = w.astype(int)
+        if w.shape != alpha.shape:
+            raise ValueError("`w` must have the same shape as `alpha`.")
+        n = int(np.sum(w))
+        if n <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        m = alpha.size
+        expanded_alpha = np.repeat(alpha, w)
     else:
-        n = len(alpha)
+        expanded_alpha = alpha
+        n = expanded_alpha.size
 
-    # p-value
-    np.random.seed(seed)
-    Uo = compute_U(alpha)
-    if w is not None:  # noncontinous / grouped data
-        Us = np.array(
-            [
-                compute_U(
-                    angmod(
-                        np.floor(np.random.uniform(low=0, high=2 * np.pi, size=n))
-                        * m
-                        / (2 * np.pi)
-                        * 2
-                        * np.pi
-                        / m
-                        + vonmises(kappa=kappa).rvs(n)
-                    )
-                )
-                for i in range(n_simulation)
-            ]
-        )
-    else:  # continous / ungrouped data
-        Us = np.array(
-            [
-                compute_U(np.random.uniform(low=0, high=2 * np.pi, size=n))
-                for i in range(n_simulation)
-            ]
-        )
+    rng = np.random.default_rng(seed)
 
-    counter = np.sum(Us > Uo)
-    pval = counter / (n_simulation + 1)
+    Uo = compute_U(expanded_alpha)
+    if w is not None:  # noncontinuous / grouped data
+        vm_dist = vonmises(kappa=kappa)
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n_simulation, n))
+        snapped = np.floor(uniforms * m / (2 * np.pi)) * (2 * np.pi / m)
+        noise = vm_dist.rvs(size=(n_simulation, n), random_state=rng)
+        samples = angmod(snapped + noise)
+        Us = np.array([compute_U(sample) for sample in samples])
+    else:
+        samples = rng.uniform(low=0.0, high=2 * np.pi, size=(n_simulation, n))
+        Us = np.array([compute_U(sample) for sample in samples])
+
+    counter = np.count_nonzero(Us >= Uo)
+    pval = float((counter + 1) / (n_simulation + 1))
 
     if verbose:
         print("Rao's Spacing Test of Circular Uniformity")
@@ -1388,10 +1513,14 @@ def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
     ---------
     P162, Section 7.2.3 of Jammalamadaka, S. Rao and SenGupta, A. (2001)
     """
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
+
     range_stat = circ_range(alpha)  # Compute test statistic
 
     # Compute p-value using approximation formula from CircStats (if available)
-    n = len(alpha)
+    n = alpha.size
     stop = int(np.floor(1 / (1 - range_stat / (2 * np.pi))))
     index = np.arange(1, stop + 1)
 
@@ -1433,26 +1562,27 @@ def binomial_test(alpha: np.ndarray, md: float) -> float:
     """
     from scipy.stats import binom
 
-    alpha = np.asarray(alpha)
+    alpha = np.asarray(alpha, dtype=float)
+    if alpha.size == 0:
+        raise ValueError("`alpha` must contain at least one angle.")
 
     if np.ndim(md) != 0:
         raise ValueError("The median (md) must be a single scalar value.")
 
-    n = len(alpha)
-
     # Compute circular differences from hypothesized median
-    d = circ_dist(alpha, md)
+    d = circ_dist(alpha, float(md))
 
     # Count the number of angles on each side of the hypothesized median
     n1 = np.sum(d < 0)
     n2 = np.sum(d > 0)
+    n_eff = int(n1 + n2)
+    if n_eff == 0:
+        return 1.0
 
     # Compute p-value using binomial test
-    n_min = min(n1, n2)
-    n_max = max(n1, n2)
-
-    # Binomial p-value
-    pval = float(binom.cdf(n_min, n, 0.5) + (1 - binom.cdf(n_max - 1, n, 0.5)))
+    n_min = int(min(n1, n2))
+    pval = float(2 * binom.cdf(n_min, n_eff, 0.5))
+    pval = min(pval, 1.0)
 
     return pval
 
@@ -1492,10 +1622,13 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
     Batschelet, E. (1980). Circular Statistics in Biology. Academic Press.
     """
     # Ensure inputs are numpy arrays
-    alpha1, alpha2 = np.asarray(alpha1), np.asarray(alpha2)
+    alpha1 = np.asarray(alpha1, dtype=float)
+    alpha2 = np.asarray(alpha2, dtype=float)
 
     # Sample sizes
     n1, n2 = len(alpha1), len(alpha2)
+    if min(n1, n2) < 2:
+        raise ValueError("Both samples must contain at least two observations.")
 
     # Compute resultant vector lengths
     R1 = n1 * circ_r(alpha1)
@@ -1506,20 +1639,28 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
 
     # Warn if rbar is too low
     if rbar < 0.7:
-        print("Warning: The resultant vector length should be > 0.7 for valid results.")
+        warnings.warn(
+            "The resultant vector length should exceed 0.7 for the concentration test to be reliable.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     # Compute F-statistic
-    f_stat = ((n2 - 1) * (n1 - R1)) / ((n1 - 1) * (n2 - R2))
+    df1 = n1 - 1
+    df2 = n2 - 1
+    numerator = df2 * (n1 - R1)
+    denominator = df1 * (n2 - R2)
+    if denominator <= 0 or numerator <= 0:
+        raise ValueError("Degenerate data: cannot compute concentration test statistic.")
+    f_stat = numerator / denominator
 
     # Compute p-value (adjusting for F-stat symmetry)
-    if f_stat > 1:
-        pval = 2 * (1 - f.cdf(f_stat, n1, n2))
+    if f_stat >= 1:
+        pval = 2 * f.sf(f_stat, df1, df2)
     else:
-        f_stat = 1 / f_stat
-        pval = 2 * (1 - f.cdf(f_stat, n2, n1))
+        pval = 2 * f.sf(1 / f_stat, df2, df1)
 
-
-    return f_stat, float(pval)
+    return float(f_stat), float(min(pval, 1.0))
 
 
 def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
@@ -1643,18 +1784,20 @@ def change_point_test(alpha):
 
     def phi(x):
         """Helper function for phi computation."""
-        arg = A1inv(x)
-        if i0(arg) != np.inf:
-            return x * A1inv(x) - np.log(i0(arg))
-        else:
-            return x * A1inv(x) - (
-                arg
+        inv = A1inv(x)
+        bessel = i0(inv)
+        if np.isinf(bessel):
+            corr = (
+                inv
                 + np.log(
                     1
-                    / np.sqrt(2 * np.pi * arg)
-                    * (1 + 1 / (8 * arg) + 9 / (128 * arg**2) + 225 / (1024 * arg**3))
+                    / np.sqrt(2 * np.pi * inv)
+                    * (1 + 1 / (8 * inv) + 9 / (128 * inv**2) + 225 / (1024 * inv**3))
                 )
             )
+        else:
+            corr = np.log(bessel)
+        return x * inv - corr
 
     def est_rho(alpha):
         """Estimate mean resultant length (rho)."""
@@ -1687,7 +1830,6 @@ def change_point_test(alpha):
 
     if n > 3:
         V = V[1 : n - 2]
-        print(f"V sliced: {V}")
         tmax = np.max(V)
         k_t = np.argmax(V) + 1
         tave = np.mean(V)
@@ -1894,15 +2036,21 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
     if k < 2:
         raise ValueError("At least two groups are required for the test.")
 
+    arrays = [np.asarray(group, dtype=float) for group in samples]
+    if any(arr.size == 0 for arr in arrays):
+        raise ValueError("Each group must contain at least one observation.")
+
     # Sample sizes
-    ns = np.array([len(group) for group in samples])
+    ns = np.array([arr.size for arr in arrays])
+    if np.any(ns < 2):
+        raise ValueError("Each group must contain at least two observations.")
 
     # Mean resultant lengths
-    r_bars = np.array([circ_r(group) for group in samples])
+    r_bars = np.array([circ_r(arr) for arr in arrays])
     Rs = r_bars * ns  # Unnormalized resultants
 
     # Overall resultant and mean resultant length
-    all_samples = np.hstack(samples)
+    all_samples = np.hstack(arrays)
     N = len(all_samples)
     r_bar_all = circ_r(all_samples)
 
@@ -1928,8 +2076,14 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
         vs = ns - 1
         v = N - k
         d = 1 / (3 * (k - 1)) * (np.sum(1 / vs) - 1 / v)
+        total_residual = N - np.sum(Rs)
+        residuals = ns - Rs
+        if np.any(residuals <= 0):
+            raise ValueError("Degenerate data: within-group dispersion is zero.")
+        if total_residual <= 0:
+            raise ValueError("Degenerate data: between-group dispersion is zero.")
         chi_square_stat = (1 / (1 + d)) * (
-            v * np.log((N - np.sum(Rs)) / v) - np.sum(vs * np.log((ns - Rs) / vs))
+            v * np.log(total_residual / v) - np.sum(vs * np.log(residuals / vs))
         )
 
     # Compute p-value
@@ -1962,7 +2116,11 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
     return result
 
 
-def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
+def common_median_test(
+    samples: list[np.ndarray],
+    alpha: float = 0.05,
+    verbose: bool = False,
+) -> dict:
     """
     Common Median Test (Equal Median Test) for Multiple Circular Samples.
 
@@ -1973,6 +2131,8 @@ def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict
     ----------
     samples : list of np.ndarray
         List of circular data arrays (angles in radians) for different groups.
+    alpha : float, optional
+        Significance level for deciding whether to reject the null hypothesis (default 0.05).
     verbose : bool, optional
         If `True`, prints the test summary.
 
@@ -1992,31 +2152,41 @@ def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict
     """
 
     # Number of groups
+    if not (0 < alpha < 1):
+        raise ValueError("`alpha` must be between 0 and 1.")
+
     k = len(samples)
     if k < 2:
         raise ValueError("At least two groups are required for the test.")
 
+    arrays = [np.asarray(group, dtype=float) for group in samples]
+    if any(arr.size == 0 for arr in arrays):
+        raise ValueError("Each group must contain at least one observation.")
+
     # Sample sizes
-    ns = np.array([len(group) for group in samples])
-    N = np.sum(ns)  # Total number of observations
+    ns = np.array([arr.size for arr in arrays])
+    N = int(np.sum(ns))  # Total number of observations
 
     # Compute the common circular median
-    common_median = circ_median(np.hstack(samples))
+    common_median = circ_median(np.hstack(arrays))
 
     # Compute deviations from the common median
-    m = np.zeros(k)
-    for i, group in enumerate(samples):
+    m = np.zeros(k, dtype=float)
+    for i, group in enumerate(arrays):
         deviations = circ_dist(group, common_median)
-        m[i] = np.sum(deviations < 0)  # Count how many are "below" the median
+        m[i] = np.sum(deviations < 0)
 
     # Compute test statistic
     M = np.sum(m)
+    if M == 0 or M == N:
+        raise ValueError("All observations fall on the same side of the median; test is undefined.")
+
     P = (N**2 / (M * (N - M))) * np.sum(m**2 / ns) - (N * M) / (N - M)
 
     # Compute p-value
     df = k - 1
     p_value = 1 - chi2.cdf(P, df)
-    reject = p_value < 0.05  # Reject H₀ if p-value is below 0.05
+    reject = p_value < alpha
 
     # If the null hypothesis is rejected, return NaN for the median
     if reject:
@@ -2036,7 +2206,7 @@ def common_median_test(samples: list[np.ndarray], verbose: bool = False) -> dict
         print(f"Estimated Common Median: {common_median if not reject else 'NaN'}")
         print(f"Test Statistic: {P:.5f}")
         print(f"P-value: {p_value:.5f}")
-        print(f"Reject H₀: {'Yes' if reject else 'No'}")
+        print(f"Reject H₀ (α={alpha:.2f}): {'Yes' if reject else 'No'}")
         print("--------------------------------------\n")
 
     return result
