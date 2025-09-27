@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Type, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy.stats import chi2, norm, rankdata
@@ -17,8 +17,8 @@ class CorrelationResult:
 
 
 def circ_corrcc(
-    a: Union[Type[Circular], np.ndarray],
-    b: Union[Type[Circular], np.ndarray],
+    a: Union[Circular, np.ndarray, Sequence[float]],
+    b: Union[Circular, np.ndarray, Sequence[float]],
     method: str = "fl",
     test: bool = False,
     strict: bool = True,
@@ -74,6 +74,7 @@ def circ_corrcc(
         Return significant test if `test` is set to True.
     """
 
+    method = method.lower()
     if method == "fl":  # Fisher & Lee (1983)
         _corr = _circ_corrcc_fl
     elif method == "js":  # Jammalamadaka & SenGupta (2001)
@@ -81,19 +82,34 @@ def circ_corrcc(
     elif method == "nonparametric":
         _corr = _circ_corrcc_np
     else:
-        raise ValueError("Invalid method. Choose from 'fl', 'js', 'nonparametric'.")
+        raise ValueError("Invalid method. Choose from 'fl', 'js', or 'nonparametric'.")
 
     result = _corr(a, b, test, strict)
 
-    if test:
-        return result
-    else:
-        return result.r
+    return result if test else result.r
+
+
+def _coerce_angles(
+    data: Union[Circular, np.ndarray, Sequence[float]],
+) -> Tuple[np.ndarray, Optional[float]]:
+    """Return angle array (in radians) and mean p-value if available."""
+
+    if isinstance(data, Circular):
+        return np.asarray(data.alpha, dtype=float), getattr(data, "mean_pval", None)
+
+    array = np.asarray(data, dtype=float)
+    if array.ndim == 0:
+        raise ValueError("Angles must be one-dimensional; got scalar input.")
+    if array.ndim != 1:
+        raise ValueError("Angles must be provided as a 1-D sequence.")
+    if array.size == 0:
+        raise ValueError("Angles must contain at least one element.")
+    return array, None
 
 
 def _circ_corrcc_fl(
-    a: Union[Type[Circular], np.ndarray],
-    b: Union[Type[Circular], np.ndarray],
+    a: Union[Circular, np.ndarray, Sequence[float]],
+    b: Union[Circular, np.ndarray, Sequence[float]],
     test: bool,
     strict: bool,
 ) -> CorrelationResult:
@@ -117,21 +133,22 @@ def _circ_corrcc_fl(
     P657-658, Section 27.15(a), Example 27.20 (Zar, 2010).
     """
 
-    if isinstance(a, Circular):
-        a_alpha = np.array(a.alpha)
-    if isinstance(b, Circular):
-        b_alpha = np.array(b.alpha)
+    a_alpha, _ = _coerce_angles(a)
+    b_alpha, _ = _coerce_angles(b)
 
-    if len(a_alpha) != len(b_alpha):
-        raise ValueError("`a` and `b` must be the same length.")
+    if a_alpha.size != b_alpha.size:
+        raise ValueError("`a` and `b` must have the same number of samples.")
+    if a_alpha.size < 2:
+        raise ValueError("At least two paired observations are required.")
 
     def _corr(a, b):
-        aij = np.triu(a[:, None] - a).flatten()
-        bij = np.triu(b[:, None] - b).flatten()
-        num = np.sum(np.sin(aij) * np.sin(bij))
-        den = np.sqrt(np.sum(np.sin(aij) ** 2) * np.sum(np.sin(bij) ** 2))
-        raa = num / den
-        return raa
+        diff_a = np.sin(np.subtract.outer(a, a)[np.triu_indices(len(a), k=1)])
+        diff_b = np.sin(np.subtract.outer(b, b)[np.triu_indices(len(b), k=1)])
+        num = np.sum(diff_a * diff_b)
+        den = np.sqrt(np.sum(diff_a**2) * np.sum(diff_b**2))
+        if np.isclose(den, 0.0):
+            raise ValueError("Degenerate data produced zero variance in pairwise differences.")
+        return num / den
 
     r = _corr(a_alpha, b_alpha)
 
@@ -139,7 +156,9 @@ def _circ_corrcc_fl(
         # jackknife test (Upton & Fingleton, 1989)
         # compute raa an additional n times, each time leaving out one pair of observations
         n = len(a_alpha)
-        raas = [_corr(np.delete(a_alpha, i), np.delete(b_alpha, i)) for i in range(n)]
+        raas = np.empty(n)
+        for i in range(n):
+            raas[i] = _corr(np.delete(a_alpha, i), np.delete(b_alpha, i))
         m_raas = np.mean(raas)
         s2_raas = np.var(raas, ddof=1)
         z = norm.ppf(0.975)
@@ -154,8 +173,8 @@ def _circ_corrcc_fl(
 
 
 def _circ_corrcc_js(
-    a: Union[Type[Circular], np.ndarray],
-    b: Union[Type[Circular], np.ndarray],
+    a: Union[Circular, np.ndarray, Sequence[float]],
+    b: Union[Circular, np.ndarray, Sequence[float]],
     test: bool,
     strict: bool,
 ) -> CorrelationResult:
@@ -182,36 +201,39 @@ def _circ_corrcc_js(
     Jammalamadaka & SenGupta (2001)
     """
 
-    if isinstance(a, Circular):
-        if strict:
-            assert a.mean_pval < 0.05, "Data `a` is uniformly distributed."
-        a_mean = a.mean
-        a = a.alpha
-    else:
-        a_mean = circ_mean(a)
+    a_alpha, a_pval = _coerce_angles(a)
+    b_alpha, b_pval = _coerce_angles(b)
 
-    if isinstance(b, Circular):
-        if strict:
-            assert b.mean_pval < 0.05, "Data `b` is uniformly distributed."
-        b_mean = b.mean
-        b = b.alpha
-    else:
-        b_mean = circ_mean(b)
+    if a_alpha.size != b_alpha.size:
+        raise ValueError("`a` and `b` must have the same number of samples.")
+    if a_alpha.size < 2:
+        raise ValueError("At least two paired observations are required.")
 
-    abar = a - a_mean
-    bbar = b - b_mean
+    if strict and a_pval is not None and a_pval >= 0.05:
+        raise ValueError("Sample `a` appears uniform (mean_pval ≥ 0.05).")
+    if strict and b_pval is not None and b_pval >= 0.05:
+        raise ValueError("Sample `b` appears uniform (mean_pval ≥ 0.05).")
+
+    a_mean = float(circ_mean(a_alpha))
+    b_mean = float(circ_mean(b_alpha))
+
+    abar = a_alpha - a_mean
+    bbar = b_alpha - b_mean
     Sa = np.sin(abar)
     Sb = np.sin(bbar)
     num = np.sum(Sa * Sb)
     den = np.sqrt(np.sum(Sa**2) * np.sum(Sb**2))
-
+    if np.isclose(den, 0.0):
+        raise ValueError("Degenerate data produced zero variance around the mean direction.")
     r = num / den
 
     if test:
-        n = len(a)
+        n = len(a_alpha)
         l20 = np.mean(Sa**2)
         l02 = np.mean(Sb**2)
         l22 = np.mean(Sa**2 * Sb**2)
+        if np.isclose(l22, 0.0):
+            raise ValueError("Degenerate data caused division by zero in variance term.")
         test_stat = np.sqrt(n) * np.sqrt(l20 * l02 / l22) * r
         p_val = 2 * (1 - norm.cdf(np.abs(test_stat)))
 
@@ -221,20 +243,22 @@ def _circ_corrcc_js(
 
 
 def _circ_corrcc_np(
-    a: Union[Type[Circular], np.ndarray],
-    b: Union[Type[Circular], np.ndarray],
+    a: Union[Circular, np.ndarray, Sequence[float]],
+    b: Union[Circular, np.ndarray, Sequence[float]],
     test: bool,
     strict: bool,
 ) -> CorrelationResult:
     """Nonparametric angular-angular correlation."""
 
-    a_alpha = np.array(a.alpha) if isinstance(a, Circular) else a
-    b_alpha = np.array(b.alpha) if isinstance(b, Circular) else b
+    a_alpha, _ = _coerce_angles(a)
+    b_alpha, _ = _coerce_angles(b)
 
-    if len(a_alpha) != len(b_alpha):
-        raise ValueError("`a` and `b` must be the same length.")
+    if a_alpha.size != b_alpha.size:
+        raise ValueError("`a` and `b` must have the same number of samples.")
 
-    n = len(a_alpha)
+    n = a_alpha.size
+    if n < 3:
+        raise ValueError("At least three paired observations are required for the nonparametric test.")
     C = 2 * np.pi / n
 
     rank_a = rankdata(a_alpha)
@@ -250,12 +274,12 @@ def _circ_corrcc_np(
     r = r1 - r2
 
     reject = (n - 1) * r > 2.99 + 2.16 / n
-    return CorrelationResult(r=r, reject_null=reject)
+    return CorrelationResult(r=float(r), reject_null=bool(reject))
 
 
 def circ_corrcl(
-    a: Union[Type[Circular], np.ndarray],
-    x: np.ndarray,
+    a: Union[Circular, np.ndarray, Sequence[float]],
+    x: Union[np.ndarray, Sequence[float]],
 ) -> CorrelationResult:
     r"""Angular-Linear / Cylindrical Correlation based on Mardia (1972).
 
@@ -286,21 +310,30 @@ def circ_corrcl(
     P658-659, Section 27.15(b) of Example 27.21 (Zar, 2010).
     """
 
-    a_alpha = np.array(a.alpha) if isinstance(a, Circular) else a
-
-    if len(a_alpha) != len(x):
+    a_alpha, _ = _coerce_angles(a)
+    x_arr = np.asarray(x, dtype=float)
+    if x_arr.ndim != 1:
+        raise ValueError("`x` must be a one-dimensional array.")
+    if a_alpha.size != x_arr.size:
         raise ValueError("`a` and `x` must be the same length.")
+    if a_alpha.size < 3:
+        raise ValueError("At least three paired observations are required.")
 
-    n = len(a_alpha)
+    n = a_alpha.size
 
-    rxc = np.corrcoef(np.cos(a), x)[0, 1]
-    rxs = np.corrcoef(x, np.sin(a))[0, 1]
-    rcs = np.corrcoef(np.sin(a), np.cos(a))[0, 1]
+    cos_a = np.cos(a_alpha)
+    sin_a = np.sin(a_alpha)
+
+    rxc = np.corrcoef(cos_a, x_arr)[0, 1]
+    rxs = np.corrcoef(x_arr, sin_a)[0, 1]
+    rcs = np.corrcoef(sin_a, cos_a)[0, 1]
 
     num = rxc**2 + rxs**2 - 2 * rxc * rxs * rcs
     den = 1 - rcs**2
-    r = np.sqrt(num / den)
+    if np.isclose(den, 0.0):
+        raise ValueError("Degenerate data produced division by zero in denominator.")
+    r = np.sqrt(max(num / den, 0.0))
 
     pval = 1 - chi2(df=2).cdf(n * r**2)
 
-    return CorrelationResult(r=r, p_value=pval)
+    return CorrelationResult(r=float(r), p_value=float(pval))
