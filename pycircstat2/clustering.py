@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -71,26 +71,42 @@ class MovM:
         n_iters: int = 100,
         full_cycle: Union[int, float] = 360,
         unit: str = "degree",
-        random_seed: int = 2046,
+        random_seed: Optional[int] = 2046,
         threshold: float = 1e-16,
     ):
-        self.burnin = (
-            burnin  # wait untill burinin step of iterations for convergence
-        )
-        self.threshold = threshold  # convergence threshold
-        self.n_clusters = n_clusters  # number of clusters to estimate
-        self.n_iters = n_iters  # maximum number of iterations for EM
-        self.full_cycle = full_cycle  # for data conversion
-        self.unit = unit  # for data conversion
-        self.random_seed = random_seed
-        self.converged = False  # place holder
+        if burnin < 0:
+            raise ValueError("`burnin` must be non-negative.")
+        if n_clusters <= 0:
+            raise ValueError("`n_clusters` must be a positive integer.")
+        if n_iters <= 0:
+            raise ValueError("`n_iters` must be a positive integer.")
+        if threshold <= 0:
+            raise ValueError("`threshold` must be positive.")
+        if unit not in {"degree", "radian"}:
+            raise ValueError("`unit` must be either 'degree' or 'radian'.")
 
-        self.m_ = None  # cluster means
-        self.r_ = None  # cluster mean resultant vectors
-        self.p_ = None  # cluster probabilities
-        self.kappa_ = None  # cluster kappas
-        self.gamma_ = None  # update gamma one last time
-        self.labels_ = None # final cluster assignments
+        self.burnin = burnin
+        self.threshold = threshold
+        self.n_clusters = n_clusters
+        self.n_iters = n_iters
+        self.full_cycle = full_cycle
+        self.unit = unit
+        self._rng = np.random.default_rng(random_seed)
+
+        self.converged = False
+        self.converged_iters: Optional[int] = None
+
+        # Attributes populated after fitting (scikit-learn style trailing underscore)
+        self.m_: Optional[np.ndarray] = None
+        self.r_: Optional[np.ndarray] = None
+        self.p_: Optional[np.ndarray] = None
+        self.kappa_: Optional[np.ndarray] = None
+        self.gamma_: Optional[np.ndarray] = None
+        self.labels_: Optional[np.ndarray] = None
+        self.nLL: Optional[np.ndarray] = None
+        self.data: Optional[np.ndarray] = None
+        self.alpha: Optional[np.ndarray] = None
+        self.n: Optional[int] = None
 
     def _initialize(
         self,
@@ -114,25 +130,36 @@ class MovM:
             - kappa (np.ndarray): Initial concentration parameters.
             - p (np.ndarray): Initial cluster probabilities.
         """
-        # number of samples
-        n = len(x)  
+        n = len(x)
+        if n_clusters_init > n:
+            raise ValueError(
+                "Number of clusters cannot exceed number of observations during initialisation."
+            )
 
-        # initial cluster probability
-        p = np.ones(n_clusters_init) / n_clusters_init 
+        # Randomly assign each observation to a cluster ensuring no cluster is empty
+        for _ in range(100):
+            labels = self._rng.integers(n_clusters_init, size=n)
+            if all(np.any(labels == c) for c in range(n_clusters_init)):
+                break
+        else:
+            raise RuntimeError("Failed to initialise clusters without empty components.")
 
-        # initial labels
-        z = np.random.choice(np.arange(n_clusters_init), size=n) 
+        means = np.zeros(n_clusters_init, dtype=float)
+        resultants = np.zeros(n_clusters_init, dtype=float)
+        kappas = np.zeros(n_clusters_init, dtype=float)
 
-        # initial means and resultant vector lengths
-        m, r = map(
-            np.array,
-            zip(*[circ_mean_and_r(x[z == i]) for i in range(n_clusters_init)]),
-        )  
+        for c in range(n_clusters_init):
+            subset = x[labels == c]
+            m_c, r_c = circ_mean_and_r(subset)
+            means[c] = m_c
+            resultants[c] = r_c
+            kappa_c = circ_kappa(r=r_c)
+            if not np.isfinite(kappa_c):
+                kappa_c = 1e-3
+            kappas[c] = max(kappa_c, 1e-3)
 
-        # initial kappa (without correction by hard-coding a larger enough n)
-        kappa = np.array([circ_kappa(r=r[i]) for i in range(n_clusters_init)])  
-
-        return m, kappa, p
+        p = np.full(n_clusters_init, 1.0 / n_clusters_init, dtype=float)
+        return means, kappas, p
 
     def fit(self, X: np.ndarray, verbose: Union[bool, int] = 0):
         """
@@ -152,64 +179,63 @@ class MovM:
         - self.p : Fitted cluster probabilities.
         - self.labels : Final cluster assignments.
         """
-        # seed
-        np.random.seed(self.random_seed)
+        X = np.asarray(X, dtype=float).reshape(-1)
+        if X.size == 0:
+            raise ValueError("Input data must contain at least one observation.")
 
-        # meta
+        alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
         self.data = X
-        self.alpha = alpha = (
-            X if self.unit == "radian" else data2rad(X, self.full_cycle)
-        )
-        self.n = n = len(X)
+        self.alpha = alpha
+        self.n = n = alpha.size
 
-        # init
-        m, kappa, p = self._initialize(alpha, self.n_clusters)
+        means, kappa, p = self._initialize(alpha, self.n_clusters)
 
-        # EM
         if verbose:
-            print("Iter".ljust(10) + "nLL")
-        self.nLL = np.ones(self.n_iters) * np.nan
-        for i in range(self.n_iters):
-            # E step
-            gamma = self.compute_gamma(alpha=self.alpha, p=p, m=m, kappa=kappa)
-            gamma_normed = gamma / np.sum(gamma, axis=0)
+            header = "Iter".ljust(10) + "nLL"
+            print(header)
 
-            # M step
-            p = (
-                np.sum(gamma_normed, axis=1)
-                / np.sum(gamma_normed, axis=1).sum()
-            )
-            
-            m, r = map(
-                np.array,
-                zip(
-                    *[
-                        circ_mean_and_r(alpha=alpha, w=gamma_normed[i])
-                        for i in range(self.n_clusters)
-                    ]
-                ),
-            )
-            kappa = np.array(
-                [circ_kappa(r=r[i]) for i in range(self.n_clusters)]
-            )
+        nLL_history = np.full(self.n_iters, np.nan)
 
-            nLL = self.compute_nLL(gamma)
-            self.nLL[i] = nLL
+        for iteration in range(self.n_iters):
+            log_responsibilities = self._log_gamma(alpha, p, means, kappa)
+            log_norm = np.logaddexp.reduce(log_responsibilities, axis=0)
+            gamma_normed = np.exp(log_responsibilities - log_norm)
 
-            if verbose:
-                if i % int(verbose) == 0:
-                    print(f"{i}".ljust(10) + f"{nLL:.03f}")
+            # M-step updates
+            p = gamma_normed.sum(axis=1)
+            p /= p.sum()
+
+            means_updated = np.zeros_like(means)
+            resultants = np.zeros_like(means)
+            for c in range(self.n_clusters):
+                weights = gamma_normed[c]
+                if np.allclose(weights.sum(), 0.0):
+                    means_updated[c] = means[c]
+                    resultants[c] = 0.0
+                else:
+                    mc, rc = circ_mean_and_r(alpha, w=weights)
+                    means_updated[c] = mc
+                    resultants[c] = rc
+
+            kappas = np.array([max(circ_kappa(r=rc), 1e-3) for rc in resultants])
+
+            means, kappa = means_updated, kappas
+
+            nLL = -np.sum(log_norm)
+            nLL_history[iteration] = nLL
+
+            if verbose and (iteration % int(verbose or 1) == 0):
+                print(f"{iteration}".ljust(10) + f"{nLL:.3f}")
 
             if (
-                i > self.burnin
-                and np.abs(self.nLL[i] - self.nLL[i - 1]) < self.threshold
+                iteration > self.burnin
+                and np.abs(nLL_history[iteration] - nLL_history[iteration - 1])
+                < self.threshold
             ):
-                self.nLL = self.nLL[~np.isnan(self.nLL)]
                 self.converged = True
-                self.converged_iters = len(self.nLL)
-
+                self.converged_iters = iteration + 1
                 if verbose:
-                    print(f"Converged at iter {i}. Final nLL = {nLL:.3f}\n")
+                    print(f"Converged at iter {iteration}. Final nLL = {nLL:.3f}\n")
                 break
         else:
             if verbose:
@@ -217,15 +243,18 @@ class MovM:
                     f"Reached max iter {self.n_iters}. Final nLL = {nLL:.3f}\n"
                 )
 
-        # save results
-        self.m_ = m  # cluster means
-        self.r_ = r  # cluster mean resultant vectors
-        self.p_ = p  # cluster probabilities
-        self.kappa_ = kappa  # cluster kappas
-        self.gamma_ = self.compute_gamma(
-            alpha=self.alpha, p=p, m=m, kappa=kappa
-        )  # update gamma one last time
-        self.labels_ = self.gamma_.argmax(axis=0)
+        self.nLL = nLL_history[~np.isnan(nLL_history)]
+
+        self.m_ = means
+        self.r_ = resultants
+        self.p_ = p
+        self.kappa_ = kappa
+        log_gamma_final = self._log_gamma(alpha, p, means, kappa)
+        log_norm_final = np.logaddexp.reduce(log_gamma_final, axis=0, keepdims=True)
+        gamma_final = np.exp(log_gamma_final - log_norm_final)
+        self.gamma_ = gamma_final
+        self.labels_ = gamma_final.argmax(axis=0)
+        return self
 
     def compute_gamma(
         self,
@@ -242,30 +271,49 @@ class MovM:
         np.ndarray
             Cluster assignment probabilities for each data point.
         """
-        gamma = np.vstack(
+        log_gamma = self._log_gamma(alpha, p, m, kappa)
+        gamma = np.exp(log_gamma)
+        gamma /= gamma.sum(axis=0, keepdims=True)
+        return gamma
+
+    def _log_gamma(
+        self,
+        alpha: np.ndarray,
+        p: np.ndarray,
+        m: np.ndarray,
+        kappa: np.ndarray,
+    ) -> np.ndarray:
+        log_prob = np.vstack(
             [
-                p[i] * vonmises.pdf(alpha, kappa=kappa[i], mu=m[i])
+                np.log(p[i] + 1e-32) + vonmises.logpdf(alpha, m[i], kappa[i])
                 for i in range(self.n_clusters)
             ]
         )
-        return gamma
+        return log_prob
 
-    def compute_nLL(self, gamma: np.ndarray)-> float:
+    def compute_nLL(self, alpha: np.ndarray, p: np.ndarray, m: np.ndarray, kappa: np.ndarray)-> float:
         """
         Computes the negative log-likelihood.
 
         Parameters
         ----------
-        gamma : np.ndarray
-            The responsibility matrix (posterior probabilities of clusters for each data point).
+        alpha : np.ndarray
+            Input data in radians.
+        p : np.ndarray
+            Component probabilities.
+        m : np.ndarray
+            Component means.
+        kappa : np.ndarray
+            Component concentrations.
 
         Returns
         -------
         float
             The negative log-likelihood value.
         """
-        nLL = -np.sum(np.log(np.sum(gamma, axis=0) + 1e-16))
-        return nLL
+        log_gamma = self._log_gamma(alpha, p, m, kappa)
+        log_norm = np.logaddexp.reduce(log_gamma, axis=0)
+        return -float(np.sum(log_norm))
 
     def compute_BIC(self)-> float:
         """
@@ -276,7 +324,9 @@ class MovM:
         float
             The computed BIC value.
         """
-        nLL = self.compute_nLL(self.gamma_)
+        if self.gamma_ is None:
+            raise ValueError("Model must be fitted before computing BIC.")
+        nLL = self.compute_nLL(self.alpha, self.p_, self.m_, self.kappa_)
         nparams = self.n_clusters * 3 - 1  # n_means + n_kappas + (n_ps - 1)
         bic = 2 * nLL + np.log(self.n) * nparams
 
@@ -311,10 +361,13 @@ class MovM:
         if x is None:
             x = np.linspace(0, 2 * np.pi, 100)
 
-        alpha = x if unit == "radian" else data2rad(x, full_cycle)
+        if self.p_ is None or self.kappa_ is None or self.m_ is None:
+            raise ValueError("Model must be fitted before calling predict_density().")
+
+        alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
 
         d = [
-            self.p_[i] * vonmises.pdf(alpha, kappa=self.kappa_[i], mu=self.m_[i])
+            self.p_[i] * vonmises.pdf(alpha, self.m_[i], self.kappa_[i])
             for i in range(self.n_clusters)
         ]
         return np.sum(d, axis=0)
@@ -333,7 +386,10 @@ class MovM:
         np.ndarray
             Predicted cluster labels.
         """
-        alpha = x if self.unit == "radian" else data2rad(x, self.full_cycle)
+        if self.p_ is None or self.m_ is None or self.kappa_ is None:
+            raise ValueError("Model must be fitted before calling predict().")
+
+        alpha = x if self.unit == "radian" else data2rad(x, k=self.full_cycle)
 
         gamma = self.compute_gamma(
             alpha=alpha, p=self.p_, m=self.m_, kappa=self.kappa_
@@ -390,41 +446,65 @@ class CircHAC:
 
     def __init__(
         self,
-        n_clusters=2,
-        n_init_clusters=None, 
-        unit="degree",
-        full_cycle=360,
-        metric="center",
-        random_seed=None
+        n_clusters: int = 2,
+        n_init_clusters: Optional[int] = None,
+        unit: str = "degree",
+        full_cycle: Union[int, float] = 360,
+        metric: str = "center",
+        random_seed: Optional[int] = None,
     ):
+        if n_clusters <= 0:
+            raise ValueError("`n_clusters` must be a positive integer.")
+        if n_init_clusters is not None and n_init_clusters <= 0:
+            raise ValueError("`n_init_clusters` must be positive when provided.")
+        if unit not in {"degree", "radian"}:
+            raise ValueError("`unit` must be either 'degree' or 'radian'.")
+        metric = metric.lower()
+        valid_metrics = {"center", "geodesic", "angularseparation", "chord"}
+        if metric not in valid_metrics:
+            raise ValueError(f"`metric` must be one of {valid_metrics}.")
+
         self.n_clusters = n_clusters
         self.n_init_clusters = n_init_clusters
         self.unit = unit
         self.full_cycle = full_cycle
         self.metric = metric
-        self.random_seed = random_seed
+        self._rng = np.random.default_rng(random_seed)
 
-        self.centers_ = None
-        self.r_ = None
-        self.labels_ = None
-        self.merges_ = None
+        self.centers_: Optional[np.ndarray] = None
+        self.r_: Optional[np.ndarray] = None
+        self.labels_: Optional[np.ndarray] = None
+        self.merges_: Optional[np.ndarray] = None
+        self.alpha: Optional[np.ndarray] = None
+        self.data: Optional[np.ndarray] = None
 
-    def _initialize_clusters(self, X):
-        """Initializes clusters using CircKMeans or default HAC."""
-        n_samples = len(X)
+    def _initialize_clusters(self, alpha: np.ndarray) -> Dict[int, List[int]]:
+        n_samples = alpha.size
+        if (
+            self.n_init_clusters is None
+            or self.n_init_clusters >= n_samples
+        ):
+            return {i: [i] for i in range(n_samples)}
 
-        # Default HAC: every point is its own cluster
-        if self.n_init_clusters is None or self.n_init_clusters >= n_samples:
-            return np.arange(n_samples), X  # Standard HAC
+        # Pre-cluster using CircKMeans to obtain a manageable starting point
+        seed = int(self._rng.integers(0, 2**32 - 1))
+        kmeans = CircKMeans(
+            n_clusters=self.n_init_clusters,
+            unit="radian",
+            metric=self.metric,
+            random_seed=seed,
+        )
+        kmeans.fit(alpha)
 
-        # Use CircKMeans for pre-clustering
-        kmeans = CircKMeans(n_clusters=self.n_init_clusters, unit="radian", metric=self.metric, random_seed=self.random_seed)
-        kmeans.fit(X)
-        
-        init_labels = kmeans.labels_
-        init_centers = kmeans.centers_
-        
-        return init_labels, init_centers
+        clusters: Dict[int, List[int]] = {}
+        for cid in range(self.n_init_clusters):
+            indices = np.where(kmeans.labels_ == cid)[0]
+            if indices.size:
+                clusters[cid] = indices.tolist()
+
+        if not clusters:
+            return {i: [i] for i in range(n_samples)}
+        return clusters
 
     def fit(self, X):
         """
@@ -439,72 +519,66 @@ class CircHAC:
         -------
         self : CircHAC
         """
-        self.data = X = np.asarray(X)
-        if self.unit == "degree":
-            self.alpha = alpha = data2rad(X, k=self.full_cycle)
-        else:
-            self.alpha = alpha = X
+        self.data = X = np.asarray(X, dtype=float).reshape(-1)
+        if X.size == 0:
+            raise ValueError("Input data must contain at least one observation.")
 
-        n = len(alpha)
+        alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
+        self.alpha = alpha
+
+        n = alpha.size
         if n <= self.n_clusters:
-            self.labels_ = np.arange(n)
+            self.labels_ = np.arange(n, dtype=int)
             self.centers_ = alpha.copy()
-            self.r_ = np.ones(n)
-            self.merges_ = np.empty((0, 4))
+            self.r_ = np.ones(n, dtype=float)
+            self.merges_ = np.empty((0, 4), dtype=float)
             return self
 
-        # Step 1: Initialize with pre-clustering or start from scratch
-        cluster_ids, cluster_means = self._initialize_clusters(alpha)
-        cluster_sizes = np.ones(len(cluster_means), dtype=int)
+        clusters = self._initialize_clusters(alpha)
+        next_cluster_id = max(clusters.keys()) + 1 if clusters else 0
+        merges: List[List[float]] = []
 
-        merges = []  # Track merge history
+        while len(clusters) > self.n_clusters:
+            means = {cid: circ_mean_and_r(alpha[indices])[0] for cid, indices in clusters.items()}
+            cluster_ids = list(clusters.keys())
 
-        while len(np.unique(cluster_ids)) > self.n_clusters:
-            # Compute cluster means
-            unique_clusters = np.unique(cluster_ids)
-            cluster_means_dict = {c: cluster_means[c] for c in unique_clusters}
-
-            # Find best pair to merge
             best_dist = np.inf
-            best_i, best_j = None, None
-            for i in unique_clusters:
-                for j in unique_clusters:
-                    if j <= i:
-                        continue
-                    dist_ij = circ_dist(cluster_means_dict[i], cluster_means_dict[j], metric=self.metric)
+            best_pair: Optional[Tuple[int, int]] = None
+            for idx, cid_i in enumerate(cluster_ids):
+                for cid_j in cluster_ids[idx + 1 :]:
+                    dist_ij = circ_dist(means[cid_i], means[cid_j], metric=self.metric)
                     if dist_ij < best_dist:
                         best_dist = dist_ij
-                        best_i, best_j = i, j
+                        best_pair = (cid_i, cid_j)
 
-            if best_i is None or best_j is None:
-                break  # No valid merge found
+            if best_pair is None:
+                break
 
-            # Record merge
-            new_size = cluster_sizes[best_i] + cluster_sizes[best_j]
-            merges.append([best_i, best_j, best_dist, new_size])
+            cid_i, cid_j = best_pair
+            merged_indices = clusters[cid_i] + clusters[cid_j]
+            merges.append([cid_i, cid_j, float(abs(best_dist)), float(len(merged_indices))])
 
-            # Merge clusters
-            cluster_ids[cluster_ids == best_j] = best_i
-            cluster_sizes[best_i] = new_size
-            cluster_means[best_i] = circ_mean_and_r(alpha[cluster_ids == best_i])[0]
+            del clusters[cid_i]
+            del clusters[cid_j]
+            clusters[next_cluster_id] = merged_indices
+            next_cluster_id += 1
 
-        # Assign final cluster labels
-        unique_ids = np.unique(cluster_ids)
-        label_map = {old_id: new_id for new_id, old_id in enumerate(unique_ids)}
-        self.labels_ = np.array([label_map[c] for c in cluster_ids], dtype=int)
+        final_ids = list(clusters.keys())
+        labels = np.empty(n, dtype=int)
+        centers = np.zeros(len(final_ids), dtype=float)
+        resultants = np.zeros(len(final_ids), dtype=float)
+        for new_label, cid in enumerate(final_ids):
+            indices = clusters[cid]
+            labels[indices] = new_label
+            mean_i, r_i = circ_mean_and_r(alpha[indices])
+            centers[new_label] = mean_i
+            resultants[new_label] = r_i
 
-        # Compute final cluster centers and resultant lengths
-        k = len(unique_ids)
-        self.centers_ = np.zeros(k, dtype=float)
-        self.r_ = np.zeros(k, dtype=float)
-        for i in range(k):
-            subset = alpha[self.labels_ == i]
-            mean_i, r_i = circ_mean_and_r(subset)
-            self.centers_[i] = mean_i
-            self.r_[i] = r_i
-
-        # Store merges
-        self.merges_ = np.array(merges, dtype=object)
+        self.labels_ = labels
+        self.centers_ = centers
+        self.r_ = resultants
+        self.merges_ = np.array(merges, dtype=float) if merges else np.empty((0, 4), dtype=float)
+        return self
 
     def predict(self, alpha):
         """
@@ -518,26 +592,17 @@ class CircHAC:
         -------
         labels : np.ndarray of shape (n_samples,)
         """
-        alpha = np.asarray(alpha)
-        if self.unit == "degree":
-            alpha = data2rad(alpha, k=self.full_cycle)
-        else:
-            alpha = alpha
+        if self.centers_ is None:
+            raise ValueError("Model must be fitted before calling predict().")
 
-        n_samples = len(alpha)
-        k = len(self.centers_)
-        labels = np.zeros(n_samples, dtype=int)
-        for i in range(n_samples):
-            a_i = alpha[i]
-            # measure distance to each center
-            best_c, best_d = None, np.inf
-            for c in range(k):
-                dist_ic = circ_dist(a_i, self.centers_[c], metric=self.metric)
-                dval = float(abs(dist_ic))
-                if dval < best_d:
-                    best_d = dval
-                    best_c = c
-            labels[i] = best_c
+        alpha = np.asarray(alpha, dtype=float)
+        alpha = alpha if self.unit == "radian" else data2rad(alpha, k=self.full_cycle)
+
+        k = self.centers_.size
+        labels = np.zeros(alpha.size, dtype=int)
+        for i, angle in enumerate(alpha):
+            distances = [abs(circ_dist(angle, center, metric=self.metric)) for center in self.centers_]
+            labels[i] = int(np.argmin(distances))
         return labels
 
     def plot_dendrogram(self, ax=None, **kwargs):
@@ -575,6 +640,8 @@ class CircHAC:
         # But cluster IDs might keep re-labelling, so a quick hack is we show them as is.
 
         for step, (ca, cb, distval, new_size) in enumerate(merges):
+            ca = int(ca)
+            cb = int(cb)
             # We'll draw a "u" connecting ca and cb at height distval
             # Then the newly formed cluster could get ID=cb or something
             # This is a naive approach that won't produce a fancy SciPy-like dendrogram
@@ -728,7 +795,7 @@ class CircKMeans:
         -------
         self
         """
-        self.data = X = np.asarray(X)
+        self.data = X = np.asarray(X, dtype=float)
         if self.unit == "degree":
             self.alpha = alpha = data2rad(X, k=self.full_cycle)
         else:
@@ -793,6 +860,7 @@ class CircKMeans:
                 dvals = np.abs(circ_dist(alpha[mask], centers[c], metric=self.metric))
                 total_dist += dvals.sum()
         self.inertia_ = total_dist
+        return self
 
     def predict(self, X):
         """
@@ -806,19 +874,17 @@ class CircKMeans:
         -------
         labels : np.ndarray, shape (n_samples,)
         """
-        X = np.asarray(X)
+        if self.centers_ is None:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        X = np.asarray(X, dtype=float)
         if self.unit == "degree":
             alpha = data2rad(X, k=self.full_cycle)
         else:
             alpha = X
 
         n_samples = len(alpha)
-        labels = np.zeros(n_samples, dtype=int)
-        if self.centers_ is None:
-            raise ValueError("Model not fitted. Call fit() first.")
-
         dist_mat = np.zeros((self.n_clusters, n_samples))
         for c in range(self.n_clusters):
             dist_mat[c] = np.abs(circ_dist(alpha, self.centers_[c], metric=self.metric))
-        labels = dist_mat.argmin(axis=0)
-        return labels
+        return dist_mat.argmin(axis=0)
