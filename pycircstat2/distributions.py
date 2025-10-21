@@ -127,6 +127,40 @@ class circularuniform_gen(rv_continuous):
         """
         return super().ppf(q, *args, **kwargs)
 
+    def _rvs(self, size=None, random_state=None):
+        rng = self._random_state if random_state is None else random_state
+        return rng.uniform(0.0, 2 * np.pi, size=size)
+
+    def rvs(self, size=None, random_state=None):
+        """
+        Random variate generation for the circular uniform distribution.
+
+        Parameters
+        ----------
+        size : int or tuple of ints, optional
+            Number of samples to draw. If ``None`` (default), return a single value.
+        random_state : np.random.Generator, np.random.RandomState, or None, optional
+            Random number generator to use. If ``None``, fall back to the
+            distribution's internal generator.
+
+        Returns
+        -------
+        samples : ndarray or float
+            Samples drawn uniformly from the interval ``[0, 2π)``.
+        """
+        return self._rvs(size=size, random_state=random_state)
+
+    def fit(self, data):
+        """
+        The circular uniform distribution has no free parameters to estimate,
+        so calling ``fit`` is undefined. A ``NotImplementedError`` is raised to
+        signal that users should rely on descriptive helpers (e.g.,
+        ``circ_mean_and_r``) instead of maximum-likelihood fitting.
+        """
+        raise NotImplementedError(
+            "circularuniform.fit() is undefined: the distribution has no parameters to estimate."
+        )
+
 
 circularuniform = circularuniform_gen(name="circularuniform")
 
@@ -658,7 +692,7 @@ class wrapcauchy_gen(rv_continuous):
             return mu, rho
         else:
             raise ValueError(
-                "Invalid method. Supported methods are 'analytical' and " "'numerical'."
+                "Invalid method. Supported methods are 'analytical' and 'numerical'."
             )
 
 
@@ -1202,7 +1236,6 @@ class jonespewsey_gen(rv_continuous):
             return False
 
     def _pdf(self, x, mu, kappa, psi):
-
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi)
         else:
@@ -1329,7 +1362,6 @@ class jonespewsey_sineskewed_gen(rv_continuous):
             return False
 
     def _pdf(self, x, xi, kappa, psi, lmbd):
-
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi) * (1 + lmbd * np.sin(x - xi))
         else:
@@ -1561,7 +1593,6 @@ class inverse_batschelet_gen(rv_continuous):
             return False
 
     def _pdf(self, x, xi, kappa, nu, lmbd):
-
         arg1 = _tnu(x, nu, xi)
         arg2 = _slmbdinv(arg1, lmbd)
 
@@ -1734,7 +1765,6 @@ class wrapstable_gen(rv_continuous):
             return False
 
     def _pdf(self, x, delta, alpha, beta, gamma):
-
         def rho_p(p, alpha, gamma):
             return np.exp(-((gamma * p) ** alpha))
 
@@ -1800,7 +1830,6 @@ class wrapstable_gen(rv_continuous):
         return super().pdf(x, delta, alpha, beta, gamma, *args, **kwargs)
 
     def _cdf(self, x, delta, alpha, beta, gamma):
-
         @np.vectorize
         def _cdf_single(x, delta, alpha, beta, gamma):
             integral, _ = quad(self._pdf, a=0, b=x, args=(delta, alpha, beta, gamma))

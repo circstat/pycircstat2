@@ -26,6 +26,7 @@ dev = [
     "mkdocstrings[python]",
     "watermark",
     "polars",
+    "ipykernel>=6.31.0",
 ]
 
 [tool.setuptools]
