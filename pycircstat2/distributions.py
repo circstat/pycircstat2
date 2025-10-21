@@ -8,6 +8,7 @@ from .descriptive import circ_kappa, circ_mean_and_r
 
 __all__ = [
     "circularuniform",
+    "triangular",
     "cardioid",
     "cartwright",
     "wrapnorm",
@@ -66,7 +67,7 @@ class circularuniform_gen(rv_continuous):
         Probability density function of the Circular Uniform distribution.
 
         $$
-        f(\theta) = \frac{1}{\pi}
+        f(\theta) = \frac{1}{2\pi}
         $$
 
         Parameters
@@ -215,12 +216,143 @@ class triangular_gen(rv_continuous):
         return super().pdf(x, rho, *args, **kwargs)
 
     def _cdf(self, x, rho):
-        @np.vectorize
-        def _cdf_single(x, rho):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(rho))
-            return integral
+        x_arr = np.asarray(x, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        x_b, rho_b = np.broadcast_arrays(x_arr, rho_arr)
 
-        return _cdf_single(x, rho)
+        result = np.zeros_like(x_b, dtype=float)
+
+        # lower branch: 0 <= x <= pi
+        mask_lower = (x_b >= 0.0) & (x_b <= np.pi)
+        if np.any(mask_lower):
+            xl = x_b[mask_lower]
+            rl = rho_b[mask_lower]
+            result[mask_lower] = ((4 + np.pi**2 * rl) * xl - np.pi * rl * xl**2) / (
+                8 * np.pi
+            )
+
+        # upper branch: pi < x < 2pi
+        mask_upper = (x_b > np.pi) & (x_b < 2 * np.pi)
+        if np.any(mask_upper):
+            xu = x_b[mask_upper]
+            ru = rho_b[mask_upper]
+            result[mask_upper] = 0.5 + (
+                (4 - 3 * np.pi**2 * ru) * (xu - np.pi)
+                + np.pi * ru * (xu**2 - np.pi**2)
+            ) / (8 * np.pi)
+
+        # upper tail: x >= 2pi
+        result = np.where(x_b >= 2 * np.pi, 1.0, result)
+
+        if np.ndim(result) == 0:
+            return float(result)
+        return result
+
+    def cdf(self, x, rho, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Triangular distribution.
+
+        $$
+        F(\theta) =
+        \begin{cases}
+        \dfrac{(4 + \pi^2 \rho)\theta - \pi \rho \theta^2}{8\pi}, & 0 \le \theta \le \pi \\
+        \dfrac{1}{2} + \dfrac{(4 - 3\pi^2 \rho)(\theta - \pi) + \pi \rho (\theta^2 - \pi^2)}{8\pi}, & \pi < \theta < 2\pi
+        \end{cases}
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        rho : float
+            Concentration parameter, 0 <= rho <= 4/pi^2.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, rho, *args, **kwargs)
+
+    def _ppf(self, q, rho):
+        rho = float(rho)
+        q_arr = np.asarray(q, dtype=float)
+
+        if np.isclose(rho, 0.0, atol=1e-12):
+            result = q_arr * (2 * np.pi)
+        else:
+            a_left = rho
+            b_left = -(4 + np.pi**2 * rho) / np.pi
+            a_right = rho
+            b_right = (4 - 3 * np.pi**2 * rho) / np.pi
+
+            result = np.empty_like(q_arr, dtype=float)
+            mask_left = q_arr <= 0.5
+
+            if np.any(mask_left):
+                c_left = 8 * q_arr[mask_left]
+                disc_left = np.clip(b_left**2 - 4 * a_left * c_left, 0.0, None)
+                result[mask_left] = (-b_left - np.sqrt(disc_left)) / (2 * a_left)
+
+            if np.any(~mask_left):
+                c_right = 2 * np.pi**2 * rho - 8 * q_arr[~mask_left]
+                disc_right = np.clip(b_right**2 - 4 * a_right * c_right, 0.0, None)
+                result[~mask_left] = (-b_right + np.sqrt(disc_right)) / (2 * a_right)
+
+        result = np.asarray(result, dtype=float)
+        np.clip(result, 0.0, 2 * np.pi - np.finfo(float).eps, out=result)
+        if result.ndim == 0:
+            return float(result)
+        return result
+
+    def ppf(self, q, rho, *args, **kwargs):
+        r"""
+        Percent-point function (inverse CDF) of the Triangular distribution.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate.
+        rho : float
+            Concentration parameter, 0 <= rho <= 4/pi^2.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Quantile values corresponding to `q`.
+        """
+        return super().ppf(q, rho, *args, **kwargs)
+
+    def _rvs(self, rho, size=None, random_state=None):
+        rng = random_state
+        if rng is None:
+            rng = self._random_state
+        if rng is None:
+            rng = np.random.default_rng()
+
+        u = rng.uniform(0.0, 1.0, size=size)
+        return self._ppf(u, rho)
+
+    def rvs(self, rho, size=None, random_state=None):
+        """
+        Random variate generation for the circular triangular distribution.
+
+        Parameters
+        ----------
+        rho : float
+            Concentration parameter, 0 <= rho <= 4/pi^2.
+        size : int or tuple of ints, optional
+            Number of samples to draw. If ``None`` (default), return a single value.
+        random_state : int, np.random.Generator, np.random.RandomState, optional
+            Controls the underlying RNG. If ``None``, the distribution's internal
+            random state is used.
+
+        Returns
+        -------
+        samples : ndarray or float
+            Samples drawn from the circular triangular distribution.
+        """
+        return super().rvs(rho, size=size, random_state=random_state)
 
 
 triangular = triangular_gen(name="triangular")

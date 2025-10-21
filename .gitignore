@@ -5,11 +5,10 @@
 .coverage
 .vscode
 .venv
+.mplconfig
 
 *.egg-info
 */__pycache__
-
-uv.lock
 
 dev/
 dist/
