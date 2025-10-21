@@ -59,7 +59,7 @@ class circularuniform_gen(rv_continuous):
     """
 
     def _pdf(self, x):
-        return 1 / np.pi
+        return 1 / (2 * np.pi)
 
     def pdf(self, x, *args, **kwargs):
         r"""
