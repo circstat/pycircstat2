@@ -22,6 +22,7 @@ dev = [
     "ruff",
     "pytest",
     "mkdocs",
+    "mkdocs-material",
     "mkdocs-material-extensions",
     "mkdocstrings[python]",
     "watermark",

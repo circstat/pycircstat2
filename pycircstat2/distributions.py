@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.integrate import quad, quad_vec
-from scipy.optimize import minimize, root
+from scipy.optimize import minimize, root, brentq
 from scipy.special import gamma, i0, i1
 from scipy.stats import rv_continuous
 
@@ -57,6 +57,12 @@ class circularuniform_gen(rv_continuous):
 
     cdf(x)
         Cumulative distribution function.
+
+    ppf(q)
+        Percent-point function (inverse of CDF).
+
+    rvs(size, random_state) 
+        Random variates.
     """
 
     def _pdf(self, x):
@@ -179,6 +185,15 @@ class triangular_gen(rv_continuous):
     cdf(x, rho)
         Cumulative distribution function.
 
+    ppf(q, rho)
+        Closed-form quantile (inverse CDF).
+        
+    rvs(rho, size=None, random_state=None)
+        Random variates via inverse-transform using the closed-form quantile.
+
+    fit(data)
+        Fit the distribution to the data and return the parameter (rho).
+
     Notes
     -----
     Implementation based on Section 2.2.3 of Jammalamadaka & SenGupta (2001)
@@ -250,22 +265,25 @@ class triangular_gen(rv_continuous):
 
     def cdf(self, x, rho, *args, **kwargs):
         r"""
-        Cumulative distribution function of the Triangular distribution.
+        Cumulative distribution function of the circular triangular distribution on $[0, 2\pi)$.
 
         $$
-        F(\theta) =
+        F(\theta;\,\rho)=
         \begin{cases}
-        \dfrac{(4 + \pi^2 \rho)\theta - \pi \rho \theta^2}{8\pi}, & 0 \le \theta \le \pi \\
-        \dfrac{1}{2} + \dfrac{(4 - 3\pi^2 \rho)(\theta - \pi) + \pi \rho (\theta^2 - \pi^2)}{8\pi}, & \pi < \theta < 2\pi
+        \dfrac{(4+\pi^2\rho)\,\theta - \pi\rho\,\theta^2}{8\pi}, & 0 \le \theta \le \pi,\\[6pt]
+        \dfrac{1}{2} + \dfrac{(4 - 3\pi^2\rho)\,(\theta-\pi) + \pi\rho\,(\theta^2-\pi^2)}{8\pi},
+            & \pi < \theta < 2\pi.
         \end{cases}
         $$
+
+        (With $F(\theta)=0$ for $\theta<0$ and $F(\theta)=1$ for $\theta\ge 2\pi$.)
 
         Parameters
         ----------
         x : array_like
-            Points at which to evaluate the cumulative distribution function.
+            Angles in radians on $[0, 2\pi)$.
         rho : float
-            Concentration parameter, 0 <= rho <= 4/pi^2.
+            Concentration parameter, $0 \le \rho \le 4/\pi^2$.
 
         Returns
         -------
@@ -307,19 +325,39 @@ class triangular_gen(rv_continuous):
 
     def ppf(self, q, rho, *args, **kwargs):
         r"""
-        Percent-point function (inverse CDF) of the Triangular distribution.
+        Percent-point function (quantile) of the circular triangular distribution on $[0, 2\pi)$.
+
+        For $\rho=0$ (circular uniform):
+
+        $$
+        \operatorname{PPF}(q;0)=2\pi q.
+        $$
+
+        For $\rho>0$:
+
+        $$
+        \operatorname{PPF}(q;\rho)=
+        \begin{cases}
+        \dfrac{1}{2\rho}\!\left(\dfrac{4+\pi^2\rho}{\pi}
+        - \sqrt{\left(\dfrac{4+\pi^2\rho}{\pi}\right)^{\!2} - 32\rho\,q}\right),
+        & 0 \le q \le \tfrac{1}{2}, \\[10pt]
+        \pi + \dfrac{-\,(4-\pi^2\rho) + \sqrt{(4-\pi^2\rho)^{2} + 32\pi^{2}\rho\,(q-\tfrac{1}{2})}}
+        {2\pi\rho},
+        & \tfrac{1}{2} < q < 1.
+        \end{cases}
+        $$
 
         Parameters
         ----------
         q : array_like
-            Quantiles to evaluate.
+            Quantiles in $[0, 1]$.
         rho : float
-            Concentration parameter, 0 <= rho <= 4/pi^2.
+            Concentration parameter, $0 \le \rho \le 4/\pi^2$.
 
         Returns
         -------
         ppf_values : array_like
-            Quantile values corresponding to `q`.
+            Quantiles (angles in radians on $[0, 2\pi)$).
         """
         return super().ppf(q, rho, *args, **kwargs)
 
@@ -334,25 +372,163 @@ class triangular_gen(rv_continuous):
         return self._ppf(u, rho)
 
     def rvs(self, rho, size=None, random_state=None):
-        """
-        Random variate generation for the circular triangular distribution.
+        r"""
+        Random variates from the circular triangular distribution on $[0, 2\pi)$.
+
+        Sampling uses **inverse-transform** with the closed-form quantile:
+        let $U \sim \mathrm{Unif}(0,1)$ and set $\theta = \operatorname{PPF}(U;\rho)$, where
+
+        - For $\rho = 0$ (circular uniform):
+
+        $$
+        \theta = 2\pi U.
+        $$
+
+        - For $\rho > 0$ (piecewise quadratic inverse):
+
+        $$
+        \theta =
+        \begin{cases}
+            \dfrac{1}{2\rho}\!\left(\dfrac{4+\pi^2\rho}{\pi}
+            - \sqrt{\left(\dfrac{4+\pi^2\rho}{\pi}\right)^{\!2} - 32\rho\,U}\right),
+            & 0 \le U \le \tfrac{1}{2}, \\[10pt]
+            \pi + \dfrac{-\,(4-\pi^2\rho) + \sqrt{(4-\pi^2\rho)^{2} + 32\pi^{2}\rho\,(U-\tfrac{1}{2})}}
+            {2\pi\rho},
+            & \tfrac{1}{2} < U < 1.
+        \end{cases}
+        $$
 
         Parameters
         ----------
         rho : float
-            Concentration parameter, 0 <= rho <= 4/pi^2.
+            Concentration, $0 \le \rho \le 4/\pi^2$.
         size : int or tuple of ints, optional
-            Number of samples to draw. If ``None`` (default), return a single value.
-        random_state : int, np.random.Generator, np.random.RandomState, optional
-            Controls the underlying RNG. If ``None``, the distribution's internal
-            random state is used.
+            Output shape. If ``None`` (default), return a single scalar.
+        random_state : int, numpy.random.Generator, numpy.random.RandomState, optional
+            PRNG seed or generator. If ``None``, use the distribution's internal RNG.
 
         Returns
         -------
         samples : ndarray or float
-            Samples drawn from the circular triangular distribution.
+            Angles in radians on $[0, 2\pi)$, with shape ``size``.
+
+        Notes
+        -----
+        This is equivalent in law to R's **circular** `rtriangular` after
+        shifting its output by $+\pi$ modulo $2\pi$.
         """
         return super().rvs(rho, size=size, random_state=random_state)
+
+    def fit(self, data, *, weights=None, method="mle", return_info=False):
+        r"""
+        Estimate the concentration parameter $\rho$ of the circular triangular law on $[0,2\pi)$.
+
+        Methods
+        -------
+
+        mle (default): 
+            maximize the log-likelihood. This solves the 1-D score equation
+            $\sum_i \frac{c_i}{4+\rho\,c_i}=0$ with $c_i = 2\pi\,|\,\pi-x_i\,| - \pi^2$.
+            Unique solution in $[0, 4/\pi^2)$ or at a boundary.
+        moments :
+            closed-form $\hat\rho = \max\{0, \min\{4/\pi^2,\ \overline{\cos x}\}\}$.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians). Values are wrapped to $[0, 2\pi)$ internally.
+        weights : array_like, optional
+            Nonnegative sample weights. Broadcastable to `data`. Interpreted as frequencies.
+        method : {"mle","moments"}, optional
+            Estimation method (see above).
+        return_info : bool, optional
+            If True, also return a dict with diagnostics (loglik, se, n_effective, method).
+
+        Returns
+        -------
+        rho_hat : float
+            Estimated concentration $\hat\rho \in [0, 4/\pi^2]$.
+        info : dict, optional
+            Returned only if `return_info=True`. Contains keys:
+            {"loglik", "se", "n_effective", "method", "converged"}.
+
+        Notes
+        -----
+        For this distribution $\mathbb{E}[\cos \Theta]=\rho$, so the method-of-moments
+        estimator is simply the (weighted) mean of $\cos x$ clipped to $[0,4/\pi^2]$.
+        The MLE solves a strictly monotone score equation, so bracketing root-finding
+        is robust and $O(n)$ per evaluation.
+        """
+        x = np.asarray(data, dtype=float)
+        x = np.mod(x, 2*np.pi)
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("weights must be nonnegative")
+            # broadcast
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False)
+
+        # Effective sample size for diagnostics
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("sum of weights must be positive")
+        w_norm = w / w_sum
+        n_eff = w_sum**2 / np.sum(w**2)  # Kish effective n
+
+        # Method-of-moments (always available; used as fallback/initial intuition)
+        r_bar = float(np.sum(w_norm * np.cos(x)))
+        rho_mom = float(np.clip(r_bar, 0.0, 4/np.pi**2))
+
+        if method == "moments":
+            rho_hat = rho_mom
+            # log-likelihood at MoM (for info only)
+            y = np.abs(np.pi - x)
+            ll = float(np.sum(w * np.log(4 - np.pi**2 * rho_hat + 2*np.pi * rho_hat * y)) - w_sum*np.log(8*np.pi))
+            # observed Fisher info for SE
+            c = 2*np.pi*y - np.pi**2
+            info_obs = float(np.sum(w * (c**2) / (4 + rho_hat*c)**2))
+            se = (1.0 / np.sqrt(info_obs)) if info_obs > 0 else np.nan
+            if return_info:
+                return rho_hat, {"loglik": ll, "se": se, "n_effective": n_eff, "method": "moments", "converged": True}
+            return rho_hat
+
+        # --- MLE via monotone root of the score ---
+        y = np.abs(np.pi - x)                 # in [0, π]
+        c = 2*np.pi*y - np.pi**2              # in [-π^2, π^2]
+
+        def score(rho):
+            return float(np.sum(w * (c / (4.0 + rho * c))))
+
+        # Bracket: score(ρ) is strictly decreasing on [0, ρ_max)
+        rho_lo = 0.0
+        rho_hi = float(4/np.pi**2) - 1e-12
+
+        s_lo = score(rho_lo)  # = (1/4) * sum w*c
+        if s_lo <= 0:         # likelihood decreasing at 0 → boundary optimum
+            rho_hat = 0.0
+            converged = True
+        else:
+            s_hi = score(rho_hi)  # tends negative if any y_i≈0
+            if s_hi >= 0:
+                # all mass far from π (extreme case) → boundary at ρ_max
+                rho_hat = rho_hi
+                converged = True
+            else:
+                # Unique root inside (0, ρ_max)
+                rho_hat = float(brentq(score, rho_lo, rho_hi, xtol=1e-12, rtol=1e-12, maxiter=256))
+                converged = True
+
+        # Diagnostics
+        ll = float(np.sum(w * np.log(4 - np.pi**2 * rho_hat + 2*np.pi * rho_hat * y)) - w_sum*np.log(8*np.pi))
+        info_obs = float(np.sum(w * (c**2) / (4 + rho_hat*c)**2))
+        se = (1.0 / np.sqrt(info_obs)) if info_obs > 0 else np.nan
+
+        if return_info:
+            return rho_hat, {"loglik": ll, "se": se, "n_effective": n_eff, "method": "mle", "converged": converged}
+        return rho_hat
 
 
 triangular = triangular_gen(name="triangular")

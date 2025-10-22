@@ -12,6 +12,8 @@ plugins:
     - mkdocstrings:
           handlers:
               python:
+                  paths:
+                      - ../pycircstat2
                   options:
                       show_source: true
                       docstring_style: "numpy"
