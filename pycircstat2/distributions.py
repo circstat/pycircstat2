@@ -1,4 +1,5 @@
 import numpy as np
+import types
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
 from scipy.special import gamma, i0, i1
@@ -40,12 +41,232 @@ OPTIMIZERS = [
     "trust-krylov",
 ]
 
+
+class CircularContinuous(rv_continuous):
+    """Base class for circular distributions with fixed loc=0 and scale=1."""
+
+    _loc_default = 0.0
+    _scale_default = 1.0
+
+    def __init__(
+        self,
+        momtype=1,
+        a=None,
+        b=None,
+        *,
+        support=None,
+        xtol=1e-14,
+        badvalue=None,
+        name=None,
+        longname=None,
+        shapes=None,
+        seed=None,
+    ):
+        if support is not None:
+            support_a, support_b = support
+            if a is None:
+                a = support_a
+            if b is None:
+                b = support_b
+        if a is None:
+            a = 0.0
+        if b is None:
+            b = 2 * np.pi
+
+        super().__init__(
+            momtype=momtype,
+            a=a,
+            b=b,
+            xtol=xtol,
+            badvalue=badvalue,
+            name=name,
+            longname=longname,
+            shapes=shapes,
+            seed=seed,
+        )
+
+        self._circular_arg_wrapped = False
+        self._wrap_arg_parsers()
+        self._lower_bound, self._period = self._compute_period()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _wrap_arg_parsers(self):
+        """Ensure internal arg-parsing keeps loc/scale fixed to defaults."""
+        if getattr(self, "_circular_arg_wrapped", False):
+            return
+
+        for attr in ("_parse_args", "_parse_args_rvs", "_parse_args_stats"):
+            original = getattr(self, attr)
+
+            def wrapper(this, *args, __orig=original, __name=attr, **kwargs):
+                clean_kwargs = this._clean_loc_scale_kwargs(kwargs, caller=__name)
+                return __orig(*args, **clean_kwargs)
+
+            setattr(self, attr, types.MethodType(wrapper, self))
+
+        self._circular_arg_wrapped = True
+
+    def _compute_period(self):
+        try:
+            lower = float(self.a)
+            upper = float(self.b)
+        except (TypeError, ValueError):
+            return None, None
+
+        period = upper - lower
+        if not np.isfinite(period) or period <= 0:
+            return None, None
+        return lower, period
+
+    def _wrap_angles(self, values):
+        if self._period is None or self._lower_bound is None:
+            return values
+
+        try:
+            arr = np.asarray(values, dtype=float)
+        except (TypeError, ValueError):
+            return values
+
+        if arr.size == 0:
+            return arr
+
+        wrapped = np.mod(arr - self._lower_bound, self._period) + self._lower_bound
+        if np.isscalar(values):
+            return float(wrapped)
+        return wrapped
+
+    def _prepare_call_kwargs(self, kwargs, caller):
+        if not kwargs:
+            return {}
+        return self._clean_loc_scale_kwargs(dict(kwargs), caller=caller)
+
+    def _clean_loc_scale_kwargs(self, kwargs, *, caller):
+        if not kwargs:
+            return kwargs
+
+        cleaned = kwargs
+        mutated = False
+
+        if "loc" in kwargs:
+            loc_val = kwargs["loc"]
+            if not self._is_default_value(loc_val, self._loc_default):
+                raise TypeError(
+                    f"{self._dist_name(caller)} does not support a free `loc` parameter."
+                )
+            cleaned = dict(cleaned) if not mutated else cleaned
+            cleaned.pop("loc", None)
+            mutated = True
+
+        if "scale" in kwargs:
+            scale_val = kwargs["scale"]
+            if not self._is_default_value(scale_val, self._scale_default):
+                raise TypeError(
+                    f"{self._dist_name(caller)} does not support a free `scale` parameter."
+                )
+            if not mutated:
+                cleaned = dict(cleaned)
+                mutated = True
+            cleaned.pop("scale", None)
+            mutated = True
+
+        forbidden_aliases = ("floc", "fscale", "fix_loc", "fix_scale")
+        for alias in forbidden_aliases:
+            if alias in kwargs:
+                raise TypeError(
+                    f"{self._dist_name(caller)} does not support `{alias}`; the distribution fixes location/scale."
+                )
+
+        return cleaned if mutated else kwargs
+
+    def _is_default_value(self, value, default):
+        try:
+            arr = np.asarray(value)
+        except Exception:  # pragma: no cover - defensive
+            return False
+        if arr.size == 0:
+            return True
+        try:
+            return np.allclose(arr, default)
+        except TypeError:  # pragma: no cover - fallback if casting fails
+            return False
+
+    def _dist_name(self, caller: str) -> str:
+        dist_name = getattr(self, "name", None)
+        if dist_name:
+            return f"{dist_name}.{caller}"
+        return f"{self.__class__.__name__}.{caller}"
+
+    # ------------------------------------------------------------------
+    # Public overrides
+    # ------------------------------------------------------------------
+    def pdf(self, x, *args, **kwargs):
+        call_kwargs = self._prepare_call_kwargs(kwargs, "pdf")
+        return super().pdf(self._wrap_angles(x), *args, **call_kwargs)
+
+    def logpdf(self, x, *args, **kwargs):
+        call_kwargs = self._prepare_call_kwargs(kwargs, "logpdf")
+        return super().logpdf(self._wrap_angles(x), *args, **call_kwargs)
+
+    def nnlf(self, theta, x):
+        return super().nnlf(theta, self._wrap_angles(x))
+
+    def fit(self, data, *args, **kwds):
+        kwds = self._sanitize_fit_kwargs(kwds)
+        wrapped_data = self._wrap_angles(data)
+        return super().fit(wrapped_data, *args, **kwds)
+
+    def fit_loc_scale(self, *args, **kwargs):  # pragma: no cover - API guard
+        raise NotImplementedError(
+            "Circular distributions have fixed location and scale; use `fit` for shape parameters only."
+        )
+
+    def _sanitize_fit_kwargs(self, kwds):
+        if not kwds:
+            kwds = {}
+        else:
+            kwds = dict(kwds)
+
+        # Reject attempts to seed loc/scale with non-default values.
+        for key, default in (("loc", self._loc_default), ("scale", self._scale_default)):
+            if key in kwds:
+                if not self._is_default_value(kwds[key], default):
+                    raise TypeError(
+                        f"{self._dist_name('fit')} fixes `{key}` to {default}; remove the argument."
+                    )
+                kwds.pop(key)
+
+        for key in ("fix_loc", "fix_scale"):
+            if key in kwds:
+                raise TypeError(
+                    f"{self._dist_name('fit')} does not expose `{key}`; the distribution is already fixed."
+                )
+
+        for key, default in (("floc", self._loc_default), ("fscale", self._scale_default)):
+            if key in kwds:
+                if not self._is_default_value(kwds[key], default):
+                    raise TypeError(
+                        f"{self._dist_name('fit')} requires `{key}` == {default}."
+                    )
+                kwds.pop(key)
+
+        kwds["floc"] = self._loc_default
+        kwds["fscale"] = self._scale_default
+        return kwds
+
+    def _attach_methods(self):  # pragma: no cover - mirrors parent for pickling
+        super()._attach_methods()
+        # Reapply wrappers; _attach_methods is used during unpickling.
+        self._circular_arg_wrapped = False
+        self._wrap_arg_parsers()
+
 ############################
 ## Symmetric Distribtions ##
 ############################
 
 
-class circularuniform_gen(rv_continuous):
+class circularuniform_gen(CircularContinuous):
     """Continuous Circular Uniform Distribution
 
     ![circularuniform](../images/circ-mod-circularuniform.png)
@@ -172,7 +393,7 @@ class circularuniform_gen(rv_continuous):
 circularuniform = circularuniform_gen(name="circularuniform")
 
 
-class triangular_gen(rv_continuous):
+class triangular_gen(CircularContinuous):
     """Triangular Distribution
 
     ![triangular](../images/circ-mod-triangular.png)
@@ -293,31 +514,53 @@ class triangular_gen(rv_continuous):
         return super().cdf(x, rho, *args, **kwargs)
 
     def _ppf(self, q, rho):
-        rho = float(rho)
         q_arr = np.asarray(q, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        q_b, rho_b = np.broadcast_arrays(q_arr, rho_arr)
 
-        if np.isclose(rho, 0.0, atol=1e-12):
-            result = q_arr * (2 * np.pi)
-        else:
-            a_left = rho
-            b_left = -(4 + np.pi**2 * rho) / np.pi
-            a_right = rho
-            b_right = (4 - 3 * np.pi**2 * rho) / np.pi
+        result = np.empty_like(q_b, dtype=float)
 
-            result = np.empty_like(q_arr, dtype=float)
-            mask_left = q_arr <= 0.5
+        mask_zero = np.isclose(rho_b, 0.0, atol=1e-12)
+        if np.any(mask_zero):
+            result[mask_zero] = q_b[mask_zero] * (2 * np.pi)
+
+        mask_general = ~mask_zero
+        if np.any(mask_general):
+            q_g = q_b[mask_general]
+            rho_g = rho_b[mask_general]
+
+            a_left = rho_g
+            b_left = -(4 + np.pi**2 * rho_g) / np.pi
+            a_right = rho_g
+            b_right = (4 - 3 * np.pi**2 * rho_g) / np.pi
+
+            res_general = np.empty_like(q_g, dtype=float)
+            mask_left = q_g <= 0.5
 
             if np.any(mask_left):
-                c_left = 8 * q_arr[mask_left]
-                disc_left = np.clip(b_left**2 - 4 * a_left * c_left, 0.0, None)
-                result[mask_left] = (-b_left - np.sqrt(disc_left)) / (2 * a_left)
+                c_left = 8 * q_g[mask_left]
+                disc_left = np.clip(
+                    b_left[mask_left] ** 2 - 4 * a_left[mask_left] * c_left,
+                    0.0,
+                    None,
+                )
+                res_general[mask_left] = (
+                    -b_left[mask_left] - np.sqrt(disc_left)
+                ) / (2 * a_left[mask_left])
 
             if np.any(~mask_left):
-                c_right = 2 * np.pi**2 * rho - 8 * q_arr[~mask_left]
-                disc_right = np.clip(b_right**2 - 4 * a_right * c_right, 0.0, None)
-                result[~mask_left] = (-b_right + np.sqrt(disc_right)) / (2 * a_right)
+                c_right = 2 * np.pi**2 * rho_g[~mask_left] - 8 * q_g[~mask_left]
+                disc_right = np.clip(
+                    b_right[~mask_left] ** 2 - 4 * a_right[~mask_left] * c_right,
+                    0.0,
+                    None,
+                )
+                res_general[~mask_left] = (
+                    -b_right[~mask_left] + np.sqrt(disc_right)
+                ) / (2 * a_right[~mask_left])
 
-        result = np.asarray(result, dtype=float)
+            result[mask_general] = res_general
+
         np.clip(result, 0.0, 2 * np.pi - np.finfo(float).eps, out=result)
         if result.ndim == 0:
             return float(result)
@@ -534,7 +777,7 @@ class triangular_gen(rv_continuous):
 triangular = triangular_gen(name="triangular")
 
 
-class cardioid_gen(rv_continuous):
+class cardioid_gen(CircularContinuous):
     """Cardioid (cosine) Distribution
 
     ![cardioid](../images/circ-mod-cardioid.png)
@@ -613,7 +856,7 @@ class cardioid_gen(rv_continuous):
 cardioid = cardioid_gen(name="cardioid")
 
 
-class cartwright_gen(rv_continuous):
+class cartwright_gen(CircularContinuous):
     """Cartwright's Power-of-Cosine Distribution
 
     ![cartwright](../images/circ-mod-cartwright.png)
@@ -703,7 +946,7 @@ class cartwright_gen(rv_continuous):
 cartwright = cartwright_gen(name="cartwright")
 
 
-class wrapnorm_gen(rv_continuous):
+class wrapnorm_gen(CircularContinuous):
     """Wrapped Normal Distribution
 
     ![wrapnorm](../images/circ-mod-wrapnorm.png)
@@ -797,7 +1040,7 @@ class wrapnorm_gen(rv_continuous):
 wrapnorm = wrapnorm_gen(name="wrapped_normal")
 
 
-class wrapcauchy_gen(rv_continuous):
+class wrapcauchy_gen(CircularContinuous):
     """Wrapped Cauchy Distribution.
 
     ![wrapcauchy](../images/circ-mod-wrapcauchy.png)
@@ -962,6 +1205,8 @@ class wrapcauchy_gen(rv_continuous):
         mu : float
             Estimated mean direction.
         """
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        data = self._wrap_angles(np.asarray(data, dtype=float))
 
         # Validate the fitting method
         valid_methods = ["analytical", "numerical"]
@@ -969,10 +1214,6 @@ class wrapcauchy_gen(rv_continuous):
             raise ValueError(
                 f"Invalid method '{method}'. Available methods are {valid_methods}."
             )
-
-        # Validate the data
-        if not np.all((0 <= data) & (data < 2 * np.pi)):
-            raise ValueError("Data must be in the range [0, 2π).")
 
         # Analytical solution for the Von Mises distribution
         mu, rho = circ_mean_and_r(alpha=data)
@@ -1007,7 +1248,7 @@ class wrapcauchy_gen(rv_continuous):
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
 
-class vonmises_gen(rv_continuous):
+class vonmises_gen(CircularContinuous):
     """Von Mises Distribution
 
     ![vonmises](../images/circ-mod-vonmises.png)
@@ -1357,16 +1598,15 @@ class vonmises_gen(rv_continuous):
         ```
         """
 
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        data = self._wrap_angles(np.asarray(data, dtype=float))
+
         # Validate the fitting method
         valid_methods = ["analytical", "numerical"]
         if method not in valid_methods:
             raise ValueError(
                 f"Invalid method '{method}'. Available methods are {valid_methods}."
             )
-
-        # Validate the data
-        if not np.all((0 <= data) & (data < 2 * np.pi)):
-            raise ValueError("Data must be in the range [0, 2π).")
 
         # Analytical solution for the Von Mises distribution
         mu, r = circ_mean_and_r(alpha=data)
@@ -1409,7 +1649,7 @@ class vonmises_gen(rv_continuous):
 vonmises = vonmises_gen(name="vonmises")
 
 
-class vonmises_flattopped_gen(rv_continuous):
+class vonmises_flattopped_gen(CircularContinuous):
     r"""Flat-topped von Mises Distribution
 
     The Flat-topped von Mises distribution is a modification of the von Mises distribution
@@ -1512,7 +1752,7 @@ def _c_vmft(mu, kappa, nu):
     return c
 
 
-class jonespewsey_gen(rv_continuous):
+class jonespewsey_gen(CircularContinuous):
     """Jones-Pewsey Distribution
 
     ![jonespewsey](../images/circ-mod-jonespewsey.png)
@@ -1632,7 +1872,7 @@ def _c_jonespewsey(mu, kappa, psi):
 ###########################
 
 
-class jonespewsey_sineskewed_gen(rv_continuous):
+class jonespewsey_sineskewed_gen(CircularContinuous):
     r"""Sine-Skewed Jones-Pewsey Distribution
 
     The Sine-Skewed Jones-Pewsey distribution is a circular distribution defined on $[0, 2\pi)$
@@ -1733,7 +1973,7 @@ jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed
 ##########################
 
 
-class jonespewsey_asym_gen(rv_continuous):
+class jonespewsey_asym_gen(CircularContinuous):
     r"""Asymmetric Extended Jones-Pewsey Distribution
 
     This distribution is an extension of the Jones-Pewsey family, incorporating asymmetry
@@ -1858,7 +2098,7 @@ def _c_jonespewsey_asym(xi, kappa, psi, nu):
     return c
 
 
-class inverse_batschelet_gen(rv_continuous):
+class inverse_batschelet_gen(CircularContinuous):
     r"""Inverse Batschelet distribution.
 
     The inverse Batschelet distribution is a flexible circular distribution that allows for
@@ -2041,7 +2281,7 @@ def _c_invbatschelet(kappa, lmbd):
     return c
 
 
-class wrapstable_gen(rv_continuous):
+class wrapstable_gen(CircularContinuous):
     r"""
     Wrapped Stable Distribution
 

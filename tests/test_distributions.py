@@ -1,9 +1,11 @@
 import numpy as np
+import pytest
 
 from pycircstat2.distributions import (
     cardioid,
     cartwright,
     circularuniform,
+    triangular,
     inverse_batschelet,
     jonespewsey,
     jonespewsey_asym,
@@ -43,6 +45,52 @@ def test_cartwright():
     )
 
 
+def test_triangular_ppf_vectorized():
+    q = np.linspace(0.1, 0.9, num=5)
+    out_zero = triangular.ppf(q, rho=0.0)
+    np.testing.assert_allclose(out_zero, q * (2 * np.pi))
+
+
+def test_triangular_pdf_periodic():
+    rho = 0.3
+    x_neg = -np.pi / 4
+    x_mod = np.mod(x_neg, 2 * np.pi)
+    np.testing.assert_allclose(
+        triangular.pdf(x_neg, rho=rho),
+        triangular.pdf(x_mod, rho=rho),
+        atol=1e-12,
+    )
+
+
+def test_vonmises_periodic_evaluation():
+    mu = np.pi / 3
+    kappa = 1.75
+    x_neg = -np.pi / 5
+    x_mod = np.mod(x_neg, 2 * np.pi)
+
+    np.testing.assert_allclose(
+        vonmises.pdf(x_neg, mu=mu, kappa=kappa),
+        vonmises.pdf(x_mod, mu=mu, kappa=kappa),
+        atol=1e-12,
+    )
+
+    vm = vonmises(kappa=kappa, mu=mu)
+    np.testing.assert_allclose(vm.pdf(x_neg), vm.pdf(x_mod), atol=1e-12)
+
+
+def test_vonmises_fit_wraps_data():
+    data = np.array([-0.8, 0.2, 6.6, 7.1, -3.0])
+
+    mu_expected, kappa_expected = vonmises.fit(
+        np.mod(data, 2 * np.pi), method="analytical"
+    )
+    mu_actual, kappa_actual = vonmises.fit(data, method="analytical")
+
+    diff = np.mod(mu_actual - mu_expected + np.pi, 2 * np.pi) - np.pi
+    np.testing.assert_allclose(diff, 0.0, atol=1e-8)
+    np.testing.assert_allclose(kappa_actual, kappa_expected, atol=1e-8)
+
+
 def test_wrapcauchy():
 
     wc = wrapcauchy(rho=0.75, mu=np.pi / 2)
@@ -74,6 +122,29 @@ def test_wrapnorm():
         1.6073,
         significant=4,
     )
+
+
+def test_circular_loc_scale_rejected():
+    rng = np.random.default_rng(1234)
+    sample = vonmises.rvs(kappa=1.0, mu=0.0, size=8, random_state=rng)
+
+    with pytest.raises(TypeError):
+        vonmises.pdf(0.5, mu=0.0, kappa=1.0, loc=0.1)
+
+    with pytest.raises(TypeError):
+        vonmises.cdf(0.5, mu=0.0, kappa=1.0, scale=1.1)
+
+    with pytest.raises(TypeError):
+        vonmises.fit(sample, loc=0.2)
+
+    with pytest.raises(TypeError):
+        vonmises.fit(sample, scale=1.2)
+
+    with pytest.raises(TypeError):
+        vonmises.fit(sample, floc=0.1)
+
+    with pytest.raises(TypeError):
+        vonmises.fit(sample, fscale=0.9)
 
 
 def test_vonmises():
