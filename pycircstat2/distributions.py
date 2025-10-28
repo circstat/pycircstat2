@@ -4,8 +4,10 @@ from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
 from scipy.special import gamma, i0, i1
 from scipy.stats import rv_continuous
+from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
 from .descriptive import circ_kappa, circ_mean_and_r
+from .utils import angmod
 
 __all__ = [
     "circularuniform",
@@ -164,6 +166,39 @@ class CircularContinuous(rv_continuous):
             return {}
         return self._clean_loc_scale_kwargs(dict(kwargs), caller=caller)
 
+    def _separate_shape_parameters(self, args, kwargs, caller):
+        """
+        Split positional/keyword shape parameters from kwargs for functions that
+        delegate to SciPy helpers lacking keyword support (e.g. ``expect``).
+        """
+        if not kwargs:
+            return tuple(args), {}
+
+        remaining_kwargs = dict(kwargs)
+        shape_args = list(args)
+
+        shapespec = getattr(self, "shapes", None)
+        if shapespec:
+            shape_names = [name.strip() for name in shapespec.split(",") if name.strip()]
+            for idx, name in enumerate(shape_names):
+                if name not in remaining_kwargs:
+                    continue
+                value = remaining_kwargs.pop(name)
+                if idx < len(shape_args):
+                    existing = shape_args[idx]
+                    try:
+                        equal = np.allclose(existing, value)
+                    except Exception:
+                        equal = existing == value
+                    if not equal:
+                        raise TypeError(
+                            f"{self._dist_name(caller)} received conflicting values for `{name}`."
+                        )
+                else:
+                    shape_args.append(value)
+
+        return tuple(shape_args), remaining_kwargs
+
     def _clean_loc_scale_kwargs(self, kwargs, *, caller):
         if not kwargs:
             return kwargs
@@ -244,6 +279,15 @@ class CircularContinuous(rv_continuous):
             cache[key] = compute()
         return cache[key]
 
+    def freeze(self, *args, **kwds):
+        """
+        Return a frozen circular distribution while enforcing fixed loc/scale.
+        """
+        call_kwargs = self._prepare_call_kwargs(kwds, "freeze")
+        return CircularContinuousFrozen(self, *args, **call_kwargs)
+
+    __call__ = freeze
+
     # ------------------------------------------------------------------
     # Public overrides
     # ------------------------------------------------------------------
@@ -322,6 +366,172 @@ class CircularContinuous(rv_continuous):
         # Reapply wrappers; _attach_methods is used during unpickling.
         self._circular_arg_wrapped = False
         self._wrap_arg_parsers()
+
+    def _wrap_direction(self, angle: float) -> float:
+        """
+        Wrap a direction onto the distribution's support if known, otherwise [0, 2π).
+        """
+        if self._lower_bound is not None and self._period is not None:
+            return float(self._wrap_angles(angle))
+        return float(angmod(angle))
+
+    # ------------------------------------------------------------------
+    # Circular descriptive helpers
+    # ------------------------------------------------------------------
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """
+        Circular (trigonometric) moment m_p = E[e^{i p Θ}] = C_p + i S_p.
+
+        Falls back to numeric evaluation via ``self.expect``; subclasses may
+        override with closed-form expressions.
+        """
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(args, kwargs, "trig_moment")
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        C_p = float(
+            np.asarray(self.expect(lambda x: np.cos(p * x), args=shape_args, **call_kwargs))
+        )
+        S_p = float(
+            np.asarray(self.expect(lambda x: np.sin(p * x), args=shape_args, **call_kwargs))
+        )
+        return complex(C_p, S_p)
+
+    def r(self, *args, **kwargs) -> float:
+        """Mean resultant length R = |m₁|."""
+        m1 = self.trig_moment(1, *args, **kwargs)
+        return float(np.clip(abs(m1), 0.0, 1.0))
+
+    def mean(self, *args, **kwargs) -> float:
+        """Circular mean direction μ = arg(m₁)."""
+        m1 = self.trig_moment(1, *args, **kwargs)
+        R = np.clip(abs(m1), 0.0, 1.0)
+        if np.isclose(R, 0.0, atol=1e-12):
+            return float("nan")
+        return self._wrap_direction(np.angle(m1))
+
+    def median(self, *args, **kwargs) -> float:
+        """Circular median (50% quantile)."""
+        call_kwargs = self._prepare_call_kwargs(kwargs, "median")
+        return float(super().ppf(0.5, *args, **call_kwargs))
+
+    def var(self, *args, **kwargs) -> float:
+        """Circular variance V = 1 - R."""
+        return float(1.0 - self.r(*args, **kwargs))
+
+    def std(self, *args, **kwargs) -> float:
+        """Circular standard deviation s = sqrt(-2 ln R)."""
+        R = np.clip(self.r(*args, **kwargs), 0.0, 1.0)
+        if np.isclose(R, 0.0, atol=1e-12):
+            return float("inf")
+        return float(np.sqrt(max(0.0, -2.0 * np.log(np.clip(R, np.finfo(float).tiny, 1.0)))))
+
+    def dispersion(self, *args, **kwargs) -> float:
+        """Circular dispersion δ̂ = (1 - ρ₂) / (2 ρ₁²)."""
+        m1 = self.trig_moment(1, *args, **kwargs)
+        r1 = np.clip(abs(m1), 0.0, 1.0)
+        if np.isclose(r1, 0.0, atol=1e-12):
+            return float("inf")
+        m2 = self.trig_moment(2, *args, **kwargs)
+        r2 = np.clip(abs(m2), 0.0, 1.0)
+        return float((1.0 - r2) / (2.0 * r1 * r1))
+
+    def skewness(self, *args, **kwargs) -> float:
+        """Pewsey-style circular skewness."""
+        m1 = self.trig_moment(1, *args, **kwargs)
+        u1 = np.angle(m1)
+        r1 = np.clip(abs(m1), 0.0, 1.0)
+        m2 = self.trig_moment(2, *args, **kwargs)
+        u2 = np.angle(m2)
+        r2 = np.clip(abs(m2), 0.0, 1.0)
+
+        denom_base = max(0.0, 1.0 - r1)
+        if np.isclose(denom_base, 0.0, atol=1e-12):
+            return float("nan")
+        denom = denom_base**1.5
+        return float((r2 * np.sin(u2 - 2.0 * u1)) / denom)
+
+    def kurtosis(self, *args, **kwargs) -> float:
+        """Pewsey-style circular kurtosis."""
+        m1 = self.trig_moment(1, *args, **kwargs)
+        u1 = np.angle(m1)
+        r1 = np.clip(abs(m1), 0.0, 1.0)
+        m2 = self.trig_moment(2, *args, **kwargs)
+        u2 = np.angle(m2)
+        r2 = np.clip(abs(m2), 0.0, 1.0)
+
+        denom_base = max(0.0, 1.0 - r1)
+        if np.isclose(denom_base, 0.0, atol=1e-12):
+            return float("nan")
+        denom = denom_base**2
+        return float((r2 * np.cos(u2 - 2.0 * u1) - r1**4) / denom)
+
+    def stats(self, *args, **kwargs):
+        """Convenience bundle of circular descriptive statistics."""
+        m1 = self.trig_moment(1, *args, **kwargs)
+        r1 = np.clip(abs(m1), 0.0, 1.0)
+        u1 = np.angle(m1)
+
+        r1_is_zero = np.isclose(r1, 0.0, atol=1e-12)
+        mean_val = float("nan") if r1_is_zero else self._wrap_direction(u1)
+
+        m2 = self.trig_moment(2, *args, **kwargs)
+        r2 = np.clip(abs(m2), 0.0, 1.0)
+        u2 = np.angle(m2)
+
+        denom_base = max(0.0, 1.0 - r1)
+        if np.isclose(denom_base, 0.0, atol=1e-12):
+            skew = float("nan")
+            kurt = float("nan")
+        else:
+            skew = float((r2 * np.sin(u2 - 2.0 * u1)) / (denom_base**1.5))
+            kurt = float((r2 * np.cos(u2 - 2.0 * u1) - r1**4) / (denom_base**2))
+
+        std_val = float("inf") if r1_is_zero else float(
+            np.sqrt(max(0.0, -2.0 * np.log(np.clip(r1, np.finfo(float).tiny, 1.0))))
+        )
+        dispersion_val = float("inf") if r1_is_zero else float((1.0 - r2) / (2.0 * r1 * r1))
+
+        return {
+            "mean": mean_val,
+            "median": self.median(*args, **kwargs),
+            "r": float(r1),
+            "var": float(1.0 - r1),
+            "std": std_val,
+            "dispersion": dispersion_val,
+            "skewness": skew,
+            "kurtosis": kurt,
+        }
+
+
+class CircularContinuousFrozen(rv_continuous_frozen):
+    """Frozen circular distribution exposing circular descriptive helpers."""
+
+    def _call_dist_method(self, name, *args, **kwargs):
+        call_kwargs = dict(self.kwds)
+        call_kwargs.update(kwargs)
+        call_args = self.args + args
+        return getattr(self.dist, name)(*call_args, **call_kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        call_kwargs = dict(self.kwds)
+        call_kwargs.update(kwargs)
+        call_args = self.args + args
+        return self.dist.trig_moment(p, *call_args, **call_kwargs)
+
+    def r(self, *args, **kwargs) -> float:
+        return self._call_dist_method("r", *args, **kwargs)
+
+    def dispersion(self, *args, **kwargs) -> float:
+        return self._call_dist_method("dispersion", *args, **kwargs)
+
+    def skewness(self, *args, **kwargs) -> float:
+        return self._call_dist_method("skewness", *args, **kwargs)
+
+    def kurtosis(self, *args, **kwargs) -> float:
+        return self._call_dist_method("kurtosis", *args, **kwargs)
+
+    def stats(self, *args, **kwargs):
+        return self._call_dist_method("stats", *args, **kwargs)
+
 
 ############################
 ## Symmetric Distribtions ##
