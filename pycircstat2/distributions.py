@@ -88,10 +88,21 @@ class CircularContinuous(rv_continuous):
         self._circular_arg_wrapped = False
         self._wrap_arg_parsers()
         self._lower_bound, self._period = self._compute_period()
+        self._normalization_cache = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _get_normalization_cache(self):
+        cache = getattr(self, "_normalization_cache", None)
+        if cache is None:
+            cache = {}
+            self._normalization_cache = cache
+        return cache
+
+    def _clear_normalization_cache(self):
+        self._normalization_cache = {}
+
     def _wrap_arg_parsers(self):
         """Ensure internal arg-parsing keeps loc/scale fixed to defaults."""
         if getattr(self, "_circular_arg_wrapped", False):
@@ -208,6 +219,30 @@ class CircularContinuous(rv_continuous):
         if dist_name:
             return f"{dist_name}.{caller}"
         return f"{self.__class__.__name__}.{caller}"
+
+    def _normalization_cache_key(self, *params):
+        key_components = []
+        for param in params:
+            try:
+                arr = np.asarray(param, dtype=float)
+            except (TypeError, ValueError):
+                return None
+            if arr.ndim > 0 and arr.size != 1:
+                return None
+            try:
+                key_components.append(float(arr))
+            except (TypeError, ValueError):
+                return None
+        return tuple(key_components)
+
+    def _get_cached_normalizer(self, compute, *params):
+        key = self._normalization_cache_key(*params)
+        if key is None:
+            return compute()
+        cache = self._get_normalization_cache()
+        if key not in cache:
+            cache[key] = compute()
+        return cache[key]
 
     # ------------------------------------------------------------------
     # Public overrides
@@ -1702,14 +1737,14 @@ class vonmises_flattopped_gen(CircularContinuous):
         return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-1 <= nu <= 1)
 
     def _argcheck(self, mu, kappa, nu):
-        if self._validate_params(mu, kappa, nu):
-            self._c = _c_vmft(mu, kappa, nu)
-            return True
-        else:
-            return False
+        return bool(self._validate_params(mu, kappa, nu))
 
     def _pdf(self, x, mu, kappa, nu):
-        return self._c * _kernel_vmft(x, mu, kappa, nu)
+        norm_const = self._get_cached_normalizer(
+            lambda: _c_vmft(mu, kappa, nu), mu, kappa, nu
+        )
+        self._c = norm_const  # retain attribute for existing code paths
+        return norm_const * _kernel_vmft(x, mu, kappa, nu)
 
     def pdf(self, x, mu, kappa, nu, *args, **kwargs):
         r"""
@@ -1802,22 +1837,19 @@ class jonespewsey_gen(CircularContinuous):
         return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
 
     def _argcheck(self, mu, kappa, psi):
-        if self._validate_params(mu, kappa, psi):
-            self._c = _c_jonespewsey(
-                mu, kappa, psi
-            )  # Precompute the normalizing constant
-            return True
-        else:
-            return False
+        return bool(self._validate_params(mu, kappa, psi))
 
     def _pdf(self, x, mu, kappa, psi):
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi)
         else:
+            norm = self._get_cached_normalizer(
+                lambda: _c_jonespewsey(mu, kappa, psi), mu, kappa, psi
+            )
+            self._c = norm
             if np.isclose(np.abs(psi), 0).all():
-                return 1 / (2 * np.pi * i0(kappa)) * np.exp(kappa * np.cos(x - mu))
-            else:
-                return _kernel_jonespewsey(x, mu, kappa, psi) / self._c
+                return norm * np.exp(kappa * np.cos(x - mu))
+            return _kernel_jonespewsey(x, mu, kappa, psi) / norm
 
     def pdf(self, x, mu, kappa, psi, *args, **kwargs):
         r"""
@@ -1850,7 +1882,10 @@ class jonespewsey_gen(CircularContinuous):
             return c * np.exp(kappa * np.cos(x - mu))
 
         if np.isclose(np.abs(psi), 0).all():
-            c = self._c
+            c = self._get_cached_normalizer(
+                lambda: _c_jonespewsey(mu, kappa, psi), mu, kappa, psi
+            )
+            self._c = c
 
             @np.vectorize
             def _cdf_single(x, mu, kappa, psi, c):
@@ -1930,20 +1965,19 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
         )
 
     def _argcheck(self, xi, kappa, psi, lmbd):
-        if self._validate_params(xi, kappa, psi, lmbd):
-            self._c = _c_jonespewsey(xi, kappa, psi)
-            return True
-        else:
-            return False
+        return bool(self._validate_params(xi, kappa, psi, lmbd))
 
     def _pdf(self, x, xi, kappa, psi, lmbd):
         if np.all(kappa < 0.001):
             return 1 / (2 * np.pi) * (1 + lmbd * np.sin(x - xi))
         else:
+            norm = self._get_cached_normalizer(
+                lambda: _c_jonespewsey(xi, kappa, psi), xi, kappa, psi
+            )
+            self._c = norm
             if np.isclose(np.abs(psi), 0).all():
                 return (
-                    1
-                    / (2 * np.pi * i0(kappa))
+                    norm
                     * np.exp(kappa * np.cos(x - xi))
                     * (1 + lmbd * np.sin(x - xi))
                 )
@@ -1951,7 +1985,7 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
                 return (
                     (1 + lmbd * np.sin(x - xi))
                     * _kernel_jonespewsey(x, xi, kappa, psi)
-                    / self._c
+                    / norm
                 )
 
     def pdf(self, x, xi, kappa, psi, lmbd, *args, **kwargs):
@@ -2031,14 +2065,14 @@ class jonespewsey_asym_gen(CircularContinuous):
         )
 
     def _argcheck(self, xi, kappa, psi, nu):
-        if self._validate_params(xi, kappa, psi, nu):
-            self._c = _c_jonespewsey_asym(xi, kappa, psi, nu)
-            return True
-        else:
-            return False
+        return bool(self._validate_params(xi, kappa, psi, nu))
 
     def _pdf(self, x, xi, kappa, psi, nu):
-        return _kernel_jonespewsey_asym(x, xi, kappa, psi, nu) / self._c
+        norm = self._get_cached_normalizer(
+            lambda: _c_jonespewsey_asym(xi, kappa, psi, nu), xi, kappa, psi, nu
+        )
+        self._c = norm
+        return _kernel_jonespewsey_asym(x, xi, kappa, psi, nu) / norm
 
     def pdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
         r"""
@@ -2156,25 +2190,27 @@ class inverse_batschelet_gen(CircularContinuous):
         )
 
     def _argcheck(self, xi, kappa, nu, lmbd):
-        if self._validate_params(xi, kappa, nu, lmbd):
-            self._c = _c_invbatschelet(kappa, lmbd)
-            if np.isclose(lmbd, -1).all():
-                self.con1, self.con2 = 0, 0
-            else:
-                self.con1 = (1 - lmbd) / (1 + lmbd)
-                self.con2 = (2 * lmbd) / (1 + lmbd)
-            return True
-        else:
+        if not self._validate_params(xi, kappa, nu, lmbd):
             return False
+        if np.isclose(lmbd, -1).all():
+            self.con1, self.con2 = 0, 0
+        else:
+            self.con1 = (1 - lmbd) / (1 + lmbd)
+            self.con2 = (2 * lmbd) / (1 + lmbd)
+        return True
 
     def _pdf(self, x, xi, kappa, nu, lmbd):
+        norm = self._get_cached_normalizer(
+            lambda: _c_invbatschelet(kappa, lmbd), kappa, lmbd
+        )
+        self._c = norm
         arg1 = _tnu(x, nu, xi)
         arg2 = _slmbdinv(arg1, lmbd)
 
         if np.isclose(lmbd, -1).all():
-            return self._c * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
+            return norm * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
         else:
-            return self._c * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
+            return norm * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
 
     def pdf(self, x, xi, kappa, nu, lmbd, *args, **kwargs):
         r"""
@@ -2325,6 +2361,13 @@ class wrapstable_gen(CircularContinuous):
     - Pewsey, A. (2008). The wrapped stable family of distributions as a flexible model for circular data. Computational Statistics & Data Analysis, 52(3), 1516-1523.
     """
 
+    _series_term_limit = 150
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._series_cache = {}
+        self._series_indices = np.arange(1, self._series_term_limit, dtype=float)
+
     def _validate_params(self, delta, alpha, beta, gamma):
         return (
             (0 <= delta <= np.pi * 2)
@@ -2340,26 +2383,14 @@ class wrapstable_gen(CircularContinuous):
             return False
 
     def _pdf(self, x, delta, alpha, beta, gamma):
-        def rho_p(p, alpha, gamma):
-            return np.exp(-((gamma * p) ** alpha))
-
-        def mu_p(p, alpha, beta, gamma, delta):
-            if np.all(alpha == 1):
-                mu = delta * p - 2 * beta * gamma * p * np.log(gamma * p) / np.pi
-            else:
-                mu = delta * p + beta * np.tan(np.pi * alpha / 2) * (
-                    (gamma * p) ** alpha - gamma * p
-                )
-            return mu
-
-        series_sum = 0
-        for p in np.arange(1, 150):
-            rho = rho_p(p, alpha, gamma)
-            mu = mu_p(p, alpha, beta, gamma, delta)
-            series_sum += rho * np.cos(p * x - mu)
-
+        x_arr = np.asarray(x, dtype=float)
+        rho_vals, mu_vals = self._get_series_terms(delta, alpha, beta, gamma)
+        p = self._series_indices
+        cos_args = p[:, np.newaxis] * x_arr[np.newaxis, ...] - mu_vals[:, np.newaxis]
+        series_sum = np.sum(rho_vals[:, np.newaxis] * np.cos(cos_args), axis=0)
         pdf_values = 1 / (2 * np.pi) * (1 + 2 * series_sum)
-
+        if np.isscalar(x):
+            return float(pdf_values)
         return pdf_values
 
     def pdf(self, x, delta, alpha, beta, gamma, *args, **kwargs):
@@ -2411,6 +2442,40 @@ class wrapstable_gen(CircularContinuous):
             return integral
 
         return _cdf_single(x, delta, alpha, beta, gamma)
+
+    def _get_series_terms(self, delta, alpha, beta, gamma):
+        delta_s = self._scalar_param(delta)
+        alpha_s = self._scalar_param(alpha)
+        beta_s = self._scalar_param(beta)
+        gamma_s = self._scalar_param(gamma)
+        key = self._normalization_cache_key(delta_s, alpha_s, beta_s, gamma_s)
+        if key is None:
+            return self._compute_series_terms(delta_s, alpha_s, beta_s, gamma_s)
+        cache = self._series_cache
+        if key not in cache:
+            cache[key] = self._compute_series_terms(delta_s, alpha_s, beta_s, gamma_s)
+        return cache[key]
+
+    def _compute_series_terms(self, delta, alpha, beta, gamma):
+        p = self._series_indices
+        rho_vals = np.exp(-((gamma * p) ** alpha))
+        if np.all(alpha == 1):
+            mu_vals = delta * p - 2 * beta * gamma * p * np.log(gamma * p) / np.pi
+        else:
+            mu_vals = delta * p + beta * np.tan(np.pi * alpha / 2) * (
+                (gamma * p) ** alpha - gamma * p
+            )
+        return rho_vals, mu_vals
+
+    @staticmethod
+    def _scalar_param(value):
+        arr = np.asarray(value, dtype=float)
+        if arr.size == 1:
+            return float(arr)
+        first = float(arr.flat[0])
+        if not np.allclose(arr, first):
+            raise ValueError("wrapstable parameters must be scalar-valued.")
+        return first
 
 
 wrapstable = wrapstable_gen(name="wrapstable")
