@@ -262,12 +262,16 @@ class CircularContinuous(rv_continuous):
                 arr = np.asarray(param, dtype=float)
             except (TypeError, ValueError):
                 return None
-            if arr.ndim > 0 and arr.size != 1:
+            if arr.ndim > 1 or arr.size > 1:
                 return None
             try:
-                key_components.append(float(arr))
+                scalar = arr.item() if isinstance(arr, np.ndarray) else float(arr)
             except (TypeError, ValueError):
-                return None
+                try:
+                    scalar = float(arr)
+                except (TypeError, ValueError):
+                    return None
+            key_components.append(float(scalar))
         return tuple(key_components)
 
     def _get_cached_normalizer(self, compute, *params):
