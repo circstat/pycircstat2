@@ -133,6 +133,17 @@ class CircularContinuous(rv_continuous):
             return arr
 
         wrapped = np.mod(arr - self._lower_bound, self._period) + self._lower_bound
+        upper_bound = self._lower_bound + self._period
+        if np.isfinite(upper_bound):
+            tol = np.finfo(float).eps * max(1.0, abs(upper_bound))
+            if np.isscalar(values):
+                if np.isclose(values, upper_bound, rtol=0.0, atol=tol):
+                    return upper_bound
+            else:
+                mask = np.isclose(arr, upper_bound, rtol=0.0, atol=tol)
+                if np.any(mask):
+                    wrapped = wrapped.copy()
+                    wrapped[mask] = upper_bound
         if np.isscalar(values):
             return float(wrapped)
         return wrapped
@@ -208,6 +219,22 @@ class CircularContinuous(rv_continuous):
     def logpdf(self, x, *args, **kwargs):
         call_kwargs = self._prepare_call_kwargs(kwargs, "logpdf")
         return super().logpdf(self._wrap_angles(x), *args, **call_kwargs)
+
+    def cdf(self, x, *args, **kwargs):
+        call_kwargs = self._prepare_call_kwargs(kwargs, "cdf")
+        return super().cdf(self._wrap_angles(x), *args, **call_kwargs)
+
+    def logcdf(self, x, *args, **kwargs):
+        call_kwargs = self._prepare_call_kwargs(kwargs, "logcdf")
+        return super().logcdf(self._wrap_angles(x), *args, **call_kwargs)
+
+    def sf(self, x, *args, **kwargs):
+        call_kwargs = self._prepare_call_kwargs(kwargs, "sf")
+        return super().sf(self._wrap_angles(x), *args, **call_kwargs)
+
+    def logsf(self, x, *args, **kwargs):
+        call_kwargs = self._prepare_call_kwargs(kwargs, "logsf")
+        return super().logsf(self._wrap_angles(x), *args, **call_kwargs)
 
     def nnlf(self, theta, x):
         return super().nnlf(theta, self._wrap_angles(x))
