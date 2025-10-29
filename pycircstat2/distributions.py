@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
-from scipy.special import gamma, i0, i1, ndtr
+from scipy.special import gamma, i0, i1, ndtr, iv
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -2323,7 +2323,73 @@ class vonmises_gen(CircularContinuous):
         return super().logpdf(x, mu, kappa, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa):
-        return self._cdf_from_pdf(x, mu, kappa)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        kappa_arr = np.asarray(kappa, dtype=float)
+        if mu_arr.size != 1 or kappa_arr.size != 1:
+            raise ValueError("vonmises parameters must be scalar-valued.")
+
+        mu_val = float(mu_arr.reshape(-1)[0])
+        kappa_val = float(kappa_arr.reshape(-1)[0])
+        two_pi = 2.0 * np.pi
+
+        if kappa_val < 1e-9:
+            uniform = flat / two_pi
+            if arr.ndim == 0:
+                value = float(uniform[0])
+                return 1.0 if np.isclose(float(wrapped), two_pi) else value
+            result = uniform.reshape(arr.shape)
+            result[np.isclose(arr, two_pi)] = 1.0
+            return result
+
+        denom = i0(kappa_val)
+        if not np.isfinite(denom) or denom == 0.0:
+            return self._cdf_from_pdf(x, mu, kappa)
+
+        phi = (flat - mu_val + np.pi) % two_pi - np.pi
+        base_phi = (-mu_val + np.pi) % two_pi - np.pi
+
+        term_sum = np.zeros_like(phi)
+        term_base = 0.0
+        tol = 1e-12
+        max_terms = 500
+        converged = False
+
+        for n in range(1, max_terms + 1):
+            coeff = iv(n, kappa_val) / (denom * n)
+            if not np.isfinite(coeff):
+                continue
+
+            term = coeff * np.sin(n * phi)
+            term_sum += term
+            term_base += coeff * np.sin(n * base_phi)
+
+            max_term = np.max(np.abs(term))
+            if max_term < tol and abs(coeff) < tol:
+                converged = True
+                break
+
+        if not converged:
+            return self._cdf_from_pdf(x, mu, kappa)
+
+        cdf_raw = 0.5 + phi / two_pi + (1.0 / np.pi) * term_sum
+        base_val = 0.5 + base_phi / two_pi + (1.0 / np.pi) * term_base
+        cdf = (cdf_raw - base_val) % 1.0
+        cdf = np.clip(cdf, 0.0, 1.0)
+
+        if arr.ndim == 0:
+            value = float(cdf[0])
+            return 1.0 if np.isclose(float(wrapped), two_pi) else value
+
+        result = cdf.reshape(arr.shape)
+        result[np.isclose(arr, two_pi)] = 1.0
+        return result
 
     def cdf(self, x, mu, kappa, *args, **kwargs):
         r"""
@@ -2333,7 +2399,14 @@ class vonmises_gen(CircularContinuous):
         F(\theta) = \frac{1}{2 \pi I_0(\kappa)}\int_{0}^{\theta} e^{\kappa \cos(\theta - \mu)} dx
         $$
 
-        No closed-form solution is available, so the CDF is computed numerically.
+        The CDF is evaluated via its Fourier-Bessel series expansion,
+        $$
+        F(\theta) = \frac{1}{2} + \frac{\theta - \mu}{2\pi}
+        + \frac{1}{\pi}\sum_{n=1}^{\infty} \frac{I_n(\kappa)}{I_0(\kappa)\,n}
+        \sin\bigl(n(\theta - \mu)\bigr),
+        $$
+        truncated adaptively for numerical stability and re-normalised to the
+        $[0, 2\pi)$ support.
 
         Parameters
         ----------
