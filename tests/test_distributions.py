@@ -120,6 +120,16 @@ def test_wrapcauchy_cdf_matches_numeric():
     assert np.all(diffs >= -1e-10)
 
 
+def test_cartwright_cdf_matches_numeric():
+    mu, zeta = 1.2, 0.8
+    theta = np.linspace(0.0, 2.0 * np.pi, 9)
+    analytic = cartwright.cdf(theta, mu, zeta)
+    numeric = cartwright._cdf_from_pdf(theta, mu, zeta)
+    np.testing.assert_allclose(analytic, numeric, atol=1e-7)
+    diffs = np.diff(analytic)
+    assert np.all(diffs >= -1e-10)
+
+
 def test_wrapnorm():
 
     wn = wrapnorm(rho=0.75, mu=np.pi / 2)

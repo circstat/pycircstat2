@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
-from scipy.special import gamma, i0, i1, ndtr, iv
+from scipy.special import beta as beta_fn
+from scipy.special import gamma, i0, i1, ndtr, iv, betainc
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -1290,13 +1291,75 @@ class cartwright_gen(CircularContinuous):
         return super().pdf(x, mu, zeta, *args, **kwargs)
 
     def _cdf(self, x, mu, zeta):
-        return self._cdf_from_pdf(x, mu, zeta)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        zeta_arr = np.asarray(zeta, dtype=float)
+        if mu_arr.size != 1 or zeta_arr.size != 1:
+            raise ValueError("cartwright parameters must be scalar-valued.")
+
+        mu_val = float(mu_arr.reshape(-1)[0])
+        zeta_val = float(zeta_arr.reshape(-1)[0])
+        if zeta_val <= 0.0:
+            raise ValueError("`zeta` must be positive.")
+
+        two_pi = 2.0 * np.pi
+        a = 0.5
+        b = 1.0 / zeta_val + 0.5
+        const = (
+            2.0 ** (-1.0 + 1.0 / zeta_val)
+            * gamma(1.0 + 1.0 / zeta_val) ** 2
+            / (np.pi * gamma(1.0 + 2.0 / zeta_val))
+        )
+        beta_term = beta_fn(a, b)
+        half_norm = const * (2.0 ** (1.0 / zeta_val)) * beta_term  # equals 0.5
+
+        def cumulative(phi_mod):
+            mask = phi_mod <= np.pi
+            result = np.empty_like(phi_mod)
+
+            if np.any(mask):
+                s_small = np.sin(0.5 * phi_mod[mask]) ** 2
+                result[mask] = half_norm * betainc(a, b, s_small)
+            if np.any(~mask):
+                phi_ref = two_pi - phi_mod[~mask]
+                s_large = np.sin(0.5 * phi_ref) ** 2
+                result[~mask] = 1.0 - half_norm * betainc(a, b, s_large)
+            return result
+
+        phi_start = (-mu_val) % two_pi
+        phi_end = (flat - mu_val) % two_pi
+
+        H_start = cumulative(np.array([phi_start]))[0]
+        H_end = cumulative(phi_end)
+
+        cdf = np.where(
+            phi_end >= phi_start,
+            np.clip(H_end - H_start, 0.0, 1.0),
+            1.0 - np.clip(H_start - H_end, 0.0, 1.0),
+        )
+        cdf = np.mod(cdf, 1.0)
+        cdf = np.clip(cdf, 0.0, 1.0)
+
+        if arr.ndim == 0:
+            value = float(cdf[0])
+            return 1.0 if np.isclose(float(wrapped), 2.0 * np.pi) else value
+
+        result = cdf.reshape(arr.shape)
+        result[np.isclose(arr, 2.0 * np.pi)] = 1.0
+        return result
 
     def cdf(self, x, mu, zeta, *args, **kwargs):
         r"""
         Cumulative distribution function of the Cartwright distribution.
 
-        No closed-form solution is available, so the CDF is computed numerically.
+        The CDF is evaluated analytically via a beta-function series,
+        exploiting the symmetry around the mean direction.
 
         Parameters
         ----------
