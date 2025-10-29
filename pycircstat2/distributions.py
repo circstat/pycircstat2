@@ -1994,6 +1994,140 @@ class wrapnorm_gen(CircularContinuous):
             return float(wrapped)
         return wrapped
 
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
+        """
+        Estimate ``mu`` and ``rho`` for the wrapped normal distribution.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians). Values are wrapped to ``[0, 2π)`` internally.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {"moments", "mle"}, optional
+            Estimation strategy. ``"moments"`` (aliases: "analytical") returns
+            the circular mean and resultant length. ``"mle"`` (alias:
+            "numerical") maximises the weighted log-likelihood via numerical
+            optimisation.
+        return_info : bool, optional
+            If True, return a diagnostics dictionary alongside the estimates.
+        optimizer : str, optional
+            Optimiser passed to :func:`scipy.optimize.minimize` when
+            ``method="mle"``.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser.
+        """
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        mu_mom, rho_mom = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = float(0.0)
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        rho_mom = float(np.clip(rho_mom, 1e-9, 1.0 - 1e-9))
+
+        def logpdf_series(mu_param, rho_param):
+            rho_val = float(np.clip(rho_param, 1e-12, 1.0 - 1e-12))
+            if rho_val <= 1e-8:
+                return np.full_like(x, -np.log(2.0 * np.pi), dtype=float)
+
+            sigma = float(np.sqrt(-2.0 * np.log(rho_val)))
+            if sigma > 10.0:
+                return np.full_like(x, -np.log(2.0 * np.pi), dtype=float)
+
+            two_pi = 2.0 * np.pi
+            max_k = max(5, int(np.ceil(3.0 * sigma / two_pi)) + 5)
+            ks = np.arange(-max_k, max_k + 1, dtype=float)
+            diff = x[:, None] - mu_param + two_pi * ks[None, :]
+            exponents = -0.5 * (diff / sigma) ** 2
+            max_exp = np.max(exponents, axis=1, keepdims=True)
+            sum_exp = np.sum(np.exp(exponents - max_exp), axis=1)
+            log_pdf = (
+                max_exp.squeeze(1) + np.log(sum_exp) - 0.5 * np.log(2.0 * np.pi) - np.log(sigma)
+            )
+            return log_pdf.astype(float, copy=False)
+
+        def nll(params):
+            mu_param, rho_param = params
+            if not (0.0 <= rho_param < 1.0):
+                return np.inf
+            log_pdf = logpdf_series(mu_param, rho_param)
+            return float(-np.sum(w * log_pdf))
+
+        method_key = method.lower()
+        alias = {"analytical": "moments", "numerical": "mle"}
+        method_key = alias.get(method_key, method_key)
+
+        if method_key not in {"moments", "mle"}:
+            raise ValueError("`method` must be one of {'moments', 'mle', 'analytical', 'numerical'}.")
+
+        if "algorithm" in kwargs:
+            optimizer = kwargs.pop("algorithm")
+
+        if method_key == "moments":
+            mu_hat = self._wrap_direction(mu_mom)
+            rho_hat = rho_mom
+            info = {
+                "method": "moments",
+                "loglik": float(-nll((mu_hat, rho_hat))),
+                "n_effective": float(n_eff),
+                "converged": True,
+            }
+        else:
+            bounds = [(0.0, 2.0 * np.pi), (1e-9, 1.0 - 1e-9)]
+            init = np.array([mu_mom, rho_mom], dtype=float)
+            result = minimize(
+                nll,
+                init,
+                method=optimizer,
+                bounds=bounds,
+                **kwargs,
+            )
+            if not result.success:
+                raise RuntimeError(
+                    f"wrapnorm.fit(method='mle') failed: {result.message}"
+                )
+            mu_hat = self._wrap_direction(float(result.x[0]))
+            rho_hat = float(np.clip(result.x[1], 1e-9, 1.0 - 1e-9))
+            info = {
+                "method": "mle",
+                "loglik": float(-result.fun),
+                "n_effective": float(n_eff),
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "grad_norm": np.nan,
+                "optimizer": optimizer,
+            }
+
+        estimates = (mu_hat, rho_hat)
+        if return_info:
+            return estimates, info
+        return estimates
+
 
 wrapnorm = wrapnorm_gen(name="wrapped_normal")
 
@@ -2184,68 +2318,134 @@ class wrapcauchy_gen(CircularContinuous):
         theta = np.mod(theta, two_pi)
         return theta
 
-    def fit(self, data, method="analytical", *args, **kwargs):
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
         """
-        Fit the Wrapped Cauchy distribution to the data.
+        Estimate ``mu`` and ``rho`` for the wrapped Cauchy distribution.
 
         Parameters
         ----------
         data : array_like
-            Input data (angles in radians).
-        method : str, optional
-            The approach for fitting the distribution. Options are:
-            - "analytical": Compute `rho` and `mu` using closed-form solutions.
-            - "numerical": Fit the parameters by minimizing the negative log-likelihood using an optimizer.
-            Default is "analytical".
-
-        *args, **kwargs :
-            Additional arguments passed to the optimizer (if used).
-
-        Returns
-        -------
-        rho : float
-            Estimated shape parameter.
-        mu : float
-            Estimated mean direction.
+            Sample angles (radians). Values are wrapped to ``[0, 2π)`` internally.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {"moments", "mle"}, optional
+            Estimation strategy. ``"moments"`` (alias: "analytical") returns the
+            closed-form estimates based on the first trigonometric moment.
+            ``"mle"`` (alias: "numerical") maximises the weighted log-likelihood.
+        return_info : bool, optional
+            If True, also return a diagnostic dictionary.
+        optimizer : str, optional
+            Optimiser passed to :func:`scipy.optimize.minimize` when
+            ``method="mle"``.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser.
         """
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
-        data = self._wrap_angles(np.asarray(data, dtype=float))
+        x = self._wrap_angles(np.asarray(data, dtype=float))
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
 
-        # Validate the fitting method
-        valid_methods = ["analytical", "numerical"]
-        if method not in valid_methods:
-            raise ValueError(
-                f"Invalid method '{method}'. Available methods are {valid_methods}."
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False)
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        mu_mom, rho_mom = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = float(0.0)
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        rho_mom = float(np.clip(rho_mom, 0.0, 1.0 - 1e-12))
+
+        def nll(params):
+            mu_param, rho_param = params
+            if not (0.0 <= rho_param < 1.0):
+                return np.inf
+            denom = np.clip(1.0 + rho_param**2 - 2.0 * rho_param * np.cos(x - mu_param), 1e-15, None)
+            log_pdf = np.log1p(-rho_param**2) - np.log(2.0 * np.pi) - np.log(denom)
+            value = -np.sum(w * log_pdf)
+            return float(value)
+
+        def grad(params):
+            mu_param, rho_param = params
+            denom = np.clip(1.0 + rho_param**2 - 2.0 * rho_param * np.cos(x - mu_param), 1e-15, None)
+            cos_term = np.cos(x - mu_param)
+            sin_term = np.sin(x - mu_param)
+
+            inv_denom = w / denom
+            g_mu = -2.0 * rho_param * np.sum(inv_denom * sin_term)
+            g_rho = (
+                w_sum * (2.0 * rho_param / np.clip(1.0 - rho_param**2, 1e-15, None))
+                + np.sum(inv_denom * (2.0 * rho_param - 2.0 * cos_term))
             )
+            return np.array([g_mu, g_rho], dtype=float)
 
-        # Analytical solution for the Von Mises distribution
-        mu, rho = circ_mean_and_r(alpha=data)
+        method_key = method.lower()
+        alias = {"analytical": "moments", "numerical": "mle"}
+        method_key = alias.get(method_key, method_key)
 
-        # Use analytical estimates for mu and rho
-        if method == "analytical":
-            return mu, rho
-        elif method == "numerical":
-            # Numerical optimization
-            def nll(params):
-                mu, rho = params
-                if not self._argcheck(mu, rho):
-                    return np.inf
-                return -np.sum(self._logpdf(data, mu, rho))
+        if "algorithm" in kwargs:
+            optimizer = kwargs.pop("algorithm")
 
-            start_params = [mu, np.clip(rho, 1e-4, 1 - 1e-4)]
-            bounds = [(0, 2 * np.pi), (1e-6, 1)]
-            algo = kwargs.pop("algorithm", "L-BFGS-B")
+        if method_key not in {"moments", "mle"}:
+            raise ValueError("`method` must be one of {'moments', 'mle', 'analytical', 'numerical'}.")
+
+        if method_key == "moments":
+            mu_hat = self._wrap_direction(mu_mom)
+            rho_hat = rho_mom
+            info = {
+                "method": "moments",
+                "loglik": float(-nll((mu_hat, rho_hat))),
+                "n_effective": float(n_eff),
+                "converged": True,
+            }
+        else:
+            bounds = [(0.0, 2.0 * np.pi), (1e-9, 1.0 - 1e-9)]
+            init = np.array([mu_mom, max(1e-3, min(rho_mom, 1.0 - 1e-3))], dtype=float)
             result = minimize(
-                nll, start_params, bounds=bounds, method=algo, *args, **kwargs
+                nll,
+                init,
+                method=optimizer,
+                jac=grad,
+                bounds=bounds,
+                **kwargs,
             )
             if not result.success:
-                raise RuntimeError(f"Optimization failed: {result.message}")
-            mu, rho = result.x
-            return mu, rho
-        else:
-            raise ValueError(
-                "Invalid method. Supported methods are 'analytical' and 'numerical'."
-            )
+                raise RuntimeError(f"wrapcauchy.fit(method='mle') failed: {result.message}")
+            mu_hat = self._wrap_direction(float(result.x[0]))
+            rho_hat = float(np.clip(result.x[1], 1e-9, 1.0 - 1e-9))
+            info = {
+                "method": "mle",
+                "loglik": float(-result.fun),
+                "n_effective": float(n_eff),
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "grad_norm": float(np.linalg.norm(result.jac))
+                if getattr(result, "jac", None) is not None
+                else np.nan,
+                "optimizer": optimizer,
+            }
+
+        estimates = (mu_hat, rho_hat)
+        if return_info:
+            return estimates, info
+        return estimates
 
 
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
