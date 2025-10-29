@@ -165,6 +165,42 @@ class CircularContinuous(rv_continuous):
             return float(wrapped)
         return wrapped
 
+    def _init_rng(self, random_state):
+        """
+        Normalize the ``random_state`` argument to a NumPy ``Generator``.
+
+        Accepts integers, ``RandomState`` instances, ``Generator`` objects, or
+        ``None`` (in which case the distribution's cached generator is used).
+        """
+        candidate = random_state if random_state is not None else getattr(self, "_random_state", None)
+
+        if isinstance(candidate, np.random.Generator):
+            return candidate
+
+        if isinstance(candidate, np.random.RandomState):
+            seed = candidate.randint(0, 2**32)
+            generator = np.random.default_rng(seed)
+            if random_state is None:
+                self._random_state = generator
+            return generator
+
+        if candidate is None:
+            generator = np.random.default_rng()
+            self._random_state = generator
+            return generator
+
+        try:
+            generator = np.random.default_rng(candidate)
+        except TypeError as err:  # pragma: no cover - defensive branch
+            raise TypeError(
+                "random_state must be None, an int seed, RandomState, or Generator."
+            ) from err
+
+        if random_state is None:
+            self._random_state = generator
+
+        return generator
+
     def _prepare_call_kwargs(self, kwargs, caller):
         if not kwargs:
             return {}
@@ -734,7 +770,7 @@ class circularuniform_gen(CircularContinuous):
         return super().ppf(q, *args, **kwargs)
 
     def _rvs(self, size=None, random_state=None):
-        rng = self._random_state if random_state is None else random_state
+        rng = self._init_rng(random_state)
         return rng.uniform(0.0, 2 * np.pi, size=size)
 
     def rvs(self, size=None, random_state=None):
@@ -983,12 +1019,7 @@ class triangular_gen(CircularContinuous):
         return super().ppf(q, rho, *args, **kwargs)
 
     def _rvs(self, rho, size=None, random_state=None):
-        rng = random_state
-        if rng is None:
-            rng = self._random_state
-        if rng is None:
-            rng = np.random.default_rng()
-
+        rng = self._init_rng(random_state)
         u = rng.uniform(0.0, 1.0, size=size)
         return self._ppf(u, rho)
 
@@ -1681,18 +1712,32 @@ class wrapcauchy_gen(CircularContinuous):
         samples : ndarray
             Random variates from the Wrapped Cauchy distribution.
         """
-        rng = self._random_state if random_state is None else random_state
+        rng = self._init_rng(random_state)
 
-        if rho == 0:
-            return rng.uniform(0, 2 * np.pi, size=size)
-        elif rho == 1:
-            return np.full(size, mu % (2 * np.pi))
-        else:
-            from scipy.stats import cauchy
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("wrapcauchy parameters must be scalar-valued.")
 
-            scale = -np.log(rho)
-            samples = cauchy.rvs(loc=mu, scale=scale, size=size, random_state=rng)
-            return np.mod(samples, 2 * np.pi)
+        mu_val = float(mu_arr.reshape(-1)[0])
+        rho_val = float(rho_arr.reshape(-1)[0])
+        two_pi = 2.0 * np.pi
+
+        if np.isclose(rho_val, 0.0, atol=1e-15):
+            return rng.uniform(0.0, two_pi, size=size)
+
+        if np.isclose(rho_val, 1.0, atol=1e-15):
+            angle = float(np.mod(mu_val, two_pi))
+            if size is None:
+                return angle
+            return np.full(size, angle, dtype=float)
+
+        u = rng.uniform(0.0, 1.0, size=size)
+        factor = (1.0 + rho_val) / (1.0 - rho_val)
+        tan_term = np.tan(np.pi * (u - 0.5))
+        theta = mu_val + 2.0 * np.arctan(factor * tan_term)
+        theta = np.mod(theta, two_pi)
+        return theta
 
     def fit(self, data, method="analytical", *args, **kwargs):
         """
@@ -2508,34 +2553,58 @@ class vonmises_gen(CircularContinuous):
         return super().ppf(q, mu, kappa, *args, **kwargs)
 
     def _rvs(self, mu, kappa, size=None, random_state=None):
-        # Use the random_state attribute or a new default random generator
-        rng = self._random_state if random_state is None else random_state
+        rng = self._init_rng(random_state)
 
-        # Handle size being a tuple
+        mu_arr = np.asarray(mu, dtype=float)
+        kappa_arr = np.asarray(kappa, dtype=float)
+        if mu_arr.size != 1 or kappa_arr.size != 1:
+            raise ValueError("vonmises parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        kappa_val = float(kappa_arr.reshape(-1)[0])
+        two_pi = 2.0 * np.pi
+
+        if kappa_val <= 1e-9:
+            return rng.uniform(0.0, two_pi, size=size)
+
+        a = 1.0 + np.sqrt(1.0 + 4.0 * kappa_val**2)
+        b = (a - np.sqrt(2.0 * a)) / (2.0 * kappa_val)
+        r = (1.0 + b**2) / (2.0 * b)
+
         if size is None:
-            size = 1
-        num_samples = np.prod(size)  # Total number of samples
+            total = 1
+            target_shape = None
+        else:
+            if np.isscalar(size):
+                target_shape = (int(size),)
+            else:
+                target_shape = tuple(int(s) for s in np.atleast_1d(size))
+            total = 1
+            for dim in target_shape:
+                total *= dim
 
-        # Best-Fisher algorithm
-        a = 1 + np.sqrt(1 + 4 * kappa**2)
-        b = (a - np.sqrt(2 * a)) / (2 * kappa)
-        r = (1 + b**2) / (2 * b)
+        samples = np.empty(total, dtype=float)
 
-        def sample():
+        for idx in range(total):
             while True:
                 u1 = rng.uniform()
                 z = np.cos(np.pi * u1)
-                f = (1 + r * z) / (r + z)
-                c = kappa * (r - f)
+                f = (1.0 + r * z) / (r + z)
+                c = kappa_val * (r - f)
                 u2 = rng.uniform()
-                if u2 < c * (2 - c) or u2 <= c * np.exp(1 - c):
+                if u2 < c * (2.0 - c) or u2 <= c * np.exp(1.0 - c):
                     break
             u3 = rng.uniform()
-            theta = mu + np.sign(u3 - 0.5) * np.arccos(f)
-            return theta % (2 * np.pi)
+            theta = mu_val + np.sign(u3 - 0.5) * np.arccos(f)
+            samples[idx] = np.mod(theta, two_pi)
 
-        samples = np.array([sample() for _ in range(num_samples)])
-        return samples
+        if size is None:
+            return float(samples[0])
+
+        if target_shape == ():
+            return samples[0]
+
+        return samples.reshape(target_shape)
 
     def rvs(self, size=None, random_state=None, *args, **kwargs):
         """
