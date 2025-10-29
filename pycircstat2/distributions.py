@@ -3361,99 +3361,138 @@ class vonmises_gen(CircularContinuous):
         # Negative log-likelihood
         return -np.sum(log_likelihood)
 
-    def fit(self, data, method="analytical", *args, **kwargs):
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
         """
-        Fit the Von Mises distribution to the given data.
+        Estimate ``mu`` and ``kappa`` for the von Mises distribution.
 
         Parameters
         ----------
         data : array_like
-            The data to fit the distribution to. Assumes values are in radians.
-        method : str, optional
-            The approach for fitting the distribution. Options are:
-            - "analytical": Compute `mu` and `kappa` using closed-form solutions.
-            - "numerical": Fit the parameters by minimizing the negative log-likelihood using an optimizer.
-            Default is "analytical".
-
-            When `method="numerical"`, the optimization algorithm can be specified via `algorithm` in `kwargs`.
-            Supported algorithms include any method from `scipy.optimize.minimize`, such as "L-BFGS-B" (default) or "Nelder-Mead".
-
-        *args : tuple, optional
-            Additional positional arguments passed to the optimizer (if used).
-        **kwargs : dict, optional
-            Additional keyword arguments passed to the optimizer (if used).
-
-        Returns
-        -------
-        kappa : float
-            The estimated concentration parameter of the Von Mises distribution.
-        mu : float
-            The estimated mean direction of the Von Mises distribution.
-
-        Notes
-        -----
-        - The "analytical" method directly computes the parameters using the circular mean
-        and resultant vector length (`r`) for `mu` and `kappa`, respectively.
-        - For numerical methods, the negative log-likelihood (NLL) is minimized using `_nnlf` as the objective function.
-
-
-        Examples
-        --------
-        ```python
-        # MLE fitting using analytical solution
-        mu, kappa = vonmises.fit(data, method="analytical")
-
-        # MLE fitting with numerical method using L-BFGS-B
-        mu, kappa = vonmises.fit(data, method="L-BFGS-B")
-        ```
+            Sample angles (radians). Values are wrapped to ``[0, 2π)`` internally.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {"moments", "mle"}, optional
+            Estimation strategy. ``"moments"`` (alias ``"analytical"``) returns
+            the circular mean together with the standard approximation for
+            ``kappa``. ``"mle"`` (alias ``"numerical"``) maximises the weighted
+            log-likelihood using a bounded optimiser.
+        return_info : bool, optional
+            If True, return a diagnostics dictionary alongside the estimates.
+        optimizer : str, optional
+            Optimiser passed to :func:`scipy.optimize.minimize` when
+            ``method="mle"``.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser.
         """
-
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
-        data = self._wrap_angles(np.asarray(data, dtype=float))
+        x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
 
-        # Validate the fitting method
-        valid_methods = ["analytical", "numerical"]
-        if method not in valid_methods:
-            raise ValueError(
-                f"Invalid method '{method}'. Available methods are {valid_methods}."
-            )
-
-        # Analytical solution for the Von Mises distribution
-        mu, r = circ_mean_and_r(alpha=data)
-        kappa = circ_kappa(r=r, n=len(data))
-
-        if method == "analytical":
-            if np.isclose(r, 0):
-                raise ValueError(
-                    "Resultant vector length (r) is zero, e.g. uniform data or low directional bias."
-                )
-            return mu, kappa
-        elif method == "numerical":
-            # Use analytical solution as initial guess
-            start_params = [mu, kappa]
-            bounds = [(0, 2 * np.pi), (0, None)]  # 0 <= mu < 2*pi, kappa > 0,
-
-            algo = kwargs.pop("algorithm", "L-BFGS-B")
-
-            # Define the objective function (NLL) using `_nnlf`
-            def nll(params):
-                return self._nnlf(params, data)
-
-            # Use the optimizer to minimize NLL
-            result = minimize(
-                nll, start_params, bounds=bounds, method=algo, *args, **kwargs
-            )
-
-            # Extract parameters from optimization result
-            if not result.success:
-                raise RuntimeError(f"Optimization failed: {result.message}")
-
-            mu, kappa = result.x
-            return mu, kappa
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
         else:
-            raise ValueError(
-                f"Invalid method '{method}'. Supported methods are 'analytical' and 'numerical'."
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        mu_mom, r_mom = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = float(0.0)
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        r_mom = float(np.clip(r_mom, 1e-12, 1.0 - 1e-12))
+        n_adjust = int(max(1, round(w_sum)))
+        kappa_mom = float(np.clip(circ_kappa(r=r_mom, n=n_adjust), 1e-9, 1e6))
+
+        method_key = method.lower()
+        alias = {"analytical": "moments", "numerical": "mle"}
+        method_key = alias.get(method_key, method_key)
+
+        if "algorithm" in kwargs:
+            optimizer = kwargs.pop("algorithm")
+
+        if method_key not in {"moments", "mle"}:
+            raise ValueError("`method` must be one of {'moments', 'mle', 'analytical', 'numerical'}.")
+
+        def nll(params):
+            mu_param, kappa_param = params
+            if not (kappa_param > 0.0):
+                return np.inf
+            cos_term = np.cos(x - mu_param)
+            sum_cos = np.sum(w * cos_term)
+            log_i0_val = np.log(i0(kappa_param))
+            return float(
+                -kappa_param * sum_cos + w_sum * (np.log(2.0 * np.pi) + log_i0_val)
             )
+
+        def grad(params):
+            mu_param, kappa_param = params
+            cos_term = np.cos(x - mu_param)
+            sin_term = np.sin(x - mu_param)
+            sum_sin = np.sum(w * sin_term)
+            sum_cos = np.sum(w * cos_term)
+            ratio = i1(kappa_param) / i0(kappa_param)
+            g_mu = kappa_param * sum_sin
+            g_kappa = -sum_cos + w_sum * ratio
+            return np.array([g_mu, g_kappa], dtype=float)
+
+        if method_key == "moments":
+            mu_hat = self._wrap_direction(mu_mom)
+            kappa_hat = kappa_mom
+            info = {
+                "method": "moments",
+                "loglik": float(-nll((mu_hat, kappa_hat))),
+                "n_effective": float(n_eff),
+                "converged": True,
+            }
+        else:
+            bounds = [(0.0, 2.0 * np.pi), (1e-9, 1e6)]
+            init = np.array([mu_mom, kappa_mom], dtype=float)
+            result = minimize(
+                nll,
+                init,
+                method=optimizer,
+                jac=grad,
+                bounds=bounds,
+                **kwargs,
+            )
+            if not result.success:
+                raise RuntimeError(
+                    f"vonmises.fit(method='mle') failed: {result.message}"
+                )
+            mu_hat = self._wrap_direction(float(result.x[0]))
+            kappa_hat = float(np.clip(result.x[1], 1e-9, 1e6))
+            info = {
+                "method": "mle",
+                "loglik": float(-result.fun),
+                "n_effective": float(n_eff),
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "grad_norm": float(np.linalg.norm(result.jac))
+                if getattr(result, "jac", None) is not None
+                else np.nan,
+                "optimizer": optimizer,
+            }
+
+        estimates = (mu_hat, kappa_hat)
+        if return_info:
+            return estimates, info
+        return estimates
 
 
 vonmises = vonmises_gen(name="vonmises")
