@@ -1794,9 +1794,9 @@ class katojones_gen(CircularContinuous):
 
     References
     ----------
-    - Kato, S. and M. C. Jones (2015). *A tractable and interpretable
+    - Kato, S., & Jones, M. C. (2015). *A tractable and interpretable
       four-parameter family of unimodal distributions on the circle*. Biometrika,
-      102(1), 181-193.
+      102(1), 181-190.
     """
 
     _moment_tolerance = 1e-12
