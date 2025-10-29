@@ -134,11 +134,11 @@
 |                      | PPF    | `jonespewsey.ppf`         | -                | -                 | -             | -                   |
 |                      | RVS    | `jonespewsey.rvs`         | -                | -                 | -             | -                   |
 |                      | Fit    | `jonespewsey.fit`         | -                | -                 | -             | -                   |
-| Kato-Jones           | PDF    | -                         | -                | -                 | -             | `dkatojones`        |
-|                      | CDF    | -                         | -                | -                 | -             | -                   |
-|                      | PPF    | -                         | -                | -                 | -             | -                   |
-|                      | RVS    | -                         | -                | -                 | -             | `rkatojones`        |
-|                      | Fit    | -                         | -                | -                 | -             | -                   |
+| Kato-Jones           | PDF    | `katojones.pdf`                         | -                | -                 | -             | `dkatojones`        |
+|                      | CDF    | `katojones.cdf`                         | -                | -                 | -             | -                   |
+|                      | PPF    | `katojones.ppf`                         | -                | -                 | -             | -                   |
+|                      | RVS    | `katojones.rvs`                         | -                | -                 | -             | `rkatojones`        |
+|                      | Fit    | `katojones.fit`                         | -                | -                 | -             | -                   |
 
 #### Asymmetric Circular Distributions
 | Feature                  | Method | PyCircStat2                  | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)     |

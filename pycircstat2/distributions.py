@@ -1689,7 +1689,7 @@ class katojones_gen(CircularContinuous):
         return np.log(np.clip(pdf_vals, np.finfo(float).tiny, None))
 
     def logpdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
-        """
+        r"""
         Logarithm of the probability density function of the Kato--Jones (2015)
         distribution.
 
@@ -1864,6 +1864,43 @@ class katojones_gen(CircularContinuous):
             lam = float(np.mod(np.arctan2(beta2, alpha2), 2.0 * np.pi))
         return rho, lam
 
+    @staticmethod
+    def _aux_from_rho_lam(gamma, rho, lam):
+        gamma = float(gamma)
+        rho = float(rho)
+        lam = float(lam)
+        gamma = np.clip(gamma, 0.0, 1.0 - 1e-12)
+        rho = np.clip(rho, 0.0, 1.0 - 1e-12)
+        lam = float(np.mod(lam, 2.0 * np.pi))
+
+        if gamma >= 1.0 - 1e-12:
+            return 0.0, 0.0
+
+        denom = max(1e-12, 1.0 - gamma)
+        delta_cos = rho * np.cos(lam) - gamma
+        delta_sin = rho * np.sin(lam)
+        s = float(np.clip(np.hypot(delta_cos, delta_sin) / denom, 0.0, 1.0 - 1e-9))
+        phi = float(np.mod(np.arctan2(delta_sin, delta_cos), 2.0 * np.pi))
+        if s < katojones_gen._moment_tolerance:
+            phi = 0.0
+        return s, phi
+
+    @staticmethod
+    def _rho_lam_from_aux(gamma, s, phi):
+        gamma = float(np.clip(gamma, 0.0, 1.0 - 1e-9))
+        s = float(np.clip(s, 0.0, 1.0 - 1e-9))
+        phi = float(np.mod(phi, 2.0 * np.pi))
+
+        cos_phi = np.cos(phi)
+        sin_phi = np.sin(phi)
+        delta_cos = (1.0 - gamma) * s * cos_phi
+        delta_sin = (1.0 - gamma) * s * sin_phi
+        rho_cos = gamma + delta_cos
+        rho_sin = delta_sin
+        rho = float(np.clip(np.hypot(rho_cos, rho_sin), 0.0, 1.0 - 1e-9))
+        lam = float(np.mod(np.arctan2(rho_sin, rho_cos), 2.0 * np.pi))
+        return rho, lam
+
     def _fit_mle(
         self,
         data,
@@ -1882,24 +1919,26 @@ class katojones_gen(CircularContinuous):
         mu0, gamma0, rho0, lam0 = initial
         mu0 = self._wrap_direction(float(mu0))
         gamma0 = float(np.clip(gamma0, 1e-6, 1.0 - 1e-6))
-        rho0 = float(np.clip(rho0, 1e-6, 1.0 - 1e-6))
         lam0 = float(np.mod(lam0, 2.0 * np.pi))
-        x0 = np.array([mu0, gamma0, rho0, lam0], dtype=float)
-
-        cube_penalty = lambda mu, gamma, rho, lam: (rho * np.cos(lam) - gamma) ** 2 + (
-            rho * np.sin(lam)
-        ) ** 2 - (1.0 - gamma) ** 2
+        rho0 = float(np.clip(rho0, 0.0, 1.0 - 1e-6))
+        if rho0 < self._moment_tolerance:
+            rho0 = 0.0
+            lam0 = 0.0
+        s0, phi0 = self._aux_from_rho_lam(gamma0, rho0, lam0)
+        x0 = np.array([mu0, gamma0, s0, phi0], dtype=float)
 
         def objective(params):
-            mu, gamma, rho, lam = params
-            if (gamma <= 0.0) or (gamma >= 1.0) or (rho < 0.0) or (rho >= 1.0):
-                return 1e9 + np.sum(params**2)
-            penalty = cube_penalty(mu, gamma, rho, lam)
-            if penalty > 1e-8:
-                return 1e9 + penalty * 1e9
+            mu, gamma, s, phi = params
+            mu = self._wrap_direction(float(mu))
+            gamma = float(np.clip(gamma, 1e-6, 1.0 - 1e-9))
+            s = float(np.clip(s, 0.0, 1.0 - 1e-9))
+            phi = float(np.mod(phi, 2.0 * np.pi))
+            rho, lam = self._rho_lam_from_aux(gamma, s, phi)
+            if not self._argcheck(mu, gamma, rho, lam):
+                return 1e12
             pdf_vals = self._pdf(data, mu, gamma, rho, lam)
             if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
-                return 1e9
+                return 1e12
             return -np.sum(np.log(pdf_vals))
 
         bounds = [
@@ -1919,13 +1958,27 @@ class katojones_gen(CircularContinuous):
         )
 
         if not result.success:
-            raise RuntimeError(f"Maximum likelihood fit failed: {result.message}")
+            fallback_method = "Powell" if optimizer != "Powell" else None
+            if fallback_method is not None:
+                fallback_result = minimize(
+                    objective,
+                    x0,
+                    method=fallback_method,
+                    bounds=bounds,
+                    options={},
+                    **minimize_kwargs,
+                )
+                if fallback_result.success:
+                    result = fallback_result
+            if not result.success:
+                raise RuntimeError(f"Maximum likelihood fit failed: {result.message}")
 
-        mu_hat, gamma_hat, rho_hat, lam_hat = result.x
+        mu_hat, gamma_hat, s_hat, phi_hat = result.x
         mu_hat = self._wrap_direction(float(mu_hat))
         gamma_hat = float(np.clip(gamma_hat, 0.0, 1.0 - 1e-9))
-        rho_hat = float(np.clip(rho_hat, 0.0, 1.0 - 1e-9))
-        lam_hat = float(np.mod(lam_hat, 2.0 * np.pi))
+        s_hat = float(np.clip(s_hat, 0.0, 1.0 - 1e-9))
+        phi_hat = float(np.mod(phi_hat, 2.0 * np.pi))
+        rho_hat, lam_hat = self._rho_lam_from_aux(gamma_hat, s_hat, phi_hat)
 
         return mu_hat, gamma_hat, rho_hat, lam_hat
 
