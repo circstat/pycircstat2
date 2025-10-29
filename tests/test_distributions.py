@@ -110,6 +110,16 @@ def test_wrapcauchy():
     )
 
 
+def test_wrapcauchy_cdf_matches_numeric():
+    mu, rho = 0.9, 0.65
+    theta = np.linspace(0.0, 2.0 * np.pi, 9)
+    analytic = wrapcauchy.cdf(theta, mu, rho)
+    numeric = wrapcauchy._cdf_from_pdf(theta, mu, rho)
+    np.testing.assert_allclose(analytic, numeric, atol=1e-7)
+    diffs = np.diff(analytic)
+    assert np.all(diffs >= -1e-10)
+
+
 def test_wrapnorm():
 
     wn = wrapnorm(rho=0.75, mu=np.pi / 2)

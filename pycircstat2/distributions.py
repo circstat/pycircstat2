@@ -1537,14 +1537,50 @@ class wrapcauchy_gen(CircularContinuous):
         return super().logpdf(x, mu, rho, *args, **kwargs)
 
     def _cdf(self, x, mu, rho):
-        return self._cdf_from_pdf(x, mu, rho)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        if mu_arr.size != 1:
+            raise ValueError("wrapcauchy parameters must be scalar-valued.")
+        mu_val = float(mu_arr.reshape(-1)[0])
+        rho_arr = np.asarray(rho, dtype=float)
+        if rho_arr.size != 1:
+            raise ValueError("wrapcauchy parameters must be scalar-valued.")
+        rho_val = float(rho_arr.reshape(-1)[0])
+        rho_val = np.clip(rho_val, np.finfo(float).tiny, 1.0 - 1e-15)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        two_pi = 2.0 * np.pi
+        A = (1.0 + rho_val) / (1.0 - rho_val)
+
+        phi = (flat - mu_val + np.pi) % two_pi - np.pi
+        half_phi = 0.5 * phi
+        angle = np.arctan2(A * np.sin(half_phi), np.cos(half_phi))
+
+        base_phi = (-mu_val + np.pi) % two_pi - np.pi
+        base_angle = np.arctan2(A * np.sin(0.5 * base_phi), np.cos(0.5 * base_phi))
+
+        cdf = 0.5 + angle / np.pi
+        base_val = 0.5 + base_angle / np.pi
+        cdf = (cdf - base_val) % 1.0
+        cdf = np.clip(cdf, 0.0, 1.0)
+
+        if arr.ndim == 0:
+            value = float(cdf[0])
+            return 1.0 if np.isclose(float(wrapped), 2.0 * np.pi) else value
+        reshaped = cdf.reshape(arr.shape)
+        reshaped[np.isclose(arr, 2.0 * np.pi)] = 1.0
+        return reshaped
 
     def cdf(self, x, mu, rho, *args, **kwargs):
         """
         Cumulative distribution function of the Wrapped Cauchy distribution.
 
-        No closed-form solution is available, so the CDF is computed numerically.
-
+        The CDF is evaluated analytically via the wrapped Cauchy series.
         Parameters
         ----------
         x : array_like
