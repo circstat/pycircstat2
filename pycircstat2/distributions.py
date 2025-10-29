@@ -1261,6 +1261,90 @@ class cardioid_gen(CircularContinuous):
         """
         return super().cdf(x, mu, rho, *args, **kwargs)
 
+    def _rvs(self, mu, rho, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("cardioid parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(rho_arr.reshape(-1)[0])
+        if not (0.0 <= rho_val <= 0.5):
+            raise ValueError("`rho` must lie in [0, 0.5].")
+
+        two_pi = 2.0 * np.pi
+        sin_mu = np.sin(mu_val)
+
+        if np.isclose(rho_val, 0.0, atol=1e-15):
+            samples = rng.uniform(0.0, two_pi, size=size)
+            return float(samples) if np.isscalar(samples) else samples
+
+        u = rng.uniform(0.0, 1.0, size=size)
+        u_arr = np.asarray(u, dtype=float)
+        theta = mu_val + two_pi * (u_arr - 0.5)
+        theta = np.mod(theta, two_pi)
+
+        tol = 1e-12
+        tiny = 1e-14
+        max_iter = 6
+
+        for iteration in range(max_iter):
+            delta = (
+                theta + 2.0 * rho_val * (np.sin(theta - mu_val) + sin_mu)
+            ) / two_pi - u_arr
+
+            converged = np.abs(delta) <= tol
+            if np.all(converged):
+                break
+
+            d1 = (1.0 + 2.0 * rho_val * np.cos(theta - mu_val)) / two_pi
+            d2 = (-2.0 * rho_val * np.sin(theta - mu_val)) / two_pi
+
+            step_newton = np.where(np.abs(d1) > tiny, delta / d1, 0.0)
+
+            if iteration == 0:
+                denom = 2.0 * d1**2 - delta * d2
+                halley_valid = np.abs(denom) > tiny
+                step_halley = np.where(
+                    halley_valid, (2.0 * delta * d1) / denom, 0.0
+                )
+                step = np.where(halley_valid, step_halley, step_newton)
+            else:
+                step = step_newton
+
+            step = np.clip(step, -np.pi, np.pi)
+            theta = np.where(converged, theta, theta - step)
+            theta = np.mod(theta, two_pi)
+
+        delta = (
+            theta + 2.0 * rho_val * (np.sin(theta - mu_val) + sin_mu)
+        ) / two_pi - u_arr
+        remaining = np.abs(delta) > 10.0 * tol
+        if np.any(remaining):
+            idx = np.flatnonzero(remaining.reshape(-1))
+            target = u_arr.reshape(-1)[idx]
+            low = np.zeros_like(target)
+            high = np.full_like(target, two_pi)
+            for _ in range(32):
+                mid = 0.5 * (low + high)
+                f_mid = (
+                    mid + 2.0 * rho_val * (np.sin(mid - mu_val) + sin_mu)
+                ) / two_pi
+                mask_low = f_mid <= target
+                low = np.where(mask_low, mid, low)
+                high = np.where(mask_low, high, mid)
+            theta_remaining = 0.5 * (low + high)
+            theta_flat = np.asarray(theta, dtype=float).reshape(-1)
+            theta_flat[idx] = theta_remaining
+            theta = np.mod(theta_flat.reshape(theta.shape), two_pi)
+
+        result = np.mod(theta, two_pi)
+        if result.ndim == 0:
+            return float(result)
+        return result.reshape(u_arr.shape)
+
 
 cardioid = cardioid_gen(name="cardioid")
 
@@ -1407,6 +1491,39 @@ class cartwright_gen(CircularContinuous):
             Cumulative distribution function evaluated at `x`.
         """
         return super().cdf(x, mu, zeta, *args, **kwargs)
+
+    def _rvs(self, mu, zeta, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        zeta_arr = np.asarray(zeta, dtype=float)
+        if mu_arr.size != 1 or zeta_arr.size != 1:
+            raise ValueError("cartwright parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        zeta_val = float(zeta_arr.reshape(-1)[0])
+        if zeta_val <= 0.0:
+            raise ValueError("`zeta` must be positive.")
+
+        shape = ()
+        if size is not None:
+            if np.isscalar(size):
+                shape = (int(size),)
+            else:
+                shape = tuple(int(dim) for dim in np.atleast_1d(size))
+
+        beta_b = 1.0 / zeta_val + 0.5
+        t = rng.beta(0.5, beta_b, size=shape)
+        sqrt_t = np.sqrt(t)
+        angles = 2.0 * np.arcsin(np.clip(sqrt_t, 0.0, 1.0))
+
+        signs = np.where(rng.random(size=shape) < 0.5, -1.0, 1.0)
+        theta = mu_val + signs * angles
+        theta = np.mod(theta, 2.0 * np.pi)
+
+        if theta.ndim == 0:
+            return float(theta)
+        return theta.reshape(shape)
 
 
 cartwright = cartwright_gen(name="cartwright")
