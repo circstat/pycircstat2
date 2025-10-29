@@ -10,6 +10,7 @@ from pycircstat2.distributions import (
     jonespewsey,
     jonespewsey_asym,
     jonespewsey_sineskewed,
+    katojones,
     vonmises,
     vonmises_flattopped,
     wrapcauchy,
@@ -239,3 +240,50 @@ def test_inverse_batschelet():
         2.5138,
         significant=4,
     )
+
+
+def _angle_diff(a, b):
+    return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
+
+
+def test_katojones_cardioid_limit():
+    theta = np.linspace(0.0, 2.0 * np.pi, 9)
+    mu = 1.1
+    gamma = 0.3
+    kj_vals = katojones.pdf(theta, mu, gamma, 0.0, 0.0)
+    card_vals = cardioid.pdf(theta, mu, gamma)
+    np.testing.assert_allclose(kj_vals, card_vals, rtol=1e-10, atol=1e-12)
+
+
+def test_katojones_convert_alpha2_beta2():
+    gamma = 0.4
+    rho = 0.35
+    lam = 1.25
+    alpha2 = gamma * rho * np.cos(lam)
+    beta2 = gamma * rho * np.sin(lam)
+    rho_rt, lam_rt = katojones.convert_alpha2_beta2(gamma, alpha2, beta2)
+    np.testing.assert_allclose(rho_rt, rho, atol=1e-12)
+    np.testing.assert_allclose(_angle_diff(lam_rt, lam), 0.0, atol=1e-12)
+
+    with pytest.raises(ValueError):
+        katojones.convert_alpha2_beta2(gamma, alpha2 + 0.5, beta2, verify=True)
+
+
+def test_katojones_fit_methods_agree():
+    rng = np.random.default_rng(321)
+    mu, gamma, rho, lam = 0.9, 0.35, 0.25, 1.8
+    data = katojones.rvs(mu, gamma, rho, lam, size=400, random_state=rng)
+
+    mu_mom, gamma_mom, rho_mom, lam_mom = katojones.fit(data, method="moments")
+    np.testing.assert_allclose(_angle_diff(mu_mom, mu), 0.0, atol=0.2)
+    np.testing.assert_allclose(gamma_mom, gamma, atol=0.05)
+    np.testing.assert_allclose(rho_mom, rho, atol=0.1)
+    np.testing.assert_allclose(_angle_diff(lam_mom, lam), 0.0, atol=0.25)
+
+    mu_mle, gamma_mle, rho_mle, lam_mle = katojones.fit(
+        data, method="mle", options={"maxiter": 200}
+    )
+    np.testing.assert_allclose(_angle_diff(mu_mle, mu), 0.0, atol=0.15)
+    np.testing.assert_allclose(gamma_mle, gamma, atol=0.05)
+    np.testing.assert_allclose(rho_mle, rho, atol=0.08)
+    np.testing.assert_allclose(_angle_diff(lam_mle, lam), 0.0, atol=0.2)
