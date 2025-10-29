@@ -1527,23 +1527,44 @@ wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
 
 class katojones_gen(CircularContinuous):
-    r"""
-    Kato--Jones (2015) unimodal circular distribution.
+    """
+    Kato--Jones (2015) Distribution
 
-    Parameters
-    ----------
-    mu : float
-        Mean direction, :math:`0 \le \mu < 2\pi`.
-    gamma : float
-        Mean resultant length, :math:`0 \le \gamma < 1`.
-    rho : float
-        Second-order magnitude, :math:`0 \le \rho < 1`.
-    lam : float
-        Second-order phase, :math:`0 \le \lambda < 2\pi`.
+    ![katojones](../images/circ-mod-katojones.png)
 
-    Constraint
+    Methods
+    -------
+    pdf(x, mu, gamma, rho, lam)
+        Probability density function.
+    cdf(x, mu, gamma, rho, lam)
+        Cumulative distribution function (numeric integration).
+    logpdf(x, mu, gamma, rho, lam)
+        Logarithm of the probability density function.
+    rvs(mu, gamma, rho, lam, size=None, random_state=None)
+        Random variates via a wrapped-Cauchy-based composition sampler.
+    fit(data, method=\"moments\" | \"mle\", ...)
+        Method-of-moments or maximum-likelihood parameter estimation.
+    convert_alpha2_beta2(gamma, alpha2, beta2, verify=True)
+        Helper to recover (rho, lambda) from second-order trigonometric moments.
+
+    Notes
+    -----
+    Implements the tractable four-parameter unimodal family proposed by Kato and
+    Jones (2015). Parameters control the first two trigonometric moments:
+    ``mu`` sets the mean direction, ``gamma`` the mean resultant length, and
+    ``rho``/``lam`` encode the magnitude/phase of the second-order moment.
+    Feasible parameter tuples satisfy ``0 <= mu < 2*pi``, ``0 <= gamma < 1``,
+    ``0 <= rho < 1``, ``0 <= lam < 2*pi`` together with the constraint enforced
+    in :py:meth:`_argcheck`.
+
+    Special cases include the uniform distribution (``gamma = 0``), the cardioid
+    (``rho = 0``) and the wrapped Cauchy (``lambda = 0`` with ``gamma = rho``).
+
+    References
     ----------
-    :math:`(\rho \cos\lambda - \gamma)^2 + (\rho \sin\lambda)^2 \le (1-\gamma)^2`.
+    - Kato, S. and M. C. Jones (2015). *A tractable and interpretable
+      four-parameter family of unimodal distributions on the circle*. Biometrika,
+      102(1), 181-193.
     """
 
     _moment_tolerance = 1e-12
@@ -1584,9 +1605,34 @@ class katojones_gen(CircularContinuous):
             return float(pdf)
         return pdf
 
-    def _logpdf(self, x, mu, gamma, rho, lam):
-        pdf_vals = self._pdf(x, mu, gamma, rho, lam)
-        return np.log(np.clip(pdf_vals, np.finfo(float).tiny, None))
+    def pdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
+        r"""
+        Probability density function of the Kato--Jones (2015) distribution.
+
+        $$
+        g(\theta) = \frac{1}{2\pi}\left[1 + \frac{2\gamma\,(\cos(\theta-\mu) - \rho\cos\lambda)}
+        {1 + \rho^2 - 2\rho\cos(\theta-\mu-\lambda)}\right]
+        $$
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu : float
+            Mean direction, $0 \leq \mu < 2\pi$.
+        gamma : float
+            Mean resultant length, $0 \leq \gamma < 1$.
+        rho : float
+            Second-order magnitude, $0 \leq \rho < 1$.
+        lam : float
+            Second-order phase, $0 \leq \lambda < 2\pi$.
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, mu, gamma, rho, lam, *args, **kwargs)
 
     def _cdf_scalar(self, x, mu, gamma, rho, lam):
         if x <= 0.0:
@@ -1606,6 +1652,66 @@ class katojones_gen(CircularContinuous):
         if np.isscalar(x):
             return float(result)
         return result
+
+    def cdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Kato--Jones (2015) distribution.
+
+        $$
+        G(\theta) = \int_{0}^{\theta} g(t)\,dt
+        $$
+
+        where $g(\theta)$ is the density given above. The integral is evaluated
+        numerically.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        mu : float
+            Mean direction, $0 \leq \mu < 2\pi$.
+        gamma : float
+            Mean resultant length, $0 \leq \gamma < 1$.
+        rho : float
+            Second-order magnitude, $0 \leq \rho < 1$.
+        lam : float
+            Second-order phase, $0 \leq \lambda < 2\pi$.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative distribution function evaluated at `x`.
+        """
+        return super().cdf(x, mu, gamma, rho, lam, *args, **kwargs)
+
+    def _logpdf(self, x, mu, gamma, rho, lam):
+        pdf_vals = self._pdf(x, mu, gamma, rho, lam)
+        return np.log(np.clip(pdf_vals, np.finfo(float).tiny, None))
+
+    def logpdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
+        """
+        Logarithm of the probability density function of the Kato--Jones (2015)
+        distribution.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-PDF.
+        mu : float
+            Mean direction, $0 \leq \mu < 2\pi$.
+        gamma : float
+            Mean resultant length, $0 \leq \gamma < 1$.
+        rho : float
+            Second-order magnitude, $0 \leq \rho < 1$.
+        lam : float
+            Second-order phase, $0 \leq \lambda < 2\pi$.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, mu, gamma, rho, lam, *args, **kwargs)
 
     def _ppf(self, q, mu, gamma, rho, lam):
         q_arr = np.asarray(q, dtype=float)
