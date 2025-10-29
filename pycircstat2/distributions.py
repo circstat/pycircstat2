@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
-from scipy.special import gamma, i0, i1
+from scipy.special import gamma, i0, i1, ndtr
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -1379,13 +1379,65 @@ class wrapnorm_gen(CircularContinuous):
         return super().pdf(x, mu, rho, *args, **kwargs)
 
     def _cdf(self, x, mu, rho):
-        return self._cdf_from_pdf(x, mu, rho)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        rho_clipped = np.clip(rho, np.finfo(float).tiny, 1.0 - 1e-15)
+        sigma = np.sqrt(-2.0 * np.log(rho_clipped))
+        inv_sigma = 1.0 / sigma
+        two_pi = 2.0 * np.pi
+
+        theta_minus_mu = flat - mu
+        z0 = theta_minus_mu * inv_sigma
+        z_ref = (-mu) * inv_sigma
+        cdf = ndtr(z0) - ndtr(z_ref)
+
+        tol = 1e-13
+        max_iter = 500
+        k = 1
+        max_contrib = np.inf
+        while k <= max_iter and max_contrib > tol:
+            shift = two_pi * k
+            z_pos = (theta_minus_mu + shift) * inv_sigma
+            z_pos_ref = (-mu + shift) * inv_sigma
+            delta_pos = ndtr(z_pos) - ndtr(z_pos_ref)
+
+            z_neg = (theta_minus_mu - shift) * inv_sigma
+            z_neg_ref = (-mu - shift) * inv_sigma
+            delta_neg = ndtr(z_neg) - ndtr(z_neg_ref)
+
+            cdf += delta_pos + delta_neg
+            max_contrib = max(
+                float(np.max(np.abs(delta_pos))),
+                float(np.max(np.abs(delta_neg))),
+            )
+            if not np.isfinite(max_contrib):
+                break
+            k += 1
+
+        cdf = np.clip(cdf, 0.0, 1.0)
+
+        if arr.ndim == 0:
+            return float(cdf[0])
+        return cdf.reshape(arr.shape)
 
     def cdf(self, x, mu, rho, *args, **kwargs):
-        """
+        r"""
         Cumulative distribution function of the Wrapped Normal distribution.
 
-        No closed-form solution is available, so the CDF is computed numerically.
+        The CDF is evaluated via the wrapped normal series involving the
+        standard normal distribution function.
+
+        $$
+        F(\theta) = \sum_{k=-\infty}^{\infty} \left[
+            \Phi\left(\frac{\theta - \mu + 2\pi k}{\sigma}\right)
+            - \Phi\left(\frac{-\mu + 2\pi k}{\sigma}\right)
+        \right], \quad \sigma = \sqrt{-2\log \rho}
+        $$
 
         Parameters
         ----------

@@ -125,6 +125,16 @@ def test_wrapnorm():
     )
 
 
+def test_wrapnorm_cdf_matches_numeric():
+    mu, rho = 0.7, 0.45
+    theta = np.linspace(0.0, 2.0 * np.pi, 7)
+    analytic = wrapnorm.cdf(theta, mu, rho)
+    numeric = wrapnorm._cdf_from_pdf(theta, mu, rho)
+    np.testing.assert_allclose(analytic, numeric, atol=1e-7)
+    diffs = np.diff(analytic)
+    assert np.all(diffs >= -1e-10)
+
+
 def test_circular_loc_scale_rejected():
     rng = np.random.default_rng(1234)
     sample = vonmises.rvs(kappa=1.0, mu=0.0, size=8, random_state=rng)
