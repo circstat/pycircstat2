@@ -23,6 +23,8 @@ __all__ = [
     "jonespewsey_asym",
     "inverse_batschelet",
     "wrapstable",
+    "katojones",
+    "katojones_mobius",
 ]
 
 
@@ -1341,7 +1343,7 @@ class wrapcauchy_gen(CircularContinuous):
     """
 
     def _argcheck(self, mu, rho):
-        return 0 <= mu <= np.pi * 2 and 0 < rho <= 1
+        return 0 <= mu <= np.pi * 2 and 0 <= rho < 1
 
     def _pdf(self, x, mu, rho):
         return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
@@ -1523,6 +1525,337 @@ class wrapcauchy_gen(CircularContinuous):
 
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
+
+class katojones_gen(CircularContinuous):
+    r"""
+    Kato--Jones (2015) unimodal circular distribution.
+
+    Parameters
+    ----------
+    mu : float
+        Mean direction, :math:`0 \le \mu < 2\pi`.
+    gamma : float
+        Mean resultant length, :math:`0 \le \gamma < 1`.
+    rho : float
+        Second-order magnitude, :math:`0 \le \rho < 1`.
+    lam : float
+        Second-order phase, :math:`0 \le \lambda < 2\pi`.
+
+    Constraint
+    ----------
+    :math:`(\rho \cos\lambda - \gamma)^2 + (\rho \sin\lambda)^2 \le (1-\gamma)^2`.
+    """
+
+    _moment_tolerance = 1e-12
+
+    def _argcheck(self, mu, gamma, rho, lam):
+        try:
+            mu_arr, gamma_arr, rho_arr, lam_arr = np.broadcast_arrays(mu, gamma, rho, lam)
+        except ValueError:
+            return False
+
+        base = (
+            (mu_arr >= 0.0)
+            & (mu_arr < 2.0 * np.pi)
+            & (gamma_arr >= 0.0)
+            & (gamma_arr < 1.0)
+            & (rho_arr >= 0.0)
+            & (rho_arr < 1.0)
+            & (lam_arr >= 0.0)
+            & (lam_arr < 2.0 * np.pi)
+        )
+
+        cos_lam = np.cos(lam_arr)
+        sin_lam = np.sin(lam_arr)
+        constraint_val = (rho_arr * cos_lam - gamma_arr) ** 2 + (rho_arr * sin_lam) ** 2
+        constraint_limit = (1.0 - gamma_arr) ** 2 + 1e-12
+        admissible = constraint_val <= constraint_limit
+        return base & admissible
+
+    def _pdf(self, x, mu, gamma, rho, lam):
+        x_arr = np.asarray(x, dtype=float)
+        delta = x_arr - mu
+        denom = 1.0 + rho**2 - 2.0 * rho * np.cos(delta - lam)
+        denom = np.clip(denom, 1e-15, None)
+        numerator = 1.0 + (2.0 * gamma * (np.cos(delta) - rho * np.cos(lam))) / denom
+        pdf = numerator / (2.0 * np.pi)
+        pdf = np.clip(pdf, 0.0, None)
+        if np.isscalar(x):
+            return float(pdf)
+        return pdf
+
+    def _logpdf(self, x, mu, gamma, rho, lam):
+        pdf_vals = self._pdf(x, mu, gamma, rho, lam)
+        return np.log(np.clip(pdf_vals, np.finfo(float).tiny, None))
+
+    def _cdf_scalar(self, x, mu, gamma, rho, lam):
+        if x <= 0.0:
+            return 0.0
+        if x >= 2.0 * np.pi:
+            return 1.0
+        integral, _ = quad(
+            self._pdf, 0.0, x, args=(mu, gamma, rho, lam), epsabs=1e-9, epsrel=1e-9
+        )
+        return float(integral)
+
+    def _cdf(self, x, mu, gamma, rho, lam):
+        x_arr = np.asarray(x, dtype=float)
+        result = np.vectorize(
+            lambda val: self._cdf_scalar(float(val), mu, gamma, rho, lam), otypes=[float]
+        )(x_arr)
+        if np.isscalar(x):
+            return float(result)
+        return result
+
+    def _ppf(self, q, mu, gamma, rho, lam):
+        q_arr = np.asarray(q, dtype=float)
+
+        def invert_single(prob):
+            if prob <= 0.0:
+                return 0.0
+            if prob >= 1.0:
+                return 2.0 * np.pi
+
+            def objective(theta):
+                return self._cdf_scalar(theta, mu, gamma, rho, lam) - prob
+
+            return brentq(objective, 0.0, 2.0 * np.pi, xtol=1e-12, rtol=1e-12, maxiter=200)
+
+        result = np.vectorize(invert_single, otypes=[float])(q_arr)
+        if np.isscalar(q):
+            return float(result)
+        return result
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        params = self._parse_args(*shape_args, **call_kwargs)[0]
+        if len(params) != 4:
+            raise ValueError("Expected parameters (mu, gamma, rho, lam).")
+        mu, gamma, rho, lam = [float(np.asarray(val, dtype=float)) for val in params]
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+
+        abs_k = abs(k)
+        mag = float(gamma) if abs_k == 1 else float(gamma * (rho ** (abs_k - 1)))
+        angle = abs_k * mu + (abs_k - 1) * lam
+        value = mag * np.exp(1j * angle)
+
+        if k < 0:
+            return np.conjugate(value)
+        return complex(value)
+
+    def _fit_moments(self, data):
+        data = self._wrap_angles(np.asarray(data, dtype=float))
+        if data.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        mu_hat, r1 = circ_mean_and_r(alpha=data)
+        centered = angmod(data - mu_hat)
+        cos2 = np.cos(2.0 * centered)
+        sin2 = np.sin(2.0 * centered)
+        alpha2 = float(np.mean(cos2))
+        beta2 = float(np.mean(sin2))
+        mu_hat = self._wrap_direction(float(mu_hat))
+        gamma_hat = float(np.clip(r1, 0.0, 1.0 - 1e-9))
+
+        alpha2_proj, beta2_proj = self._project_second_order(gamma_hat, alpha2, beta2)
+
+        if gamma_hat < self._moment_tolerance:
+            rho_hat = 0.0
+            lam_hat = 0.0
+        else:
+            r2 = np.hypot(alpha2_proj, beta2_proj)
+            rho_hat = float(np.clip(r2 / max(gamma_hat, 1e-12), 0.0, 1.0 - 1e-9))
+            lam_hat = float(np.mod(np.arctan2(beta2_proj, alpha2_proj), 2.0 * np.pi))
+            if rho_hat < self._moment_tolerance:
+                lam_hat = 0.0
+
+        return mu_hat, gamma_hat, rho_hat, lam_hat
+
+    @staticmethod
+    def _project_second_order(gamma, alpha2, beta2):
+        gamma = float(gamma)
+        radius = gamma * (1.0 - gamma)
+        center_alpha = gamma * gamma
+        vec_alpha = alpha2 - center_alpha
+        vec_beta = beta2
+        distance = np.hypot(vec_alpha, vec_beta)
+        if radius <= 0.0:
+            return center_alpha, 0.0
+        if distance <= radius:
+            return alpha2, beta2
+        if distance == 0.0:
+            return center_alpha + radius, 0.0
+        scale = radius / distance
+        alpha_proj = center_alpha + vec_alpha * scale
+        beta_proj = vec_beta * scale
+        return alpha_proj, beta_proj
+
+    @staticmethod
+    def convert_alpha2_beta2(gamma, alpha2, beta2, *, verify=True):
+        """
+        Convert second-order moment parameters to (rho, lambda).
+
+        Parameters
+        ----------
+        gamma : float
+            Mean resultant length, 0 <= gamma < 1.
+        alpha2 : float
+            Second-order cosine moment around mu.
+        beta2 : float
+            Second-order sine moment around mu.
+        verify : bool, optional
+            If True (default), check that (alpha2, beta2) lies within the feasible
+            disk for the supplied gamma and raise a ValueError if not.
+
+        Returns
+        -------
+        rho : float
+            Second-order magnitude parameter.
+        lam : float
+            Second-order phase parameter in [0, 2 pi).
+        """
+        gamma = float(gamma)
+        alpha2 = float(alpha2)
+        beta2 = float(beta2)
+
+        if not (0.0 <= gamma < 1.0):
+            raise ValueError("`gamma` must lie in [0, 1).")
+
+        radius_sq = (gamma * (1.0 - gamma)) ** 2
+        center_alpha = gamma * gamma
+        dist_sq = (alpha2 - center_alpha) ** 2 + beta2**2
+
+        tol = 1e-12
+        if verify and dist_sq > radius_sq + tol:
+            raise ValueError(
+                f"(alpha2, beta2) = ({alpha2}, {beta2}) is outside the feasible disk "
+                f"for gamma={gamma}."
+            )
+
+        r2 = np.hypot(alpha2, beta2)
+        if gamma <= katojones_gen._moment_tolerance:
+            if verify and r2 > tol:
+                raise ValueError(
+                    "When gamma is approximately zero, alpha2 and beta2 must also be near zero."
+                )
+            return 0.0, 0.0
+
+        rho = float(np.clip(r2 / gamma, 0.0, 1.0 - 1e-12))
+        if r2 <= tol:
+            lam = 0.0
+        else:
+            lam = float(np.mod(np.arctan2(beta2, alpha2), 2.0 * np.pi))
+        return rho, lam
+
+    def _fit_mle(
+        self,
+        data,
+        initial,
+        optimizer,
+        options,
+        **minimize_kwargs,
+    ):
+        data = self._wrap_angles(np.asarray(data, dtype=float))
+        if data.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if initial is None:
+            initial = self._fit_moments(data)
+
+        mu0, gamma0, rho0, lam0 = initial
+        mu0 = self._wrap_direction(float(mu0))
+        gamma0 = float(np.clip(gamma0, 1e-6, 1.0 - 1e-6))
+        rho0 = float(np.clip(rho0, 1e-6, 1.0 - 1e-6))
+        lam0 = float(np.mod(lam0, 2.0 * np.pi))
+        x0 = np.array([mu0, gamma0, rho0, lam0], dtype=float)
+
+        cube_penalty = lambda mu, gamma, rho, lam: (rho * np.cos(lam) - gamma) ** 2 + (
+            rho * np.sin(lam)
+        ) ** 2 - (1.0 - gamma) ** 2
+
+        def objective(params):
+            mu, gamma, rho, lam = params
+            if (gamma <= 0.0) or (gamma >= 1.0) or (rho < 0.0) or (rho >= 1.0):
+                return 1e9 + np.sum(params**2)
+            penalty = cube_penalty(mu, gamma, rho, lam)
+            if penalty > 1e-8:
+                return 1e9 + penalty * 1e9
+            pdf_vals = self._pdf(data, mu, gamma, rho, lam)
+            if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
+                return 1e9
+            return -np.sum(np.log(pdf_vals))
+
+        bounds = [
+            (0.0, 2.0 * np.pi),
+            (1e-6, 1.0 - 1e-6),
+            (0.0, 1.0 - 1e-6),
+            (0.0, 2.0 * np.pi),
+        ]
+
+        result = minimize(
+            objective,
+            x0,
+            method=optimizer,
+            bounds=bounds,
+            options=options,
+            **minimize_kwargs,
+        )
+
+        if not result.success:
+            raise RuntimeError(f"Maximum likelihood fit failed: {result.message}")
+
+        mu_hat, gamma_hat, rho_hat, lam_hat = result.x
+        mu_hat = self._wrap_direction(float(mu_hat))
+        gamma_hat = float(np.clip(gamma_hat, 0.0, 1.0 - 1e-9))
+        rho_hat = float(np.clip(rho_hat, 0.0, 1.0 - 1e-9))
+        lam_hat = float(np.mod(lam_hat, 2.0 * np.pi))
+
+        return mu_hat, gamma_hat, rho_hat, lam_hat
+
+    def fit(
+        self,
+        data,
+        method="moments",
+        *,
+        initial=None,
+        optimizer="L-BFGS-B",
+        options=None,
+        **kwargs,
+    ):
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        kwargs.pop("floc", None)
+        kwargs.pop("fscale", None)
+
+        if method == "moments":
+            if kwargs:
+                raise TypeError("Unexpected optimizer arguments for method='moments'.")
+            return self._fit_moments(data)
+
+        if method != "mle":
+            raise ValueError("method must be either 'moments' or 'mle'.")
+
+        options = {} if options is None else dict(options)
+        return self._fit_mle(
+            data,
+            initial=initial,
+            optimizer=optimizer,
+            options=options,
+            **kwargs,
+        )
+
+
+katojones = katojones_gen(name="katojones")
 
 class vonmises_gen(CircularContinuous):
     """Von Mises Distribution
