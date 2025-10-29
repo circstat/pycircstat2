@@ -5,7 +5,7 @@ import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
 from scipy.special import beta as beta_fn
-from scipy.special import gamma, i0, i1, ndtr, iv, betainc
+from scipy.special import gamma, i0, i1, ndtr, iv, betainc, gammaln, digamma
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -1345,6 +1345,144 @@ class cardioid_gen(CircularContinuous):
             return float(result)
         return result.reshape(u_arr.shape)
 
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
+        """
+        Estimate ``mu`` and ``rho`` for the cardioid distribution.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians). Values are wrapped to ``[0, 2π)`` internally.
+        weights : array_like, optional
+            Non-negative weights/frequencies broadcastable to ``data``.
+        method : {\"mle\", \"moments\"}, optional
+            Estimation strategy. ``"moments"`` uses the first trigonometric
+            moment, ``"mle"`` (default) maximises the weighted log-likelihood.
+        return_info : bool, optional
+            If True, also return a diagnostic dictionary.
+        optimizer : str, optional
+            Optimiser passed to :func:`scipy.optimize.minimize` when
+            ``method="mle"``.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser.
+        """
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float))
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False)
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        mu_mom, r_mom = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = float(0.0)
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        rho_mom = float(np.clip(r_mom, 0.0, 0.5))
+
+        def _nll(params):
+            mu_param, rho_param = params
+            if not (0.0 <= rho_param <= 0.5):
+                return np.inf
+            cos_term = np.cos(x - mu_param)
+            denom = 1.0 + 2.0 * rho_param * cos_term
+            if np.any(denom <= 0.0):
+                return np.inf
+            log_terms = np.log(denom)
+            value = -np.sum(w * log_terms) + w_sum * np.log(2.0 * np.pi)
+            return float(value)
+
+        def _grad(params):
+            mu_param, rho_param = params
+            cos_term = np.cos(x - mu_param)
+            denom = 1.0 + 2.0 * rho_param * cos_term
+            mask_bad = denom <= 0.0
+            if np.any(mask_bad):
+                return np.array([0.0, 0.0], dtype=float)
+            sin_term = np.sin(x - mu_param)
+            inv = w / denom
+            g_mu = -2.0 * rho_param * np.sum(inv * sin_term)
+            g_rho = -2.0 * np.sum(inv * cos_term)
+            return np.array([g_mu, g_rho], dtype=float)
+
+        method = method.lower()
+        if method not in {"mle", "moments"}:
+            raise ValueError("`method` must be either 'mle' or 'moments'.")
+
+        if method == "moments":
+            mu_hat = self._wrap_direction(mu_mom)
+            rho_hat = rho_mom
+            info = {
+                "method": "moments",
+                "loglik": float(-_nll((mu_hat, rho_hat))),
+                "n_effective": float(n_eff),
+                "converged": True,
+            }
+        else:
+            if rho_mom <= 1e-12:
+                mu_hat = self._wrap_direction(mu_mom)
+                rho_hat = 0.0
+                info = {
+                    "method": "mle",
+                    "loglik": float(-_nll((mu_hat, rho_hat))),
+                    "n_effective": float(n_eff),
+                    "converged": True,
+                    "nit": 0,
+                    "message": "Degenerate start (rho≈0); returning boundary solution.",
+                }
+            else:
+                init = np.array([mu_mom, rho_mom], dtype=float)
+                bounds = [(0.0, 2.0 * np.pi), (0.0, 0.5)]
+                result = minimize(
+                    _nll,
+                    init,
+                    method=optimizer,
+                    jac=_grad,
+                    bounds=bounds,
+                    **kwargs,
+                )
+                if not result.success:
+                    raise RuntimeError(
+                        f"cardioid.fit(method='mle') failed: {result.message}"
+                    )
+                mu_hat = self._wrap_direction(float(result.x[0]))
+                rho_hat = float(np.clip(result.x[1], 0.0, 0.5))
+                info = {
+                    "method": "mle",
+                    "loglik": float(-result.fun),
+                    "n_effective": float(n_eff),
+                    "converged": bool(result.success),
+                    "nit": result.nit,
+                    "grad_norm": float(np.linalg.norm(result.jac))
+                    if getattr(result, "jac", None) is not None
+                    else np.nan,
+                    "optimizer": optimizer,
+                }
+
+        estimates = (mu_hat, rho_hat)
+        if return_info:
+            return estimates, info
+        return estimates
+
 
 cardioid = cardioid_gen(name="cardioid")
 
@@ -1370,6 +1508,22 @@ class cartwright_gen(CircularContinuous):
 
     def _argcheck(self, mu, zeta):
         return 0 <= mu <= 2 * np.pi and zeta > 0
+
+    @staticmethod
+    def _moment_r(zeta):
+        z = np.asarray(zeta, dtype=float)
+        if np.any(z <= 0):
+            raise ValueError("`zeta` must be positive.")
+        inv = 1.0 / z
+        log_term = (-1.0 + 2.0 * inv) * np.log(2.0)
+        log_term += np.log(2.0)
+        log_term += np.log(inv**2 / (inv + 1.0))
+        log_term += gammaln(inv)
+        log_term += gammaln(inv + 0.5)
+        log_term -= 0.5 * np.log(np.pi)
+        log_term -= gammaln(1.0 + 2.0 * inv)
+        result = np.exp(log_term)
+        return float(result) if np.isscalar(zeta) else result
 
     def _pdf(self, x, mu, zeta):
         return (
@@ -1525,6 +1679,150 @@ class cartwright_gen(CircularContinuous):
             return float(theta)
         return theta.reshape(shape)
 
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
+        """
+        Estimate ``mu`` and ``zeta`` for the Cartwright distribution.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians). Values are wrapped to ``[0, 2π)`` internally.
+        weights : array_like, optional
+            Non-negative weights/frequencies broadcastable to ``data``.
+        method : {"mle", "moments"}, optional
+            Estimation strategy. "moments" matches the first trigonometric
+            moment, "mle" (default) maximises the weighted log-likelihood.
+        return_info : bool, optional
+            If True, also return a diagnostic dictionary.
+        optimizer : str, optional
+            Optimiser passed to :func:`scipy.optimize.minimize` when
+            ``method="mle"``.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser.
+        """
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float))
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False)
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        mu_mom, _ = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = float(0.0)
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        delta = (x - mu_mom + np.pi) % (2.0 * np.pi) - np.pi
+        sin_half = np.sin(0.5 * delta)
+        m_t = float(np.sum(w * sin_half**2) / w_sum)
+        m_t = float(np.clip(m_t, 0.0, 0.5 - 1e-12))
+        if m_t <= 1e-12:
+            zeta_mom = 1e-6
+        else:
+            denom = max(1e-12, 0.5 - m_t)
+            zeta_mom = float(np.clip(m_t / denom, 1e-6, 1e6))
+
+        def log_c(z):
+            inv = 1.0 / z
+            return (
+                (-1.0 + inv) * np.log(2.0)
+                + 2.0 * gammaln(1.0 + inv)
+                - np.log(np.pi)
+                - gammaln(1.0 + 2.0 * inv)
+            )
+
+        def nll(params):
+            mu_param, zeta_param = params
+            if zeta_param <= 0.0:
+                return np.inf
+            cos_term = np.cos(x - mu_param)
+            denom = np.clip(1.0 + cos_term, 1e-15, None)
+            sum_log = np.sum(w * np.log(denom))
+            ll = w_sum * log_c(zeta_param) + (1.0 / zeta_param) * sum_log
+            return float(-ll)
+
+        def grad(params):
+            mu_param, zeta_param = params
+            cos_term = np.cos(x - mu_param)
+            denom = np.clip(1.0 + cos_term, 1e-15, None)
+            sin_term = np.sin(x - mu_param)
+            sum_log = np.sum(w * np.log(denom))
+            grad_mu = -(1.0 / zeta_param) * np.sum(w * sin_term / denom)
+            inv = 1.0 / zeta_param
+            term = 2.0 * digamma(1.0 + 2.0 * inv) - (
+                np.log(2.0) + 2.0 * digamma(1.0 + inv)
+            )
+            grad_zeta = (sum_log - w_sum * term) / (zeta_param**2)
+            return np.array([grad_mu, grad_zeta], dtype=float)
+
+        method = method.lower()
+        if method not in {"mle", "moments"}:
+            raise ValueError("`method` must be either 'mle' or 'moments'.")
+
+        if method == "moments":
+            mu_hat = self._wrap_direction(mu_mom)
+            zeta_hat = zeta_mom
+            info = {
+                "method": "moments",
+                "loglik": float(-nll((mu_hat, zeta_hat))),
+                "n_effective": float(n_eff),
+                "converged": True,
+            }
+        else:
+            mu_init = mu_mom
+            zeta_init = zeta_mom if np.isfinite(zeta_mom) else 10.0
+            zeta_init = float(np.clip(zeta_init, 1e-3, 1e4))
+            bounds = [(0.0, 2.0 * np.pi), (1e-6, 1e6)]
+            result = minimize(
+                nll,
+                np.array([mu_init, zeta_init], dtype=float),
+                method=optimizer,
+                jac=grad,
+                bounds=bounds,
+                **kwargs,
+            )
+            if not result.success:
+                raise RuntimeError(
+                    f"cartwright.fit(method='mle') failed: {result.message}"
+                )
+            mu_hat = self._wrap_direction(float(result.x[0]))
+            zeta_hat = float(np.clip(result.x[1], 1e-6, 1e6))
+            info = {
+                "method": "mle",
+                "loglik": float(-result.fun),
+                "n_effective": float(n_eff),
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "grad_norm": float(np.linalg.norm(result.jac))
+                if getattr(result, "jac", None) is not None
+                else np.nan,
+                "optimizer": optimizer,
+            }
+
+        estimates = (mu_hat, zeta_hat)
+        if return_info:
+            return estimates, info
+        return estimates
+
 
 cartwright = cartwright_gen(name="cartwright")
 
@@ -1665,6 +1963,36 @@ class wrapnorm_gen(CircularContinuous):
             Cumulative distribution function evaluated at `x`.
         """
         return super().cdf(x, mu, rho, *args, **kwargs)
+
+    def _rvs(self, mu, rho, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("wrapnorm parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(np.clip(rho_arr.reshape(-1)[0], np.finfo(float).tiny, 1.0 - 1e-15))
+
+        if rho_val <= 1e-12:
+            samples = rng.uniform(0.0, 2.0 * np.pi, size=size)
+            return float(samples) if np.isscalar(samples) else samples
+
+        sigma = float(np.sqrt(-2.0 * np.log(rho_val)))
+        if sigma < 1e-12:
+            if size is None:
+                return mu_val
+            if np.isscalar(size):
+                return np.full((int(size),), mu_val, dtype=float)
+            shape = tuple(int(dim) for dim in np.atleast_1d(size))
+            return np.full(shape, mu_val, dtype=float)
+
+        samples = rng.normal(loc=mu_val, scale=sigma, size=size)
+        wrapped = np.mod(samples, 2.0 * np.pi)
+        if np.isscalar(wrapped):
+            return float(wrapped)
+        return wrapped
 
 
 wrapnorm = wrapnorm_gen(name="wrapped_normal")
