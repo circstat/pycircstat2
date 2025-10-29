@@ -1,5 +1,7 @@
-import numpy as np
 import types
+from typing import TYPE_CHECKING
+
+import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
 from scipy.special import gamma, i0, i1
@@ -285,7 +287,7 @@ class CircularContinuous(rv_continuous):
             cache[key] = compute()
         return cache[key]
 
-    def freeze(self, *args, **kwds):
+    def freeze(self, *args, **kwds) -> "CircularContinuousFrozen":
         """
         Return a frozen circular distribution while enforcing fixed loc/scale.
         """
@@ -1863,6 +1865,50 @@ class katojones_gen(CircularContinuous):
         else:
             lam = float(np.mod(np.arctan2(beta2, alpha2), 2.0 * np.pi))
         return rho, lam
+
+    @staticmethod
+    def convert_rho_lambda(gamma, rho, lam, *, verify=True):
+        """
+        Convert (rho, lambda) parameters to second-order moments (alpha2, beta2).
+
+        Parameters
+        ----------
+        gamma : float
+            Mean resultant length, 0 <= gamma < 1.
+        rho : float
+            Second-order magnitude, 0 <= rho < 1.
+        lam : float
+            Second-order phase, 0 <= lam < 2*pi.
+        verify : bool, optional
+            If True (default), ensure (gamma, rho, lam) satisfies the feasibility
+            constraint and raise a ValueError otherwise.
+
+        Returns
+        -------
+        alpha2 : float
+            Second-order cosine moment around mu.
+        beta2 : float
+            Second-order sine moment around mu.
+        """
+        gamma = float(gamma)
+        rho = float(rho)
+        lam = float(lam)
+
+        if not (0.0 <= gamma < 1.0):
+            raise ValueError("`gamma` must lie in [0, 1).")
+        if not (0.0 <= rho < 1.0):
+            raise ValueError("`rho` must lie in [0, 1).")
+
+        if verify:
+            constraint = (rho * np.cos(lam) - gamma) ** 2 + (rho * np.sin(lam)) ** 2
+            if constraint > (1.0 - gamma) ** 2 + 1e-12:
+                raise ValueError(
+                    f"(gamma, rho, lam)=({gamma}, {rho}, {lam}) violates the feasibility constraint."
+                )
+
+        alpha2 = float(gamma * rho * np.cos(lam))
+        beta2 = float(gamma * rho * np.sin(lam))
+        return alpha2, beta2
 
     @staticmethod
     def _aux_from_rho_lam(gamma, rho, lam):

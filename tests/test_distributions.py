@@ -259,8 +259,7 @@ def test_katojones_convert_alpha2_beta2():
     gamma = 0.4
     rho = 0.35
     lam = 1.25
-    alpha2 = gamma * rho * np.cos(lam)
-    beta2 = gamma * rho * np.sin(lam)
+    alpha2, beta2 = katojones.convert_rho_lambda(gamma, rho, lam)
     rho_rt, lam_rt = katojones.convert_alpha2_beta2(gamma, alpha2, beta2)
     np.testing.assert_allclose(rho_rt, rho, atol=1e-12)
     np.testing.assert_allclose(_angle_diff(lam_rt, lam), 0.0, atol=1e-12)
