@@ -1546,9 +1546,6 @@ class katojones_gen(CircularContinuous):
         Random variates via a wrapped-Cauchy-based composition sampler.
     fit(data, method=\"moments\" | \"mle\", ...)
         Method-of-moments or maximum-likelihood parameter estimation.
-    convert_alpha2_beta2(gamma, alpha2, beta2, verify=True)
-        Helper to recover (rho, lambda) from second-order trigonometric moments.
-
     Notes
     -----
     Implements the tractable four-parameter unimodal family proposed by Kato and
