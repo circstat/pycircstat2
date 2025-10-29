@@ -26,7 +26,6 @@ __all__ = [
     "inverse_batschelet",
     "wrapstable",
     "katojones",
-    "katojones_mobius",
 ]
 
 
@@ -382,6 +381,104 @@ class CircularContinuous(rv_continuous):
         if self._lower_bound is not None and self._period is not None:
             return float(self._wrap_angles(angle))
         return float(angmod(angle))
+
+    # ------------------------------------------------------------------
+    # Numeric integration helpers
+    # ------------------------------------------------------------------
+    def _cdf_integral(
+        self,
+        x,
+        integrand,
+        params,
+        *,
+        lower=None,
+        upper=None,
+        epsabs=1e-9,
+        epsrel=1e-9,
+        limit=200,
+    ):
+        """
+        Numerically integrate a one-dimensional PDF to obtain CDF values.
+
+        Evaluates the cumulative integral of ``integrand`` from ``lower`` to each
+        point in ``x``, reusing work across sorted evaluation points to minimise
+        the number of quadrature calls.
+        """
+        if np.isscalar(x):
+            x_vals = np.array([float(x)], dtype=float)
+            scalar_input = True
+        else:
+            x_arr = np.asarray(x, dtype=float)
+            x_vals = x_arr.ravel()
+            scalar_input = False
+            original_shape = x_arr.shape
+
+        if x_vals.size == 0:
+            if scalar_input:
+                return float()
+            return np.empty(original_shape, dtype=float)
+
+        params = tuple(params)
+        lower_bound = float(self.a if lower is None else lower)
+        upper_bound = float(self.b if upper is None else upper)
+
+        results = np.zeros_like(x_vals, dtype=float)
+        sorted_indices = np.argsort(x_vals, kind="mergesort")
+        sorted_vals = x_vals[sorted_indices]
+
+        cumulative = 0.0
+        current = lower_bound
+
+        for order_idx, orig_idx in enumerate(sorted_indices):
+            value = float(sorted_vals[order_idx])
+
+            if not np.isfinite(value):
+                results[orig_idx] = np.nan
+                continue
+
+            if value <= lower_bound:
+                results[orig_idx] = 0.0
+                continue
+
+            clipped = min(value, upper_bound)
+            if clipped > current + 1e-15:
+                segment, _ = quad(
+                    integrand,
+                    current,
+                    clipped,
+                    args=params,
+                    epsabs=epsabs,
+                    epsrel=epsrel,
+                    limit=limit,
+                )
+                cumulative += segment
+                current = clipped
+
+            if value >= upper_bound:
+                cumulative = 1.0
+                current = upper_bound
+                results[orig_idx] = 1.0
+            else:
+                results[orig_idx] = cumulative
+
+        results = np.clip(results, 0.0, 1.0)
+
+        if scalar_input:
+            return float(results[0])
+        return results.reshape(original_shape)
+
+    def _cdf_from_pdf(self, x, *params, **quad_kwargs):
+        """Convenience wrapper around :meth:`_cdf_integral` using ``self._pdf``."""
+        return self._cdf_integral(
+            x,
+            self._pdf,
+            params,
+            lower=quad_kwargs.pop("lower", None),
+            upper=quad_kwargs.pop("upper", None),
+            epsabs=quad_kwargs.pop("epsabs", 1e-9),
+            epsrel=quad_kwargs.pop("epsrel", 1e-9),
+            limit=quad_kwargs.pop("limit", 200),
+        )
 
     # ------------------------------------------------------------------
     # Circular descriptive helpers
@@ -1193,12 +1290,7 @@ class cartwright_gen(CircularContinuous):
         return super().pdf(x, mu, zeta, *args, **kwargs)
 
     def _cdf(self, x, mu, zeta):
-        @np.vectorize
-        def _cdf_single(x, mu, zeta):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, zeta))
-            return integral
-
-        return _cdf_single(x, mu, zeta)
+        return self._cdf_from_pdf(x, mu, zeta)
 
     def cdf(self, x, mu, zeta, *args, **kwargs):
         r"""
@@ -1287,12 +1379,7 @@ class wrapnorm_gen(CircularContinuous):
         return super().pdf(x, mu, rho, *args, **kwargs)
 
     def _cdf(self, x, mu, rho):
-        @np.vectorize
-        def _cdf_single(x, mu, rho):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, rho))
-            return integral
-
-        return _cdf_single(x, mu, rho)
+        return self._cdf_from_pdf(x, mu, rho)
 
     def cdf(self, x, mu, rho, *args, **kwargs):
         """
@@ -1398,12 +1485,7 @@ class wrapcauchy_gen(CircularContinuous):
         return super().logpdf(x, mu, rho, *args, **kwargs)
 
     def _cdf(self, x, mu, rho):
-        @np.vectorize
-        def _cdf_single(x, mu, rho):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, rho))
-            return integral
-
-        return _cdf_single(x, mu, rho)
+        return self._cdf_from_pdf(x, mu, rho)
 
     def cdf(self, x, mu, rho, *args, **kwargs):
         """
@@ -1633,24 +1715,8 @@ class katojones_gen(CircularContinuous):
         """
         return super().pdf(x, mu, gamma, rho, lam, *args, **kwargs)
 
-    def _cdf_scalar(self, x, mu, gamma, rho, lam):
-        if x <= 0.0:
-            return 0.0
-        if x >= 2.0 * np.pi:
-            return 1.0
-        integral, _ = quad(
-            self._pdf, 0.0, x, args=(mu, gamma, rho, lam), epsabs=1e-9, epsrel=1e-9
-        )
-        return float(integral)
-
     def _cdf(self, x, mu, gamma, rho, lam):
-        x_arr = np.asarray(x, dtype=float)
-        result = np.vectorize(
-            lambda val: self._cdf_scalar(float(val), mu, gamma, rho, lam), otypes=[float]
-        )(x_arr)
-        if np.isscalar(x):
-            return float(result)
-        return result
+        return self._cdf_from_pdf(x, mu, gamma, rho, lam)
 
     def cdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
         r"""
@@ -1722,7 +1788,7 @@ class katojones_gen(CircularContinuous):
                 return 2.0 * np.pi
 
             def objective(theta):
-                return self._cdf_scalar(theta, mu, gamma, rho, lam) - prob
+                return self._cdf_from_pdf(theta, mu, gamma, rho, lam) - prob
 
             return brentq(objective, 0.0, 2.0 * np.pi, xtol=1e-12, rtol=1e-12, maxiter=200)
 
@@ -2169,12 +2235,7 @@ class vonmises_gen(CircularContinuous):
         return super().logpdf(x, mu, kappa, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa):
-        @np.vectorize
-        def _cdf_single(x, mu, kappa):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa))
-            return integral
-
-        return _cdf_single(x, mu, kappa)
+        return self._cdf_from_pdf(x, mu, kappa)
 
     def cdf(self, x, mu, kappa, *args, **kwargs):
         r"""
@@ -2539,12 +2600,7 @@ class vonmises_flattopped_gen(CircularContinuous):
         return super().pdf(x, mu, kappa, nu, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, nu):
-        @np.vectorize
-        def _cdf_single(x, mu, kappa, nu):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, nu))
-            return integral
-
-        return _cdf_single(x, mu, kappa, nu)
+        return self._cdf_from_pdf(x, mu, kappa, nu)
 
 
 vonmises_flattopped = vonmises_flattopped_gen(name="vonmises_flattopped")
@@ -2627,29 +2683,20 @@ class jonespewsey_gen(CircularContinuous):
         return super().pdf(x, mu, kappa, psi, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, psi):
-        def vonmises_pdf(x, mu, kappa, psi, c):
-            return c * np.exp(kappa * np.cos(x - mu))
-
         if np.isclose(np.abs(psi), 0).all():
-            c = self._get_cached_normalizer(
+            normalizer = self._get_cached_normalizer(
                 lambda: _c_jonespewsey(mu, kappa, psi), mu, kappa, psi
             )
-            self._c = c
+            self._c = normalizer
 
-            @np.vectorize
-            def _cdf_single(x, mu, kappa, psi, c):
-                integral, _ = quad(vonmises_pdf, a=0, b=x, args=(mu, kappa, psi, c))
-                return integral
+            def _vm_integrand(theta, mu_val, kappa_val, psi_val, c_val):
+                return c_val * np.exp(kappa_val * np.cos(theta - mu_val))
 
-            return _cdf_single(x, mu, kappa, psi, c)
-        else:
+            return self._cdf_integral(
+                x, _vm_integrand, (mu, kappa, psi, normalizer)
+            )
 
-            @np.vectorize
-            def _cdf_single(x, mu, kappa, psi):
-                integral, _ = quad(self._pdf, a=0, b=x, args=(mu, kappa, psi))
-                return integral
-
-            return _cdf_single(x, mu, kappa, psi)
+        return self._cdf_from_pdf(x, mu, kappa, psi)
 
 
 jonespewsey = jonespewsey_gen(name="jonespewsey")
@@ -2768,12 +2815,7 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
         return super().pdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, lmbd):
-        @np.vectorize
-        def _cdf_single(x, xi, kappa, psi, lmbd):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, lmbd))
-            return integral
-
-        return _cdf_single(x, xi, kappa, psi, lmbd)
+        return self._cdf_from_pdf(x, xi, kappa, psi, lmbd)
 
 
 jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed")
@@ -2877,12 +2919,7 @@ class jonespewsey_asym_gen(CircularContinuous):
         return super().pdf(x, xi, kappa, psi, nu, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, nu):
-        @np.vectorize
-        def _cdf_single(x, xi, kappa, psi, nu):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(xi, kappa, psi, nu))
-            return integral
-
-        return _cdf_single(x, xi, kappa, psi, nu)
+        return self._cdf_from_pdf(x, xi, kappa, psi, nu)
 
 
 jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
@@ -3024,12 +3061,7 @@ class inverse_batschelet_gen(CircularContinuous):
         return super().pdf(x, xi, kappa, nu, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
-        @np.vectorize
-        def _cdf_single(x, xi, kappa, nu, lmbd):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(xi, kappa, nu, lmbd))
-            return integral
-
-        return _cdf_single(x, xi, kappa, nu, lmbd)
+        return self._cdf_from_pdf(x, xi, kappa, nu, lmbd)
 
 
 inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
@@ -3185,12 +3217,7 @@ class wrapstable_gen(CircularContinuous):
         return super().pdf(x, delta, alpha, beta, gamma, *args, **kwargs)
 
     def _cdf(self, x, delta, alpha, beta, gamma):
-        @np.vectorize
-        def _cdf_single(x, delta, alpha, beta, gamma):
-            integral, _ = quad(self._pdf, a=0, b=x, args=(delta, alpha, beta, gamma))
-            return integral
-
-        return _cdf_single(x, delta, alpha, beta, gamma)
+        return self._cdf_from_pdf(x, delta, alpha, beta, gamma)
 
     def _get_series_terms(self, delta, alpha, beta, gamma):
         delta_s = self._scalar_param(delta)
