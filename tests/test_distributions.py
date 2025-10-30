@@ -19,13 +19,26 @@ from pycircstat2.distributions import (
 
 
 def test_circularuniform():
-
     np.testing.assert_approx_equal(circularuniform.cdf(2), 0.3183, significant=5)
     np.testing.assert_approx_equal(circularuniform.ppf(1 / np.pi), 2)
 
 
-def test_cardioid():
+def test_circularuniform_cdf_ppf_roundtrip():
+    cu = circularuniform()
+    q = np.linspace(0.0, 1.0, num=9)
+    theta = cu.ppf(q)
+    np.testing.assert_array_less(-1e-12, theta)
+    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
+    np.testing.assert_allclose(cu.cdf(theta), q, atol=1e-12)
 
+    grid = np.linspace(0.0, 2.0 * np.pi, num=11)
+    q_grid = cu.cdf(grid)
+    theta_back = cu.ppf(q_grid)
+    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(wrapped, 0.0, atol=1e-12)
+
+
+def test_cardioid():
     cd = cardioid(rho=0.3, mu=np.pi / 2)
     np.testing.assert_approx_equal(cd.cdf(np.pi), 0.6909859, significant=5)
     np.testing.assert_approx_equal(cd.ppf(0.6909859), np.pi)
@@ -69,6 +82,23 @@ def test_triangular_ppf_vectorized():
     q = np.linspace(0.1, 0.9, num=5)
     out_zero = triangular.ppf(q, rho=0.0)
     np.testing.assert_allclose(out_zero, q * (2 * np.pi))
+
+
+@pytest.mark.parametrize("rho", [0.0, 0.25, 4.0 / np.pi**2])
+def test_triangular_cdf_ppf_roundtrip(rho):
+    tri = triangular(rho=rho)
+
+    q = np.linspace(0.0, 1.0, num=11)
+    theta = tri.ppf(q)
+    np.testing.assert_array_less(-1e-12, theta)
+    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
+    np.testing.assert_allclose(tri.cdf(theta), q, rtol=0.0, atol=2e-12)
+
+    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
+    q_grid = tri.cdf(grid)
+    theta_back = tri.ppf(q_grid)
+    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
 
 
 def test_triangular_pdf_periodic():

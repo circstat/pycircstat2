@@ -505,7 +505,7 @@ class CircularContinuous(rv_continuous):
         return results.reshape(original_shape)
 
     def _cdf_from_pdf(self, x, *params, **quad_kwargs):
-        """Convenience wrapper around :meth:`_cdf_integral` using ``self._pdf``."""
+        """Convenience wrapper around `_cdf_integral` using ``self._pdf``."""
         return self._cdf_integral(
             x,
             self._pdf,
@@ -1187,21 +1187,33 @@ triangular = triangular_gen(name="triangular")
 
 
 class cardioid_gen(CircularContinuous):
-    """Cardioid (cosine) Distribution
+    r"""Cardioid (cosine) Distribution
 
     ![cardioid](../images/circ-mod-cardioid.png)
+
+    A cosine-modulated perturbation of the circular uniform law with support on
+    ``[0, 2π)``. The mean direction ``mu`` controls location, while the mean
+    resultant length ``rho`` (bounded by 0.5) governs concentration. Closed-form
+    expressions are used for the PDF and CDF, and quantiles are obtained by
+    solving ``F(theta; mu, rho) = q`` with a safeguarded Halley--Newton iteration
+    shared by ``ppf`` and ``rvs``.
 
     Methods
     -------
     pdf(x, mu, rho)
         Probability density function.
-
     cdf(x, mu, rho)
         Cumulative distribution function.
+    ppf(q, mu, rho)
+        Percent-point function (inverse CDF).
+    rvs(mu, rho, size=None, random_state=None)
+        Random variates via inverse transform using the quantile solver.
+    fit(data, *args, **kwargs)
+        Estimate ``(mu, rho)`` via method-of-moments or maximum likelihood.
 
     Notes
     -----
-    Implementation based on Section 4.3.4 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.4 of Pewsey et al. (2014).
     """
 
     def _argcheck(self, mu, rho):
@@ -1352,29 +1364,6 @@ class cardioid_gen(CircularContinuous):
             result[mask_one] = two_pi
         return result
 
-    def _rvs(self, mu, rho, size=None, random_state=None):
-        rng = self._init_rng(random_state)
-
-        mu_arr = np.asarray(mu, dtype=float)
-        rho_arr = np.asarray(rho, dtype=float)
-        if mu_arr.size != 1 or rho_arr.size != 1:
-            raise ValueError("cardioid parameters must be scalar-valued.")
-
-        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
-        rho_val = float(rho_arr.reshape(-1)[0])
-        if not (0.0 <= rho_val <= 0.5):
-            raise ValueError("`rho` must lie in [0, 0.5].")
-
-        two_pi = 2.0 * np.pi
-
-        if np.isclose(rho_val, 0.0, atol=1e-15):
-            samples = rng.uniform(0.0, two_pi, size=size)
-            return float(samples) if np.isscalar(samples) else samples
-
-        u = rng.uniform(0.0, 1.0, size=size)
-        samples = self._solve_inverse_cdf(u, mu_val, rho_val)
-        return float(samples) if np.isscalar(samples) else np.asarray(samples, dtype=float)
-
     def _ppf(self, q, mu, rho):
         mu_arr = np.asarray(mu, dtype=float)
         rho_arr = np.asarray(rho, dtype=float)
@@ -1406,39 +1395,89 @@ class cardioid_gen(CircularContinuous):
         return result
 
     def ppf(self, q, mu, rho, *args, **kwargs):
-        """
+        r"""
         Percent-point function (inverse CDF) of the Cardioid distribution.
+
+        The quantile $\theta$ solves
+
+        $$
+        F(\theta) = \frac{\theta + 2\rho\bigl(\sin\mu + \sin(\theta - \mu)\bigr)}{2\pi} = q,
+        $$
+
+        on the support $[0, 2\pi]$.  The implementation applies a
+        Halley--Newton iteration with adaptive clipping and a final bisection
+        safeguard, ensuring robustness for large $\rho$ and quantiles
+        close to the boundary.  The same solver powers ``rvs``, so sampled
+        variates and tabulated quantiles are numerically consistent.
 
         Parameters
         ----------
         q : array_like
-            Quantiles to evaluate (0 <= q <= 1).
+            Quantiles to evaluate; finite values in ``[0, 1]`` are supported.
         mu : float
-            Mean direction, 0 <= mu <= 2*pi.
+            Mean direction, ``0 <= mu <= 2*pi``.
         rho : float
-            Mean resultant length, 0 <= rho <= 0.5.
+            Mean resultant length, ``0 <= rho <= 0.5``.
 
         Returns
         -------
         ppf_values : array_like
-            Angles corresponding to the given quantiles.
+            Angles satisfying $F(\theta)=q$. Inputs outside ``[0, 1]`` are
+            returned as ``nan``.
         """
         return super().ppf(q, mu, rho, *args, **kwargs)
 
+    def _rvs(self, mu, rho, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("cardioid parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(rho_arr.reshape(-1)[0])
+        if not (0.0 <= rho_val <= 0.5):
+            raise ValueError("`rho` must lie in [0, 0.5].")
+
+        two_pi = 2.0 * np.pi
+
+        if np.isclose(rho_val, 0.0, atol=1e-15):
+            samples = rng.uniform(0.0, two_pi, size=size)
+            return float(samples) if np.isscalar(samples) else samples
+
+        u = rng.uniform(0.0, 1.0, size=size)
+        samples = self._solve_inverse_cdf(u, mu_val, rho_val)
+        return float(samples) if np.isscalar(samples) else np.asarray(samples, dtype=float)
+
+
     def rvs(self, size=None, random_state=None, *args, **kwargs):
-        """
+        r"""
         Draw random variates from the Cardioid distribution.
+
+        Each sample is obtained by inverse-transform sampling.  For a uniform
+        draw $U \sim \mathcal{U}(0, 1)$, the angle $\Theta$
+        satisfies
+
+        $$
+        \frac{\Theta + 2\rho\bigl(\sin\mu + \sin(\Theta - \mu)\bigr)}{2\pi} = U,
+        $$
+
+        and is computed with the safeguarded Halley--Newton solver described in
+        ``ppf``.  When $\rho = 0$, the distribution degenerates to the
+        circular uniform law and samples are drawn directly from ``[0, 2π)``.
 
         Parameters
         ----------
-        mu : float, optional
-            Mean direction, 0 <= mu <= 2*pi. Provide either via keyword or by freezing the distribution.
-        rho : float, optional
-            Mean resultant length, 0 <= rho <= 0.5. Provide either via keyword or by freezing the distribution.
         size : int or tuple of ints, optional
-            Number of samples to draw.
+            Number of samples to draw. ``None`` (default) returns a scalar.
         random_state : np.random.Generator, np.random.RandomState, or None, optional
             Random number generator to use.
+        **kwargs :
+            Additional keyword parameters forwarded to `_rvs`. When the
+            distribution is not frozen, supply ``mu`` (mean direction,
+            ``0 <= mu <= 2*pi``) and ``rho`` (mean resultant length,
+            ``0 <= rho <= 0.5``) here.
 
         Returns
         -------
@@ -1478,7 +1517,7 @@ class cardioid_gen(CircularContinuous):
         return_info : bool, optional
             If True, also return a diagnostic dictionary.
         optimizer : str, optional
-            Optimiser passed to :func:`scipy.optimize.minimize` when
+            Optimiser passed to ``scipy.optimize.minimize`` when
             ``method="mle"``.
         **kwargs :
             Additional keyword arguments forwarded to the optimiser.
@@ -1812,7 +1851,7 @@ class cartwright_gen(CircularContinuous):
         return_info : bool, optional
             If True, also return a diagnostic dictionary.
         optimizer : str, optional
-            Optimiser passed to :func:`scipy.optimize.minimize` when
+            Optimiser passed to ``scipy.optimize.minimize`` when
             ``method="mle"``.
         **kwargs :
             Additional keyword arguments forwarded to the optimiser.
@@ -2133,7 +2172,7 @@ class wrapnorm_gen(CircularContinuous):
         return_info : bool, optional
             If True, return a diagnostics dictionary alongside the estimates.
         optimizer : str, optional
-            Optimiser passed to :func:`scipy.optimize.minimize` when
+            Optimiser passed to ``scipy.optimize.minimize`` when
             ``method="mle"``.
         **kwargs :
             Additional keyword arguments forwarded to the optimiser.
@@ -2492,7 +2531,7 @@ class wrapcauchy_gen(CircularContinuous):
         return_info : bool, optional
             If True, also return a diagnostic dictionary.
         optimizer : str, optional
-            Optimiser passed to :func:`scipy.optimize.minimize` when
+            Optimiser passed to ``scipy.optimize.minimize`` when
             ``method="mle"``.
         **kwargs :
             Additional keyword arguments forwarded to the optimiser.
@@ -2625,7 +2664,7 @@ class katojones_gen(CircularContinuous):
     ``rho``/``lam`` encode the magnitude/phase of the second-order moment.
     Feasible parameter tuples satisfy ``0 <= mu < 2*pi``, ``0 <= gamma < 1``,
     ``0 <= rho < 1``, ``0 <= lam < 2*pi`` together with the constraint enforced
-    in :py:meth:`_argcheck`.
+    in `_argcheck`.
 
     Special cases include the uniform distribution (``gamma = 0``), the cardioid
     (``rho = 0``) and the wrapped Cauchy (``lambda = 0`` with ``gamma = rho``).
@@ -3529,7 +3568,7 @@ class vonmises_gen(CircularContinuous):
         return_info : bool, optional
             If True, return a diagnostics dictionary alongside the estimates.
         optimizer : str, optional
-            Optimiser passed to :func:`scipy.optimize.minimize` when
+            Optimiser passed to ``scipy.optimize.minimize`` when
             ``method="mle"``.
         **kwargs :
             Additional keyword arguments forwarded to the optimiser.
