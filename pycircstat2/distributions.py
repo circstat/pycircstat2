@@ -5,7 +5,7 @@ import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
 from scipy.special import beta as beta_fn
-from scipy.special import gamma, i0, i1, ndtr, iv, betainc, betaincinv, gammaln, digamma
+from scipy.special import gamma, i0, i1, ndtr, ndtri, iv, betainc, betaincinv, gammaln, digamma
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -28,6 +28,8 @@ __all__ = [
     "wrapstable",
     "katojones",
 ]
+
+INV_SQRT_2PI = 1.0 / np.sqrt(2.0 * np.pi)
 
 
 OPTIMIZERS = [
@@ -1021,9 +1023,12 @@ class triangular_gen(CircularContinuous):
     def _rvs(self, rho, size=None, random_state=None):
         rng = self._init_rng(random_state)
         u = rng.uniform(0.0, 1.0, size=size)
-        return self._ppf(u, rho)
+        samples = self._ppf(u, rho)
+        if np.isscalar(samples):
+            return float(samples)
+        return np.asarray(samples, dtype=float)
 
-    def rvs(self, rho, size=None, random_state=None):
+    def rvs(self, rho=None, size=None, random_state=None):
         r"""
         Random variates from the circular triangular distribution on $[0, 2\pi)$.
 
@@ -1052,8 +1057,9 @@ class triangular_gen(CircularContinuous):
 
         Parameters
         ----------
-        rho : float
-            Concentration, $0 \le \rho \le 4/\pi^2$.
+        rho : float, optional
+            Concentration, $0 \le \rho \le 4/\pi^2$. Supply explicitly or by
+            freezing the distribution.
         size : int or tuple of ints, optional
             Output shape. If ``None`` (default), return a single scalar.
         random_state : int, numpy.random.Generator, numpy.random.RandomState, optional
@@ -1069,7 +1075,10 @@ class triangular_gen(CircularContinuous):
         This is equivalent in law to R's **circular** `rtriangular` after
         shifting its output by $+\pi$ modulo $2\pi$.
         """
-        return super().rvs(rho, size=size, random_state=random_state)
+        rho_val = getattr(self, "rho", None) if rho is None else rho
+        if rho_val is None:
+            raise ValueError("'rho' must be provided.")
+        return self._rvs(rho_val, size=size, random_state=random_state)
 
     def fit(self, data, *, weights=None, method="mle", return_info=False):
         r"""
@@ -1367,8 +1376,6 @@ class cardioid_gen(CircularContinuous):
     def _ppf(self, q, mu, rho):
         mu_arr = np.asarray(mu, dtype=float)
         rho_arr = np.asarray(rho, dtype=float)
-        if mu_arr.size != 1 or rho_arr.size != 1:
-            raise ValueError("cardioid parameters must be scalar-valued.")
 
         mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
         rho_val = float(rho_arr.reshape(-1)[0])
@@ -1451,7 +1458,7 @@ class cardioid_gen(CircularContinuous):
         return float(samples) if np.isscalar(samples) else np.asarray(samples, dtype=float)
 
 
-    def rvs(self, size=None, random_state=None, *args, **kwargs):
+    def rvs(self, mu=None, rho=None, size=None, random_state=None):
         r"""
         Draw random variates from the Cardioid distribution.
 
@@ -1469,28 +1476,29 @@ class cardioid_gen(CircularContinuous):
 
         Parameters
         ----------
+        mu : float, optional
+            Mean direction, ``0 <= mu <= 2*pi``. Supply explicitly or by
+            freezing the distribution.
+        rho : float, optional
+            Mean resultant length, ``0 <= rho <= 0.5``. Supply explicitly or by
+            freezing the distribution.
         size : int or tuple of ints, optional
             Number of samples to draw. ``None`` (default) returns a scalar.
         random_state : np.random.Generator, np.random.RandomState, or None, optional
             Random number generator to use.
-        **kwargs :
-            Additional keyword parameters forwarded to `_rvs`. When the
-            distribution is not frozen, supply ``mu`` (mean direction,
-            ``0 <= mu <= 2*pi``) and ``rho`` (mean resultant length,
-            ``0 <= rho <= 0.5``) here.
 
         Returns
         -------
         samples : ndarray or float
             Random variates on ``[0, 2π)``.
         """
-        mu = kwargs.pop("mu", getattr(self, "mu", None))
-        rho = kwargs.pop("rho", getattr(self, "rho", None))
+        mu_val = getattr(self, "mu", None) if mu is None else mu
+        rho_val = getattr(self, "rho", None) if rho is None else rho
 
-        if mu is None or rho is None:
+        if mu_val is None or rho_val is None:
             raise ValueError("Both 'mu' and 'rho' must be provided.")
 
-        return self._rvs(mu, rho, size=size, random_state=random_state)
+        return self._rvs(mu_val, rho_val, size=size, random_state=random_state)
 
     def fit(
         self,
@@ -1817,8 +1825,6 @@ class cartwright_gen(CircularContinuous):
     def _ppf(self, q, mu, zeta):
         mu_arr = np.asarray(mu, dtype=float)
         zeta_arr = np.asarray(zeta, dtype=float)
-        if mu_arr.size != 1 or zeta_arr.size != 1:
-            raise ValueError("cartwright parameters must be scalar-valued.")
 
         mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
         zeta_val = float(zeta_arr.reshape(-1)[0])
@@ -1958,7 +1964,7 @@ class cartwright_gen(CircularContinuous):
             return float(theta)
         return theta.reshape(shape)
 
-    def rvs(self, size=None, random_state=None, *args, **kwargs):
+    def rvs(self, mu=None, zeta=None, size=None, random_state=None):
         r"""
         Draw random variates from the Cartwright distribution.
 
@@ -1987,15 +1993,13 @@ class cartwright_gen(CircularContinuous):
         samples : ndarray or float
             Random variates on ``[0, 2π)``.
         """
-        mu = kwargs.pop("mu", getattr(self, "mu", None))
-        zeta = kwargs.pop("zeta", getattr(self, "zeta", None))
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+        mu_val = getattr(self, "mu", None) if mu is None else mu
+        zeta_val = getattr(self, "zeta", None) if zeta is None else zeta
 
-        if mu is None or zeta is None:
+        if mu_val is None or zeta_val is None:
             raise ValueError("Both 'mu' and 'zeta' must be provided.")
 
-        return self._rvs(mu, zeta, size=size, random_state=random_state)
+        return self._rvs(mu_val, zeta_val, size=size, random_state=random_state)
 
     def fit(
         self,
@@ -2158,6 +2162,15 @@ class wrapnorm_gen(CircularContinuous):
     cdf(x, mu, rho)
         Cumulative distribution function.
 
+    ppf(q, mu, rho)
+        Percent-point function (inverse CDF).
+
+    rvs(mu, rho, size=None, random_state=None)
+        Random variates.
+
+    fit(data, *args, **kwargs)
+        Estimate ``(mu, rho)`` via method-of-moments or maximum likelihood.
+
     Examples
     --------
     ```
@@ -2209,37 +2222,37 @@ class wrapnorm_gen(CircularContinuous):
         """
         return super().pdf(x, mu, rho, *args, **kwargs)
 
-    def _cdf(self, x, mu, rho):
-        wrapped = self._wrap_angles(x)
-        arr = np.asarray(wrapped, dtype=float)
-        flat = arr.reshape(-1)
-
+    @staticmethod
+    def _wrapnorm_cdf_pdf(theta, mu_val, sigma, *, tol=1e-13, max_iter=500):
+        theta_arr = np.asarray(theta, dtype=float)
+        flat = theta_arr.reshape(-1)
         if flat.size == 0:
-            return arr.astype(float)
+            return theta_arr.astype(float), theta_arr.astype(float)
 
-        rho_clipped = np.clip(rho, np.finfo(float).tiny, 1.0 - 1e-15)
-        sigma = np.sqrt(-2.0 * np.log(rho_clipped))
         inv_sigma = 1.0 / sigma
         two_pi = 2.0 * np.pi
 
-        theta_minus_mu = flat - mu
-        z0 = theta_minus_mu * inv_sigma
-        z_ref = (-mu) * inv_sigma
-        cdf = ndtr(z0) - ndtr(z_ref)
+        diff = flat - mu_val
+        z0 = diff * inv_sigma
+        z_ref0 = (-mu_val) * inv_sigma
 
-        tol = 1e-13
-        max_iter = 500
+        cdf = ndtr(z0) - ndtr(z_ref0)
+        pdf = INV_SQRT_2PI * inv_sigma * np.exp(-0.5 * z0**2)
+
         k = 1
         max_contrib = np.inf
         while k <= max_iter and max_contrib > tol:
             shift = two_pi * k
-            z_pos = (theta_minus_mu + shift) * inv_sigma
-            z_pos_ref = (-mu + shift) * inv_sigma
-            delta_pos = ndtr(z_pos) - ndtr(z_pos_ref)
 
-            z_neg = (theta_minus_mu - shift) * inv_sigma
-            z_neg_ref = (-mu - shift) * inv_sigma
+            z_pos = (diff + shift) * inv_sigma
+            z_pos_ref = (-mu_val + shift) * inv_sigma
+            delta_pos = ndtr(z_pos) - ndtr(z_pos_ref)
+            pdf += INV_SQRT_2PI * inv_sigma * np.exp(-0.5 * z_pos**2)
+
+            z_neg = (diff - shift) * inv_sigma
+            z_neg_ref = (-mu_val - shift) * inv_sigma
             delta_neg = ndtr(z_neg) - ndtr(z_neg_ref)
+            pdf += INV_SQRT_2PI * inv_sigma * np.exp(-0.5 * z_neg**2)
 
             cdf += delta_pos + delta_neg
             max_contrib = max(
@@ -2251,10 +2264,49 @@ class wrapnorm_gen(CircularContinuous):
             k += 1
 
         cdf = np.clip(cdf, 0.0, 1.0)
+        pdf = np.clip(pdf, 0.0, None)
 
+        cdf = cdf.reshape(theta_arr.shape)
+        pdf = pdf.reshape(theta_arr.shape)
+        return cdf, pdf
+
+    def _cdf(self, x, mu, rho):
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("wrapnorm parameters must be scalar-valued.")
+
+        mu_val = float(mu_arr.reshape(-1)[0])
+        rho_val = float(rho_arr.reshape(-1)[0])
+        two_pi = 2.0 * np.pi
+
+        if rho_val <= 1e-12:
+            uniform = flat / two_pi
+            if arr.ndim == 0:
+                value = float(uniform[0])
+                return 1.0 if np.isclose(float(wrapped), two_pi) else value
+            result = uniform.reshape(arr.shape)
+            result[np.isclose(arr, two_pi)] = 1.0
+            return result
+
+        rho_clipped = np.clip(rho_val, np.finfo(float).tiny, 1.0 - 1e-15)
+        sigma = float(np.sqrt(-2.0 * np.log(rho_clipped)))
+
+        cdf_flat, _ = self._wrapnorm_cdf_pdf(flat, mu_val, sigma)
         if arr.ndim == 0:
-            return float(cdf[0])
-        return cdf.reshape(arr.shape)
+            value = float(cdf_flat.reshape(-1)[0])
+            return 1.0 if np.isclose(float(wrapped), two_pi) else value
+
+        result = cdf_flat.reshape(arr.shape)
+        result[np.isclose(arr, two_pi)] = 1.0
+        return result
 
     def cdf(self, x, mu, rho, *args, **kwargs):
         r"""
@@ -2286,6 +2338,149 @@ class wrapnorm_gen(CircularContinuous):
         """
         return super().cdf(x, mu, rho, *args, **kwargs)
 
+    def _ppf(self, q, mu, rho):
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("wrapnorm parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(rho_arr.reshape(-1)[0])
+        two_pi = 2.0 * np.pi
+
+        q_arr = np.asarray(q, dtype=float)
+        flat = q_arr.reshape(-1)
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        def _finish(arr):
+            reshaped = arr.reshape(q_arr.shape)
+            if q_arr.ndim == 0:
+                return float(reshaped)
+            return reshaped
+
+        result = np.full_like(flat, np.nan, dtype=float)
+        valid = np.isfinite(flat)
+
+        if not np.any(valid):
+            return _finish(result)
+
+        close_zero = valid & (flat <= 0.0)
+        close_one = valid & (flat >= 1.0)
+        result[close_zero] = 0.0
+        result[close_one] = two_pi
+
+        interior = valid & ~(close_zero | close_one)
+        if not np.any(interior):
+            return _finish(result)
+
+        flat_interior = flat[interior]
+
+        if rho_val <= 1e-12:
+            result[interior] = two_pi * flat_interior
+            return _finish(result)
+
+        rho_clipped = np.clip(rho_val, np.finfo(float).tiny, 1.0 - 1e-15)
+        sigma = float(np.sqrt(-2.0 * np.log(rho_clipped)))
+
+        if sigma <= 1e-12:
+            result[interior] = np.mod(mu_val, two_pi)
+            return _finish(result)
+
+        q_sub = flat_interior
+        theta = np.clip(two_pi * q_sub, 1e-12, two_pi - 1e-12)
+        if sigma < 1.0:
+            normal_guess = mu_val + sigma * ndtri(np.clip(q_sub, 1e-12, 1.0 - 1e-12))
+            theta = 0.5 * theta + 0.5 * np.mod(normal_guess, two_pi)
+
+        lower = np.zeros_like(theta)
+        upper = np.full_like(theta, two_pi)
+        tol = 1e-12
+        max_iter = 6
+
+        theta_curr = theta
+        cdf_vals, pdf_vals = self._wrapnorm_cdf_pdf(theta_curr, mu_val, sigma)
+        delta = cdf_vals - q_sub
+
+        for _ in range(max_iter):
+            lower = np.where(delta <= 0.0, theta_curr, lower)
+            upper = np.where(delta > 0.0, theta_curr, upper)
+            if np.max(np.abs(delta)) <= tol:
+                break
+            denom = np.clip(pdf_vals, 1e-15, None)
+            step = np.clip(delta / denom, -np.pi, np.pi)
+            theta_next = theta_curr - step
+            theta_next = np.where(
+                (theta_next <= lower) | (theta_next >= upper),
+                0.5 * (lower + upper),
+                theta_next,
+            )
+            theta_next = np.clip(theta_next, 0.0, two_pi)
+            theta_curr = theta_next
+            cdf_vals, pdf_vals = self._wrapnorm_cdf_pdf(theta_curr, mu_val, sigma)
+            delta = cdf_vals - q_sub
+
+        lower = np.where(delta <= 0.0, theta_curr, lower)
+        upper = np.where(delta > 0.0, theta_curr, upper)
+
+        mask = np.abs(delta) > tol
+        if np.any(mask):
+            lower_b = lower.copy()
+            upper_b = upper.copy()
+            theta_b = theta_curr.copy()
+            for _ in range(40):
+                if not np.any(mask):
+                    break
+                mid = 0.5 * (lower_b + upper_b)
+                mid_cdf, _ = self._wrapnorm_cdf_pdf(mid, mu_val, sigma)
+                delta_mid = mid_cdf - q_sub
+                take_upper = (delta_mid > 0.0) & mask
+                take_lower = (~take_upper) & mask
+                upper_b = np.where(take_upper, mid, upper_b)
+                lower_b = np.where(take_lower, mid, lower_b)
+                theta_b = np.where(mask, mid, theta_b)
+                mask = mask & (np.abs(delta_mid) > tol)
+            theta_curr = np.where(mask, 0.5 * (lower_b + upper_b), theta_b)
+
+        result[interior] = np.mod(theta_curr, two_pi)
+        return _finish(result)
+
+    def ppf(self, q, mu, rho, *args, **kwargs):
+        r"""
+        Percent-point function (inverse CDF) of the Wrapped Normal distribution.
+
+        The quantile is found by inverting the wrapped normal CDF using a
+        safeguarded Newton iteration on $[0, 2\pi]$. At each step the algorithm
+        evaluates the truncated unwrapped Gaussian series
+        $$
+        F(\theta)=\sum_{k=-\infty}^{\infty}
+        \Bigl[\Phi\!\Bigl(\tfrac{\theta-\mu+2\pi k}{\sigma}\Bigr)
+        - \Phi\!\Bigl(\tfrac{-\mu+2\pi k}{\sigma}\Bigr)\Bigr],
+        \qquad
+        f(\theta)=\sum_{k=-\infty}^{\infty}
+        \frac{1}{\sigma}\,\varphi\!\Bigl(\tfrac{\theta-\mu+2\pi k}{\sigma}\Bigr),
+        $$
+        with $\sigma = \sqrt{-2\log\rho}$, using the CDF residual to update the
+        bracket and the PDF as the local slope. A final bisection polish ensures
+        robust convergence and keeps the quantile consistent with ``cdf`` and
+        ``rvs``.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (0 <= q <= 1).
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Shape parameter, 0 < rho < 1.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles corresponding to the given quantiles.
+        """
+        return super().ppf(q, mu, rho, *args, **kwargs)
+
     def _rvs(self, mu, rho, size=None, random_state=None):
         rng = self._init_rng(random_state)
 
@@ -2315,6 +2510,41 @@ class wrapnorm_gen(CircularContinuous):
         if np.isscalar(wrapped):
             return float(wrapped)
         return wrapped
+
+    def rvs(self, mu=None, rho=None, size=None, random_state=None):
+        r"""
+        Draw random variates from the Wrapped Normal distribution.
+
+        Samples are obtained by drawing from $N(\mu, \sigma^2)$ with
+        $\sigma = \sqrt{-2\log\rho}$ and wrapping the result modulo $2\pi$.
+        This matches the analytic mixture used in ``cdf`` and ``ppf``, keeping
+        all three methods numerically consistent.
+
+        Parameters
+        ----------
+        mu : float, optional
+            Mean direction, ``0 <= mu <= 2*pi``. Supply explicitly or by
+            freezing the distribution.
+        rho : float, optional
+            Shape parameter, ``0 < rho < 1``. Supply explicitly or by freezing
+            the distribution.
+        size : int or tuple of ints, optional
+            Number of samples to draw. ``None`` (default) returns a scalar.
+        random_state : np.random.Generator, np.random.RandomState, or None, optional
+            Random number generator to use.
+
+        Returns
+        -------
+        samples : ndarray or float
+            Random variates on ``[0, 2π)``.
+        """
+        mu_val = getattr(self, "mu", None) if mu is None else mu
+        rho_val = getattr(self, "rho", None) if rho is None else rho
+
+        if mu_val is None or rho_val is None:
+            raise ValueError("Both 'mu' and 'rho' must be provided.")
+
+        return self._rvs(mu_val, rho_val, size=size, random_state=random_state)
 
     def fit(
         self,
