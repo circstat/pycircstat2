@@ -62,6 +62,23 @@ def test_cardioid_cdf_ppf_roundtrip(mu, rho):
     wrapped_diff = np.mod(theta_back - theta + np.pi, 2.0 * np.pi) - np.pi
     np.testing.assert_allclose(wrapped_diff, 0.0, atol=1e-9)
 
+@pytest.mark.parametrize("rho", [0.0, 0.3])
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
+def test_cardioid_rvs_matches_ppf(mu, rho):
+    rng_samples = np.random.default_rng(321)
+    rng_replay = np.random.default_rng(321)
+    cd = cardioid(mu=mu, rho=rho)
+    samples = cd.rvs(size=512, random_state=rng_samples)
+    if np.isscalar(samples):
+        samples = np.array([samples])
+    u = rng_replay.random(samples.size)
+    if rho > 0:
+        expected = cd.dist._solve_inverse_cdf(u, float(mu), float(rho))
+    else:
+        expected = 2 * np.pi * u
+    expected = np.mod(expected, 2.0 * np.pi)
+    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-8, rtol=0.0)
+
 
 def test_cartwright():
 
@@ -95,10 +112,40 @@ def test_cartwright_cdf_ppf_roundtrip(mu, zeta):
     np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
 
 
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
+@pytest.mark.parametrize("zeta", [0.2, 1.0])
+def test_cartwright_rvs_matches_ppf(mu, zeta):
+    rng_samples = np.random.default_rng(456)
+    rng_replay = np.random.default_rng(456)
+    cw = cartwright(mu=mu, zeta=zeta)
+    samples = cw.rvs(size=512, random_state=rng_samples)
+    if np.isscalar(samples):
+        samples = np.array([samples])
+    beta_b = 1.0 / zeta + 0.5
+    t = rng_replay.beta(0.5, beta_b, size=samples.size)
+    sqrt_t = np.sqrt(t)
+    angles = 2.0 * np.arcsin(np.clip(sqrt_t, 0.0, 1.0))
+    signs = np.where(rng_replay.random(size=samples.size) < 0.5, -1.0, 1.0)
+    expected = np.mod(mu + signs * angles, 2.0 * np.pi)
+    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
+
+
 def test_triangular_ppf_vectorized():
     q = np.linspace(0.1, 0.9, num=5)
     out_zero = triangular.ppf(q, rho=0.0)
     np.testing.assert_allclose(out_zero, q * (2 * np.pi))
+
+@pytest.mark.parametrize("rho", [0.0, 0.3])
+def test_triangular_rvs_matches_ppf(rho):
+    rng_samples = np.random.default_rng(123)
+    rng_replay = np.random.default_rng(123)
+    samples = triangular.rvs(rho=rho, size=512, random_state=rng_samples)
+    if np.isscalar(samples):
+        samples = np.array([samples])
+    u = rng_replay.random(samples.size)
+    expected = triangular._ppf(u, rho)
+    expected = np.mod(expected, 2.0 * np.pi)
+    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
 
 
 @pytest.mark.parametrize("rho", [0.0, 0.25, 4.0 / np.pi**2])
@@ -219,6 +266,56 @@ def test_wrapnorm_cdf_matches_numeric():
     np.testing.assert_allclose(analytic, numeric, atol=1e-7)
     diffs = np.diff(analytic)
     assert np.all(diffs >= -1e-10)
+
+
+@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
+@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
+def test_wrapnorm_cdf_ppf_roundtrip(mu, rho):
+    wn = wrapnorm(rho=rho, mu=mu)
+    q = np.linspace(0.0, 1.0, num=9)
+    theta = wn.ppf(q)
+    np.testing.assert_array_less(-1e-12, theta)
+    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-10)
+    np.testing.assert_allclose(wn.cdf(theta), q, atol=5e-10)
+
+    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
+    q_grid = wn.cdf(grid)
+    theta_back = wn.ppf(q_grid)
+    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
+    pdf_grid = wrapnorm.pdf(grid, mu=mu, rho=rho)
+    high_slope = pdf_grid > 1e-4
+    if np.any(high_slope):
+        np.testing.assert_allclose(wrapped[high_slope], 0.0, atol=5e-6)
+    if np.any(~high_slope):
+        np.testing.assert_allclose(wrapped[~high_slope], 0.0, atol=1e-2)
+
+
+@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
+@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
+def test_wrapnorm_rvs_matches_constructor(mu, rho):
+    rng_samples = np.random.default_rng(789)
+    rng_replay = np.random.default_rng(789)
+
+    wn = wrapnorm(mu=mu, rho=rho)
+    samples = wn.rvs(size=512, random_state=rng_samples)
+    if np.isscalar(samples):
+        samples = np.array([samples])
+
+    rho_clipped = np.clip(rho, np.finfo(float).tiny, 1.0 - 1e-15)
+    two_pi = 2.0 * np.pi
+
+    if rho_clipped <= 1e-12:
+        expected = rng_replay.uniform(0.0, two_pi, size=samples.size)
+    else:
+        sigma = float(np.sqrt(-2.0 * np.log(rho_clipped)))
+        mu_mod = float(np.mod(mu, two_pi))
+        if sigma < 1e-12:
+            expected = np.full(samples.size, mu_mod, dtype=float)
+        else:
+            expected = rng_replay.normal(loc=mu_mod, scale=sigma, size=samples.size)
+            expected = np.mod(expected, two_pi)
+
+    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
 
 
 def test_vonmises_cdf_matches_numeric():
