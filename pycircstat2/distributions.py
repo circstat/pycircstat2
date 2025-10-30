@@ -1288,7 +1288,8 @@ class cardioid_gen(CircularContinuous):
 
         tol = 1e-12
         tiny = 1e-14
-        max_iter = 6
+        use_halley = rho_val > 0.25
+        max_iter = 6 if use_halley else 3
 
         for iteration in range(max_iter):
             delta = (
@@ -1304,7 +1305,7 @@ class cardioid_gen(CircularContinuous):
 
             step_newton = np.where(np.abs(d1) > tiny, delta / d1, 0.0)
 
-            if iteration == 0:
+            if iteration == 0 and use_halley:
                 denom = 2.0 * d1**2 - delta * d2
                 halley_valid = np.abs(denom) > tiny
                 step_halley = np.where(
@@ -1851,6 +1852,10 @@ class wrapnorm_gen(CircularContinuous):
     Implementation based on Section 4.3.7 of Pewsey et al. (2014)
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._series_window_cache = {}
+
     def _argcheck(self, mu, rho):
         return 0 <= mu <= np.pi * 2 and 0 < rho < 1
 
@@ -2060,16 +2065,42 @@ class wrapnorm_gen(CircularContinuous):
                 return np.full_like(x, -np.log(2.0 * np.pi), dtype=float)
 
             two_pi = 2.0 * np.pi
-            max_k = max(5, int(np.ceil(3.0 * sigma / two_pi)) + 5)
-            ks = np.arange(-max_k, max_k + 1, dtype=float)
-            diff = x[:, None] - mu_param + two_pi * ks[None, :]
-            exponents = -0.5 * (diff / sigma) ** 2
-            max_exp = np.max(exponents, axis=1, keepdims=True)
-            sum_exp = np.sum(np.exp(exponents - max_exp), axis=1)
-            log_pdf = (
-                max_exp.squeeze(1) + np.log(sum_exp) - 0.5 * np.log(2.0 * np.pi) - np.log(sigma)
+            cache = getattr(self, "_series_window_cache", None)
+            if cache is None:
+                cache = {}
+                self._series_window_cache = cache
+
+            mu_norm = float(np.mod(mu_param, two_pi))
+            mu_bucket = int(round(mu_norm / two_pi * 512)) % 512
+            rho_bucket = int(round(min(4095.0, -np.log1p(-rho_val) * 64.0)))
+            key = (mu_bucket, rho_bucket)
+
+            max_cap = 256
+            max_k = cache.get(
+                key,
+                max(5, int(np.ceil(3.0 * sigma / two_pi)) + 5),
             )
-            return log_pdf.astype(float, copy=False)
+
+            tail_tol = 1e-10
+            while True:
+                ks = np.arange(-max_k, max_k + 1, dtype=float)
+                diff = x[:, None] - mu_param + two_pi * ks[None, :]
+                exponents = -0.5 * (diff / sigma) ** 2
+                max_exp = np.max(exponents, axis=1, keepdims=True)
+                shifted = np.exp(exponents - max_exp)
+                sum_exp = np.sum(shifted, axis=1)
+                log_pdf = max_exp.squeeze(1) + np.log(sum_exp)
+                log_pdf -= 0.5 * np.log(2.0 * np.pi) + np.log(sigma)
+
+                tail_contrib = float(
+                    np.max(shifted[:, (0, -1)] / np.maximum(sum_exp[:, None], 1e-300))
+                )
+                if tail_contrib <= tail_tol or max_k >= max_cap:
+                    cache[key] = max_k
+                    return log_pdf.astype(float, copy=False)
+
+                max_k = min(max_cap, max_k + 2)
+            return log_pdf
 
         def nll(params):
             mu_param, rho_param = params
@@ -2271,26 +2302,6 @@ class wrapcauchy_gen(CircularContinuous):
         return super().cdf(x, mu, rho, *args, **kwargs)
 
     def _rvs(self, mu, rho, size=None, random_state=None):
-        """
-        Random variate generation for the Wrapped Cauchy distribution.
-
-        Parameters
-        ----------
-
-        mu : float
-            Mean direction, 0 <= mu <= 2*pi.
-        rho : float
-            Mean resultant length, 0 <= rho <= 1.
-        size : int or tuple, optional
-            Number of samples to generate.
-        random_state : RandomState, optional
-            Random number generator instance.
-
-        Returns
-        -------
-        samples : ndarray
-            Random variates from the Wrapped Cauchy distribution.
-        """
         rng = self._init_rng(random_state)
 
         mu_arr = np.asarray(mu, dtype=float)
@@ -2311,12 +2322,42 @@ class wrapcauchy_gen(CircularContinuous):
                 return angle
             return np.full(size, angle, dtype=float)
 
-        u = rng.uniform(0.0, 1.0, size=size)
-        factor = (1.0 + rho_val) / (1.0 - rho_val)
-        tan_term = np.tan(np.pi * (u - 0.5))
-        theta = mu_val + 2.0 * np.arctan(factor * tan_term)
-        theta = np.mod(theta, two_pi)
-        return theta
+        if size is None:
+            target_shape = ()
+        elif np.isscalar(size):
+            target_shape = (int(size),)
+        else:
+            target_shape = tuple(int(dim) for dim in np.atleast_1d(size))
+
+        # Möbius transform sampler: exact and numerically stable for rho<1.
+        u = rng.uniform(-np.pi, np.pi, size=target_shape)
+        z = np.exp(1j * u)
+        alpha = rho_val * np.exp(1j * mu_val)
+        denom = 1.0 + rho_val * np.exp(-1j * mu_val) * z
+        tiny = 1e-15
+        mask = np.abs(denom) < tiny
+        denom = np.where(mask, tiny, denom)
+        w = (z + alpha) / denom
+        angles = np.angle(w)
+        original_shape = angles.shape
+
+        if np.any(mask):
+            # Fallback to tangent sampler for rare near-pole cases.
+            count = int(np.count_nonzero(mask))
+            fallback_u = rng.uniform(0.0, 1.0, size=count)
+            factor = (1.0 + rho_val) / (1.0 - rho_val)
+            tan_term = np.tan(np.pi * (fallback_u - 0.5))
+            fallback = mu_val + 2.0 * np.arctan(factor * tan_term)
+            fallback = np.mod(fallback, two_pi)
+            angles_flat = angles.reshape(-1)
+            mask_flat = mask.reshape(-1)
+            angles_flat[mask_flat] = fallback
+            angles = angles_flat.reshape(original_shape)
+
+        theta = np.mod(angles, two_pi)
+        if target_shape == ():
+            return float(theta)
+        return theta.reshape(target_shape)
 
     def fit(
         self,
@@ -3217,19 +3258,16 @@ class vonmises_gen(CircularContinuous):
         r = (1.0 + b**2) / (2.0 * b)
 
         if size is None:
-            total = 1
-            target_shape = None
+            samples = np.empty(1, dtype=float)
+            target_shape = ()
+        elif np.isscalar(size):
+            samples = np.empty(int(size), dtype=float)
+            target_shape = (int(size),)
         else:
-            if np.isscalar(size):
-                target_shape = (int(size),)
-            else:
-                target_shape = tuple(int(s) for s in np.atleast_1d(size))
-            total = 1
-            for dim in target_shape:
-                total *= dim
+            target_shape = tuple(int(s) for s in np.atleast_1d(size))
+            samples = np.empty(int(np.prod(target_shape)), dtype=float)
 
-        samples = np.empty(total, dtype=float)
-
+        total = samples.size
         for idx in range(total):
             while True:
                 u1 = rng.uniform()
@@ -3243,12 +3281,8 @@ class vonmises_gen(CircularContinuous):
             theta = mu_val + np.sign(u3 - 0.5) * np.arccos(f)
             samples[idx] = np.mod(theta, two_pi)
 
-        if size is None:
-            return float(samples[0])
-
         if target_shape == ():
-            return samples[0]
-
+            return float(samples[0])
         return samples.reshape(target_shape)
 
     def rvs(self, size=None, random_state=None, *args, **kwargs):
