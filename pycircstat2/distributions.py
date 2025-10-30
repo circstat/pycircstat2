@@ -3875,9 +3875,7 @@ class vonmises_gen(CircularContinuous):
     def _ppf(self, q, mu, kappa):
         mu_arr = np.asarray(mu, dtype=float)
         kappa_arr = np.asarray(kappa, dtype=float)
-        if mu_arr.size != 1 or kappa_arr.size != 1:
-            raise ValueError("vonmises parameters must be scalar-valued.")
-
+        
         mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
         kappa_val = float(kappa_arr.reshape(-1)[0])
         if kappa_val < 0.0:
