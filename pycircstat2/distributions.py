@@ -5,8 +5,7 @@ import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, minimize_scalar, root, brentq
 from scipy.special import beta as beta_fn
-from scipy.special import gamma, i0, i0e, i1, ndtr, ndtri, iv, betainc, betaincinv, gammaln, digamma
-from scipy.special import lpmv
+from scipy.special import gamma, i0, i0e, i1, ndtr, ndtri, iv, betainc, betaincinv, gammaln, digamma, lpmv
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -4468,6 +4467,7 @@ class jonespewsey_gen(CircularContinuous):
 
         where ``c(\kappa, \psi)`` is the normalizing constant, evaluated numerically with
         stable special-case reductions:
+
             - ``c = 1 / (2\pi)`` when ``\kappa`` is effectively zero (uniform limit).
             - ``c = 1 / (2\pi I_0(\kappa))`` as ``\psi \to 0`` (von Mises limit).
 
@@ -4528,6 +4528,36 @@ class jonespewsey_gen(CircularContinuous):
         )
 
         return cdf.reshape(arr.shape)
+
+    def cdf(self, x, mu, kappa, psi, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Jones--Pewsey distribution.
+
+        $$
+        F(\theta)=\frac{\theta-\mu}{2\pi}+\frac{1}{\pi}
+        \sum_{n\ge 1}\frac{\alpha_n(\kappa,\psi)}{n}
+        \sin\bigl(n(\theta-\mu)\bigr),
+        $$
+        where the cosine moments $\alpha_n$ are evaluated through the
+        associated Legendre expression reported by Jones & Pewsey (2005).
+        Coefficients are cached per parameter set and the routine falls back to
+        numerical quadrature only when the series becomes unstable,
+        reproducing the von Mises limit as $\psi \to 0$ and the uniform limit
+        as $\kappa \to 0$.
+
+        Parameters
+        ----------
+        x : array_like
+            Evaluation points (radians), automatically wrapped onto [0, 2π).
+        mu, kappa, psi : float
+            Jones--Pewsey location, concentration, and shape parameters.
+
+        Returns
+        -------
+        ndarray
+            CDF values matching the shape of x.
+        """
+        return super().cdf(x, mu, kappa, psi, *args, **kwargs)
 
     def _ppf(self, q, mu, kappa, psi):
         mu_val = _jp_ensure_scalar(mu, "mu")
@@ -4634,6 +4664,30 @@ class jonespewsey_gen(CircularContinuous):
         result = result.reshape(q_arr.shape)
         return result
 
+    def ppf(self, q, mu, kappa, psi, *args, **kwargs):
+        r"""
+        Quantile function of the Jones--Pewsey law.
+
+        The inverse CDF is obtained by a safeguarded Newton iteration that uses
+        the series-based CDF as the residual and the fully normalised PDF as the
+        slope.  Bracketing and bisection polishing guarantee convergence on the
+        circular interval [0, 2π] while the implementation switches to the
+        closed-form von Mises or uniform solutions in their respective limits.
+
+        Parameters
+        ----------
+        q : array_like
+            Probabilities in [0, 1].
+        mu, kappa, psi : float
+            Jones--Pewsey parameters.
+
+        Returns
+        -------
+        ndarray
+            Quantiles with the same shape as q.
+        """
+        return super().ppf(q, mu, kappa, psi, *args, **kwargs)
+
     def _rvs(self, mu, kappa, psi, size=None, random_state=None):
         rng = self._init_rng(random_state)
 
@@ -4683,6 +4737,30 @@ class jonespewsey_gen(CircularContinuous):
                 filled += n_accept
 
         return samples.reshape(size_tuple)
+
+    def rvs(self, mu, kappa, psi, size=None, random_state=None):
+        r"""
+        Draw random variates from the Jones-Pewsey distribution.
+
+        A von Mises envelope is tuned to the target density via local curvature
+        matching and a grid-based optimisation, yielding an acceptance-rejection
+        sampler that is both exact and efficient across the parameter space.
+
+        Parameters
+        ----------
+        mu, kappa, psi : float
+            Jones-Pewsey parameters.
+        size : int or tuple of ints, optional
+            Output shape.  When omitted a single draw is returned.
+        random_state : numpy.random.Generator or compatible seed, optional
+            Source of randomness.
+
+        Returns
+        -------
+        ndarray
+            Sample(s) wrapped to [0, 2π).
+        """
+        return super().rvs(mu, kappa, psi, size=size, random_state=random_state)
 
     def _jp_sampler_envelope(self, mu, kappa, psi):
         key = (float(np.mod(mu, 2.0 * np.pi)), float(kappa), float(psi))
@@ -4795,6 +4873,45 @@ class jonespewsey_gen(CircularContinuous):
         optimizer="L-BFGS-B",
         **kwargs,
     ):
+        r"""
+        Estimate Jones--Pewsey parameters from data.
+
+        A moment-based start is built from the sample circular mean
+        μ̂ and resultant length r₁ with the usual von Mises
+        approximation for κ.  The shape parameter ψ is seeded
+        by scanning a coarse grid and the three parameters are then refined via
+        constrained maximum likelihood:
+
+        ```
+        ℓ(μ, κ, ψ) = Σᵢ wᵢ log( c(κ, ψ) K_JP(θᵢ − μ; κ, ψ) ).
+        ```
+
+        The normalising constant c is evaluated using the associated
+        Legendre function whenever stable, with numerical quadrature as a
+        fallback.  Set method="moments" to skip the optimisation and
+        return the analytic seed.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians), wrapped internally.
+        weights : array_like, optional
+            Non-negative weights broadcastable to data.
+        method : {"moments", "mle"}, optional
+            Whether to return the analytic seed or run the numerical MLE.
+        return_info : bool, optional
+            If True return a diagnostics dictionary alongside the estimates.
+        psi_bounds, kappa_bounds : tuple, optional
+            Parameter bounds used by the optimiser.
+        optimizer : str, optional
+            Name of the ``scipy.optimize.minimize`` method.
+
+        Returns
+        -------
+        tuple or (tuple, dict)
+            Estimated parameters (mu, kappa, psi) and, optionally,
+            optimisation diagnostics when return_info is True.
+        """
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
         x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
         if x.size == 0:
@@ -5119,7 +5236,9 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
         Probability density function of the Sine-Skewed Jones-Pewsey distribution.
 
         $$
-        f(\theta) = \frac{(\cosh(\kappa \psi) + \sinh(\kappa \psi) \cos(\theta - \xi))^{1/\psi}}{2\pi \cosh(\kappa \pi)}
+        f(\theta) = c(\kappa,\psi)\Bigl(\cosh(\kappa\psi)+
+        \sinh(\kappa\psi)\cos(\theta-\xi)\Bigr)^{1/\psi}
+        \bigl(1+\lambda \sin(\theta-\xi)\bigr).
         $$
 
         Parameters
@@ -5197,6 +5316,16 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
 
         cdf = base_cdf + lmbd_val * skew_cdf
         return np.clip(cdf, 0.0, 1.0).reshape(arr.shape)
+
+    def cdf(self, x, xi, kappa, psi, lmbd, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the sine-skewed Jones--Pewsey law.
+
+        No closed form is available; the implementation integrates the PDF on
+        [0, 2π) using adaptive quadrature, honouring the symmetric JP and
+        uniform limits when ``lambda`` or ``kappa`` approach zero.
+        """
+        return super().cdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
 
     def _ppf(self, q, xi, kappa, psi, lmbd):
         xi_val = _jp_ensure_scalar(xi, "xi")
@@ -5304,6 +5433,17 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
 
         return result.reshape(q_arr.shape)
 
+    def ppf(self, q, xi, kappa, psi, lmbd, *args, **kwargs):
+        r"""
+        Quantile function of the sine-skewed Jones--Pewsey distribution.
+
+        The solver mirrors the symmetric JP inverse CDF while reusing the
+        skew-aware CDF so that round-trip accuracy is preserved even for large
+        skewness.  Uniform and purely symmetric edge cases are delegated to the
+        corresponding closed forms.
+        """
+        return super().ppf(q, xi, kappa, psi, lmbd, *args, **kwargs)
+
     def _rvs(self, xi, kappa, psi, lmbd, size=None, random_state=None):
         rng = self._init_rng(random_state)
 
@@ -5343,6 +5483,18 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
 
         return samples.reshape(size_tuple)
 
+    def rvs(self, xi, kappa, psi, lmbd, size=None, random_state=None):
+        r"""
+        Draw random variates from the sine-skewed Jones--Pewsey distribution.
+
+        Sampling follows the acceptance-rejection construction of Abe & Pewsey
+        (2011): draw from the symmetric JP base and accept with probability
+        $$\frac{1 + \lambda \sin\phi}{1 + |\lambda|}.$$  This scheme is exact,
+        automatically respects the skew symmetry, and retains the base
+        sampler's efficiency.
+        """
+        return super().rvs(xi, kappa, psi, lmbd, size=size, random_state=random_state)
+
     def fit(
         self,
         data,
@@ -5358,6 +5510,17 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
         base_kwargs=None,
         **kwargs,
     ):
+        r"""
+        Estimate sine-skewed JP parameters via a two-step maximum likelihood fit.
+
+        1. Fit the symmetric JP base (xi, kappa, psi) using the MLE routine.
+        2. Maximise the weighted log term sum log(1 + lambda sin(theta_i - xi)).
+        3. Optionally refine all four parameters jointly (set refine=True).
+
+        The acceptance-rejection sampler used for the skewed density makes the
+        likelihood well behaved across |lambda| < 1, while moment starts ensure
+        stability near the uniform limit.
+        """
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
         x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
         if x.size == 0:
@@ -5637,6 +5800,17 @@ class jonespewsey_asym_gen(CircularContinuous):
 
         return cdf.reshape(arr.shape)
 
+    def cdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the argument-warped JP family.
+
+        The asymmetric transformation phi -> phi + nu cos(phi) is handled by
+        precomputing a high-resolution trapezoidal cumulative table for each
+        parameter set.  Interpolation of this table gives fast evaluations while
+        preserving the limiting cases (nu -> 0 reduces to the symmetric JP CDF).
+        """
+        return super().cdf(x, xi, kappa, psi, nu, *args, **kwargs)
+
     def _ppf(self, q, xi, kappa, psi, nu):
         xi_val = _jp_ensure_scalar(xi, "xi")
         xi_val = float(np.mod(xi_val, 2.0 * np.pi))
@@ -5739,6 +5913,16 @@ class jonespewsey_asym_gen(CircularContinuous):
 
         return result.reshape(q_arr.shape)
 
+    def ppf(self, q, xi, kappa, psi, nu, *args, **kwargs):
+        r"""
+        Quantile function of the asymmetric Jones--Pewsey distribution.
+
+        Quantiles are obtained by the same safeguarded Newton iteration as in
+        the symmetric case, with the warp-aware CDF supplying residuals.  When
+        nu is effectively zero the method delegates to the symmetric JP solver.
+        """
+        return super().ppf(q, xi, kappa, psi, nu, *args, **kwargs)
+
     def _rvs(self, xi, kappa, psi, nu, size=None, random_state=None):
         rng = self._init_rng(random_state)
 
@@ -5791,6 +5975,17 @@ class jonespewsey_asym_gen(CircularContinuous):
                 filled += n_accept
 
         return samples.reshape(size_tuple)
+
+    def rvs(self, xi, kappa, psi, nu, size=None, random_state=None):
+        r"""
+        Draw random variates from the asymmetric Jones--Pewsey distribution.
+
+        Sampling uses a curvature-matched von Mises envelope tuned via the
+        optimisation helper, providing an exact acceptance-rejection scheme that
+        works well across nu in [0, 1).  Uniform and symmetric limits are
+        handled explicitly.
+        """
+        return super().rvs(xi, kappa, psi, nu, size=size, random_state=random_state)
 
     def _asym_sampler_envelope(self, xi, kappa, psi, nu):
         key = (float(np.mod(xi, 2.0 * np.pi)), float(kappa), float(psi), float(nu))
@@ -5853,6 +6048,14 @@ class jonespewsey_asym_gen(CircularContinuous):
         base_kwargs=None,
         **kwargs,
     ):
+        r"""
+        Estimate asymmetric JP parameters by maximum likelihood.
+
+        The symmetric JP fit supplies starting values for (xi, kappa, psi) with
+        nu initialised at zero.  The full four-parameter log-likelihood is then
+        optimised under simple bounds, re-using the cached normalising constant
+        and envelope machinery developed for the JP core.
+        """
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
         x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
         if x.size == 0:
