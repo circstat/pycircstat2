@@ -1261,30 +1261,29 @@ class cardioid_gen(CircularContinuous):
         """
         return super().cdf(x, mu, rho, *args, **kwargs)
 
-    def _rvs(self, mu, rho, size=None, random_state=None):
-        rng = self._init_rng(random_state)
-
-        mu_arr = np.asarray(mu, dtype=float)
-        rho_arr = np.asarray(rho, dtype=float)
-        if mu_arr.size != 1 or rho_arr.size != 1:
-            raise ValueError("cardioid parameters must be scalar-valued.")
-
-        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
-        rho_val = float(rho_arr.reshape(-1)[0])
-        if not (0.0 <= rho_val <= 0.5):
-            raise ValueError("`rho` must lie in [0, 0.5].")
-
+    def _solve_inverse_cdf(self, probabilities, mu_val, rho_val):
         two_pi = 2.0 * np.pi
+        probs = np.asarray(probabilities, dtype=float)
+
+        if probs.size == 0:
+            return probs.astype(float)
+
         sin_mu = np.sin(mu_val)
 
         if np.isclose(rho_val, 0.0, atol=1e-15):
-            samples = rng.uniform(0.0, two_pi, size=size)
-            return float(samples) if np.isscalar(samples) else samples
+            result = two_pi * probs
+            if result.ndim == 0:
+                value = float(result)
+                return two_pi if np.isclose(float(probs), 1.0, rtol=0.0, atol=1e-12) else value
+            mask_one = np.isclose(probs, 1.0, rtol=0.0, atol=1e-12)
+            if np.any(mask_one):
+                result = result.copy()
+                result[mask_one] = two_pi
+            return result
 
-        u = rng.uniform(0.0, 1.0, size=size)
-        u_arr = np.asarray(u, dtype=float)
-        theta = mu_val + two_pi * (u_arr - 0.5)
+        theta = mu_val + two_pi * (probs - 0.5)
         theta = np.mod(theta, two_pi)
+        theta = np.asarray(theta, dtype=float)
 
         tol = 1e-12
         tiny = 1e-14
@@ -1294,7 +1293,7 @@ class cardioid_gen(CircularContinuous):
         for iteration in range(max_iter):
             delta = (
                 theta + 2.0 * rho_val * (np.sin(theta - mu_val) + sin_mu)
-            ) / two_pi - u_arr
+            ) / two_pi - probs
 
             converged = np.abs(delta) <= tol
             if np.all(converged):
@@ -1321,11 +1320,14 @@ class cardioid_gen(CircularContinuous):
 
         delta = (
             theta + 2.0 * rho_val * (np.sin(theta - mu_val) + sin_mu)
-        ) / two_pi - u_arr
+        ) / two_pi - probs
         remaining = np.abs(delta) > 10.0 * tol
         if np.any(remaining):
-            idx = np.flatnonzero(remaining.reshape(-1))
-            target = u_arr.reshape(-1)[idx]
+            theta_shape = theta.shape
+            theta_flat = theta.reshape(-1)
+            probs_flat = probs.reshape(-1)
+            remaining_flat = remaining.reshape(-1)
+            target = probs_flat[remaining_flat]
             low = np.zeros_like(target)
             high = np.full_like(target, two_pi)
             for _ in range(32):
@@ -1336,15 +1338,120 @@ class cardioid_gen(CircularContinuous):
                 mask_low = f_mid <= target
                 low = np.where(mask_low, mid, low)
                 high = np.where(mask_low, high, mid)
-            theta_remaining = 0.5 * (low + high)
-            theta_flat = np.asarray(theta, dtype=float).reshape(-1)
-            theta_flat[idx] = theta_remaining
-            theta = np.mod(theta_flat.reshape(theta.shape), two_pi)
+            theta_flat[remaining_flat] = 0.5 * (low + high)
+            theta = theta_flat.reshape(theta_shape)
 
         result = np.mod(theta, two_pi)
         if result.ndim == 0:
+            value = float(result)
+            return two_pi if np.isclose(float(probs), 1.0, rtol=0.0, atol=1e-12) else value
+
+        mask_one = np.isclose(probs, 1.0, rtol=0.0, atol=1e-12)
+        if np.any(mask_one):
+            result = result.copy()
+            result[mask_one] = two_pi
+        return result
+
+    def _rvs(self, mu, rho, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("cardioid parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(rho_arr.reshape(-1)[0])
+        if not (0.0 <= rho_val <= 0.5):
+            raise ValueError("`rho` must lie in [0, 0.5].")
+
+        two_pi = 2.0 * np.pi
+
+        if np.isclose(rho_val, 0.0, atol=1e-15):
+            samples = rng.uniform(0.0, two_pi, size=size)
+            return float(samples) if np.isscalar(samples) else samples
+
+        u = rng.uniform(0.0, 1.0, size=size)
+        samples = self._solve_inverse_cdf(u, mu_val, rho_val)
+        return float(samples) if np.isscalar(samples) else np.asarray(samples, dtype=float)
+
+    def _ppf(self, q, mu, rho):
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+        if mu_arr.size != 1 or rho_arr.size != 1:
+            raise ValueError("cardioid parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(rho_arr.reshape(-1)[0])
+        if not (0.0 <= rho_val <= 0.5):
+            raise ValueError("`rho` must lie in [0, 0.5].")
+
+        q_arr = np.asarray(q, dtype=float)
+        if q_arr.size == 0:
+            return q_arr.astype(float)
+
+        flat = q_arr.reshape(-1)
+        result = np.full_like(flat, np.nan, dtype=float)
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if np.any(valid):
+            solved = np.asarray(
+                self._solve_inverse_cdf(flat[valid], mu_val, rho_val),
+                dtype=float,
+            ).reshape(-1)
+            result[valid] = solved
+
+        result = result.reshape(q_arr.shape)
+        if q_arr.ndim == 0:
             return float(result)
-        return result.reshape(u_arr.shape)
+        return result
+
+    def ppf(self, q, mu, rho, *args, **kwargs):
+        """
+        Percent-point function (inverse CDF) of the Cardioid distribution.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (0 <= q <= 1).
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 <= rho <= 0.5.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles corresponding to the given quantiles.
+        """
+        return super().ppf(q, mu, rho, *args, **kwargs)
+
+    def rvs(self, size=None, random_state=None, *args, **kwargs):
+        """
+        Draw random variates from the Cardioid distribution.
+
+        Parameters
+        ----------
+        mu : float, optional
+            Mean direction, 0 <= mu <= 2*pi. Provide either via keyword or by freezing the distribution.
+        rho : float, optional
+            Mean resultant length, 0 <= rho <= 0.5. Provide either via keyword or by freezing the distribution.
+        size : int or tuple of ints, optional
+            Number of samples to draw.
+        random_state : np.random.Generator, np.random.RandomState, or None, optional
+            Random number generator to use.
+
+        Returns
+        -------
+        samples : ndarray or float
+            Random variates on ``[0, 2π)``.
+        """
+        mu = kwargs.pop("mu", getattr(self, "mu", None))
+        rho = kwargs.pop("rho", getattr(self, "rho", None))
+
+        if mu is None or rho is None:
+            raise ValueError("Both 'mu' and 'rho' must be provided.")
+
+        return self._rvs(mu, rho, size=size, random_state=random_state)
 
     def fit(
         self,

@@ -31,6 +31,25 @@ def test_cardioid():
     np.testing.assert_approx_equal(cd.ppf(0.6909859), np.pi)
 
 
+@pytest.mark.parametrize("rho", [0.0, 0.2, 0.49])
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
+def test_cardioid_cdf_ppf_roundtrip(mu, rho):
+    cd = cardioid(rho=rho, mu=mu)
+    q = np.linspace(0.0, 1.0, num=9)
+    x = cd.ppf(q)
+    np.testing.assert_array_less(-1e-12, x)
+    np.testing.assert_array_less(x, 2.0 * np.pi + 1e-10)
+
+    q_back = cd.cdf(x)
+    np.testing.assert_allclose(q_back, q, atol=5e-11)
+
+    theta = np.linspace(0.0, 2.0 * np.pi, num=7)
+    q_theta = cd.cdf(theta)
+    theta_back = cd.ppf(q_theta)
+    wrapped_diff = np.mod(theta_back - theta + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(wrapped_diff, 0.0, atol=1e-9)
+
+
 def test_cartwright():
 
     cw = cartwright(zeta=0.1, mu=np.pi / 2)
