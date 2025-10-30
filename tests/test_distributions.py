@@ -279,6 +279,15 @@ def test_cartwright_cdf_matches_numeric():
     assert np.all(diffs >= -1e-10)
 
 
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3, np.pi])
+@pytest.mark.parametrize("zeta", [0.1, 1.0, 10.0])
+def test_cartwright_cdf_monotonic(mu, zeta):
+    theta = np.linspace(0.0, 2.0 * np.pi, 512)
+    cdf_vals = cartwright.cdf(theta, mu, zeta)
+    diffs = np.diff(cdf_vals)
+    assert np.all(diffs >= -1e-12), "Cartwright CDF must be non-decreasing"
+
+
 def test_wrapnorm():
 
     wn = wrapnorm(rho=0.75, mu=np.pi / 2)
@@ -352,6 +361,17 @@ def test_wrapnorm_rvs_matches_constructor(mu, rho):
             expected = np.mod(expected, two_pi)
 
     np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
+
+
+@pytest.mark.parametrize("mu", [0.0, np.pi / 4, np.pi])
+@pytest.mark.parametrize("rho", [0.1, 0.25, 0.5, 0.9])
+def test_wrapnorm_ppf_monotonic(mu, rho):
+    q = np.linspace(1e-12, 1.0 - 1e-12, 1024)
+    theta = wrapnorm.ppf(q, mu=mu, rho=rho)
+    diffs = np.diff(theta)
+    assert np.all(diffs >= -1e-10), "Wrapped normal PPF must be non-decreasing"
+    assert np.all(theta >= -1e-12)
+    assert np.all(theta <= 2.0 * np.pi)
 
 
 def test_vonmises_cdf_matches_numeric():

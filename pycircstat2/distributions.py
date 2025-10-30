@@ -1795,7 +1795,9 @@ class cartwright_gen(CircularContinuous):
             np.clip(H_end - H_start, 0.0, 1.0),
             1.0 - np.clip(H_start - H_end, 0.0, 1.0),
         )
-        cdf = np.mod(cdf, 1.0)
+        negative = cdf < 0.0
+        if np.any(negative):
+            cdf = np.where(negative, cdf + 1.0, cdf)
         cdf = np.clip(cdf, 0.0, 1.0)
 
         if arr.ndim == 0:
@@ -2447,7 +2449,13 @@ class wrapnorm_gen(CircularContinuous):
                 mask = mask & (np.abs(delta_mid) > tol)
             theta_curr = np.where(mask, 0.5 * (lower_b + upper_b), theta_b)
 
-        result[interior] = np.mod(theta_curr, two_pi)
+        theta_curr = np.clip(theta_curr, 0.0, two_pi)
+        endpoint_mask = theta_curr >= (two_pi - 1e-12)
+        if np.any(endpoint_mask):
+            endpoint_value = np.nextafter(two_pi, 0.0)
+            theta_curr = np.where(endpoint_mask, endpoint_value, theta_curr)
+
+        result[interior] = theta_curr
         return _finish(result)
 
     def ppf(self, q, mu, rho, *args, **kwargs):
@@ -2824,8 +2832,11 @@ class wrapcauchy_gen(CircularContinuous):
 
         cdf = 0.5 + angle / np.pi
         base_val = 0.5 + base_angle / np.pi
-        cdf = (cdf - base_val) % 1.0
-        cdf = np.clip(cdf, 0.0, 1.0)
+
+        diff = cdf - base_val
+        diff = np.where(diff < -1e-12, diff + 1.0, diff)
+        diff = np.where(diff > 1.0, diff - 1.0, diff)
+        cdf = np.clip(diff, 0.0, 1.0)
 
         if arr.ndim == 0:
             value = float(cdf[0])
