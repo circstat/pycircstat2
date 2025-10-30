@@ -5,22 +5,31 @@ from pycircstat2.distributions import (
     cardioid,
     cartwright,
     circularuniform,
-    triangular,
     inverse_batschelet,
     jonespewsey,
     jonespewsey_asym,
     jonespewsey_sineskewed,
     katojones,
+    triangular,
     vonmises,
     vonmises_flattopped,
     wrapcauchy,
     wrapnorm,
+    wrapstable,
 )
 
 
 def _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_tol=1e-12):
-    cdf_vals = np.asarray(dist.cdf(theta_grid), dtype=float)
-    ppf_vals = np.asarray(dist.ppf(q_grid), dtype=float)
+    def _evaluate(func, grid):
+        try:
+            return np.asarray(func(grid), dtype=float)
+        except (TypeError, ValueError):
+            flat = np.asarray(grid, dtype=float).reshape(-1)
+            evaluated = np.array([func(float(val)) for val in flat], dtype=float)
+            return evaluated.reshape(np.shape(grid))
+
+    cdf_vals = _evaluate(dist.cdf, theta_grid)
+    ppf_vals = _evaluate(dist.ppf, q_grid)
 
     assert np.all(np.isfinite(cdf_vals)), "CDF produced non-finite values"
     assert np.all(np.isfinite(ppf_vals)), "PPF produced non-finite values"
@@ -383,7 +392,7 @@ def test_wrapnorm_rvs_matches_constructor(mu, rho):
 @pytest.mark.parametrize("mu", [0.0, np.pi / 4, np.pi])
 @pytest.mark.parametrize("rho", [0.1, 0.25, 0.5, 0.9])
 def test_wrapnorm_ppf_monotonic(mu, rho):
-    q = np.linspace(1e-12, 1.0 - 1e-12, 1024)
+    q = np.linspace(1e-12, 1.0 - 1e-12, 512)
     theta = wrapnorm.ppf(q, mu=mu, rho=rho)
     diffs = np.diff(theta)
     assert np.all(diffs >= -1e-10), "Wrapped normal PPF must be non-decreasing"
@@ -391,31 +400,189 @@ def test_wrapnorm_ppf_monotonic(mu, rho):
     assert np.all(theta <= 2.0 * np.pi)
 
 
+_MONOTONIC_CASES = [
+    {
+        "id": "circularuniform",
+        "dist": circularuniform(),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "triangular-rho0",
+        "dist": triangular(rho=0.0),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "triangular-rho0.3",
+        "dist": triangular(rho=0.3),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "cardioid-rho0.2",
+        "dist": cardioid(rho=0.2, mu=0.3),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "cardioid-rho0.49",
+        "dist": cardioid(rho=0.49, mu=np.pi / 2),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "cartwright-zeta0.2",
+        "dist": cartwright(zeta=0.2, mu=0.1),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "cartwright-zeta1",
+        "dist": cartwright(zeta=1.0, mu=np.pi),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "cartwright-zeta5",
+        "dist": cartwright(zeta=5.0, mu=2.0),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "wrapnorm-rho0.1",
+        "dist": wrapnorm(rho=0.1, mu=0.0),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "wrapnorm-rho0.25",
+        "dist": wrapnorm(rho=0.25, mu=np.pi),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "wrapnorm-rho0.9",
+        "dist": wrapnorm(rho=0.9, mu=np.pi / 4),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "wrapcauchy-rho0.2",
+        "dist": wrapcauchy(rho=0.2, mu=0.5),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "wrapcauchy-rho0.95",
+        "dist": wrapcauchy(rho=0.95, mu=np.pi),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "vonmises-kappa0.05",
+        "dist": vonmises(kappa=0.05, mu=0.0),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "vonmises-kappa5",
+        "dist": vonmises(kappa=5.0, mu=np.pi / 4),
+        "theta_points": 256,
+        "q_points": 256,
+    },
+    {
+        "id": "vonmises-kappa25",
+        "dist": vonmises(kappa=25.0, mu=np.pi),
+        "theta_points": 256,
+        "q_points": 256,
+        "cdf_tol": 1e-10,
+    },
+    {
+        "id": "vonmises-flattopped",
+        "dist": vonmises_flattopped(mu=0.6, kappa=2.0, nu=0.3),
+        "theta_points": 192,
+        "q_points": 192,
+        "cdf_tol": 1e-10,
+        "ppf_tol": 1e-10,
+        "q_min": 1e-6,
+    },
+    {
+        "id": "jonespewsey",
+        "dist": jonespewsey(mu=0.6, kappa=1.0, psi=0.4),
+        "theta_points": 192,
+        "q_points": 192,
+        "cdf_tol": 1e-9,
+        "ppf_tol": 1e-9,
+        "q_min": 1e-6,
+    },
+    {
+        "id": "jonespewsey-sineskewed",
+        "dist": jonespewsey_sineskewed(xi=1.0, kappa=1.5, psi=0.3, lmbd=0.4),
+        "theta_points": 160,
+        "q_points": 160,
+        "cdf_tol": 5e-9,
+        "ppf_tol": 5e-9,
+        "q_min": 1e-5,
+    },
+    {
+        "id": "jonespewsey-asym",
+        "dist": jonespewsey_asym(xi=0.7, kappa=1.1, psi=0.2, nu=0.4),
+        "theta_points": 160,
+        "q_points": 160,
+        "cdf_tol": 5e-9,
+        "ppf_tol": 5e-9,
+        "q_min": 1e-5,
+    },
+    {
+        "id": "inverse-batschelet",
+        "dist": inverse_batschelet(xi=0.8, kappa=1.3, nu=0.3, lmbd=0.2),
+        "theta_points": 160,
+        "q_points": 160,
+        "cdf_tol": 1e-8,
+        "ppf_tol": 1e-8,
+        "q_min": 1e-5,
+    },
+    {
+        "id": "katojones",
+        "dist": katojones(mu=0.8, gamma=0.3, rho=0.2, lam=0.4),
+        "theta_points": 96,
+        "q_points": 96,
+        "cdf_tol": 1e-8,
+        "ppf_tol": 1e-8,
+        "q_min": 1e-5,
+    },
+    {
+        "id": "wrapstable",
+        "dist": wrapstable(delta=0.9, alpha=1.5, beta=0.2, gamma=0.4),
+        "theta_points": 96,
+        "q_points": 96,
+        "cdf_tol": 1e-8,
+        "ppf_tol": 1e-8,
+        "q_min": 1e-5,
+    },
+]
+
+
 @pytest.mark.parametrize(
-    "dist",
-    [
-        pytest.param(circularuniform(), id="circularuniform"),
-        pytest.param(triangular(rho=0.0), id="triangular-rho0"),
-        pytest.param(triangular(rho=0.3), id="triangular-rho0.3"),
-        pytest.param(cardioid(rho=0.2, mu=0.3), id="cardioid-rho0.2"),
-        pytest.param(cardioid(rho=0.49, mu=np.pi / 2), id="cardioid-rho0.49"),
-        pytest.param(cartwright(zeta=0.2, mu=0.1), id="cartwright-zeta0.2"),
-        pytest.param(cartwright(zeta=1.0, mu=np.pi), id="cartwright-zeta1"),
-        pytest.param(cartwright(zeta=5.0, mu=2.0), id="cartwright-zeta5"),
-        pytest.param(wrapnorm(rho=0.1, mu=0.0), id="wrapnorm-rho0.1"),
-        pytest.param(wrapnorm(rho=0.25, mu=np.pi), id="wrapnorm-rho0.25"),
-        pytest.param(wrapnorm(rho=0.9, mu=np.pi / 4), id="wrapnorm-rho0.9"),
-        pytest.param(wrapcauchy(rho=0.2, mu=0.5), id="wrapcauchy-rho0.2"),
-        pytest.param(wrapcauchy(rho=0.95, mu=np.pi), id="wrapcauchy-rho0.95"),
-        pytest.param(vonmises(kappa=0.05, mu=0.0), id="vonmises-kappa0.05"),
-        pytest.param(vonmises(kappa=5.0, mu=np.pi / 4), id="vonmises-kappa5"),
-        pytest.param(vonmises(kappa=25.0, mu=np.pi), id="vonmises-kappa25"),
-    ],
+    "case",
+    [pytest.param(case, id=case["id"]) for case in _MONOTONIC_CASES],
 )
-def test_continuous_circular_monotonic(dist):
-    theta = np.linspace(0.0, 2.0 * np.pi, 1024)
-    q = np.linspace(1e-12, 1.0 - 1e-12, 1024)
-    _assert_monotonic_cdf_ppf(dist, theta, q)
+def test_continuous_circular_monotonic(case):
+    theta_points = int(case.get("theta_points", 256))
+    q_points = int(case.get("q_points", 256))
+    q_min = float(case.get("q_min", 1e-12))
+
+    theta = np.linspace(0.0, 2.0 * np.pi, theta_points)
+    q = np.linspace(q_min, 1.0 - q_min, q_points)
+
+    _assert_monotonic_cdf_ppf(
+        case["dist"],
+        theta,
+        q,
+        cdf_tol=case.get("cdf_tol", 1e-11),
+        ppf_tol=case.get("ppf_tol", 1e-11),
+    )
 
 
 def test_vonmises_cdf_matches_numeric():

@@ -3227,7 +3227,7 @@ class katojones_gen(CircularContinuous):
         pdf = numerator / (2.0 * np.pi)
         pdf = np.clip(pdf, 0.0, None)
         if np.isscalar(x):
-            return float(pdf)
+            return np.asarray(pdf, dtype=float).reshape(-1)[0]
         return pdf
 
     def pdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
@@ -4954,7 +4954,7 @@ class wrapstable_gen(CircularContinuous):
         series_sum = np.sum(rho_vals[:, np.newaxis] * np.cos(cos_args), axis=0)
         pdf_values = 1 / (2 * np.pi) * (1 + 2 * series_sum)
         if np.isscalar(x):
-            return float(pdf_values)
+            return np.asarray(pdf_values, dtype=float).reshape(-1)[0]
         return pdf_values
 
     def pdf(self, x, delta, alpha, beta, gamma, *args, **kwargs):
@@ -5030,7 +5030,7 @@ class wrapstable_gen(CircularContinuous):
     def _scalar_param(value):
         arr = np.asarray(value, dtype=float)
         if arr.size == 1:
-            return float(arr)
+            return float(np.asarray(arr, dtype=float).reshape(-1)[0])
         first = float(arr.flat[0])
         if not np.allclose(arr, first):
             raise ValueError("wrapstable parameters must be scalar-valued.")
