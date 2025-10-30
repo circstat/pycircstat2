@@ -461,6 +461,13 @@ class CircularContinuous(rv_continuous):
         lower_bound = float(self.a if lower is None else lower)
         upper_bound = float(self.b if upper is None else upper)
 
+        def scalar_integrand(value, *args):
+            out = integrand(value, *args)
+            arr = np.asarray(out, dtype=float)
+            if arr.ndim == 0:
+                return float(arr)
+            return float(arr.reshape(-1)[0])
+
         results = np.zeros_like(x_vals, dtype=float)
         sorted_indices = np.argsort(x_vals, kind="mergesort")
         sorted_vals = x_vals[sorted_indices]
@@ -482,7 +489,7 @@ class CircularContinuous(rv_continuous):
             clipped = min(value, upper_bound)
             if clipped > current + 1e-15:
                 segment, _ = quad(
-                    integrand,
+                    scalar_integrand,
                     current,
                     clipped,
                     args=params,

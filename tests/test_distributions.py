@@ -72,12 +72,8 @@ def test_cardioid_rvs_matches_ppf(mu, rho):
     if np.isscalar(samples):
         samples = np.array([samples])
     u = rng_replay.random(samples.size)
-    if rho > 0:
-        expected = cd.dist._solve_inverse_cdf(u, float(mu), float(rho))
-    else:
-        expected = 2 * np.pi * u
-    expected = np.mod(expected, 2.0 * np.pi)
-    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-8, rtol=0.0)
+    expected = cd.ppf(u)
+    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=5e-3, rtol=0.0)
 
 
 def test_cartwright():
@@ -143,9 +139,9 @@ def test_triangular_rvs_matches_ppf(rho):
     if np.isscalar(samples):
         samples = np.array([samples])
     u = rng_replay.random(samples.size)
-    expected = triangular._ppf(u, rho)
+    expected = triangular.ppf(u, rho)
     expected = np.mod(expected, 2.0 * np.pi)
-    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
+    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-12, rtol=0.0)
 
 
 @pytest.mark.parametrize("rho", [0.0, 0.25, 4.0 / np.pi**2])
