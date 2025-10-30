@@ -18,6 +18,23 @@ from pycircstat2.distributions import (
 )
 
 
+def _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_tol=1e-12):
+    cdf_vals = np.asarray(dist.cdf(theta_grid), dtype=float)
+    ppf_vals = np.asarray(dist.ppf(q_grid), dtype=float)
+
+    assert np.all(np.isfinite(cdf_vals)), "CDF produced non-finite values"
+    assert np.all(np.isfinite(ppf_vals)), "PPF produced non-finite values"
+
+    cdf_diffs = np.diff(cdf_vals)
+    assert np.all(cdf_diffs >= -cdf_tol), "CDF must be non-decreasing"
+    assert np.all((cdf_vals >= -cdf_tol) & (cdf_vals <= 1.0 + cdf_tol)), "CDF outside [0, 1]"
+
+    ppf_diffs = np.diff(ppf_vals)
+    assert np.all(ppf_diffs >= -ppf_tol), "PPF must be non-decreasing"
+    two_pi = 2.0 * np.pi
+    assert np.all((ppf_vals >= -ppf_tol) & (ppf_vals <= two_pi + ppf_tol)), "PPF outside [0, 2π]"
+
+
 def test_circularuniform():
     np.testing.assert_approx_equal(circularuniform.cdf(2), 0.3183, significant=5)
     np.testing.assert_approx_equal(circularuniform.ppf(1 / np.pi), 2)
@@ -372,6 +389,33 @@ def test_wrapnorm_ppf_monotonic(mu, rho):
     assert np.all(diffs >= -1e-10), "Wrapped normal PPF must be non-decreasing"
     assert np.all(theta >= -1e-12)
     assert np.all(theta <= 2.0 * np.pi)
+
+
+@pytest.mark.parametrize(
+    "dist",
+    [
+        pytest.param(circularuniform(), id="circularuniform"),
+        pytest.param(triangular(rho=0.0), id="triangular-rho0"),
+        pytest.param(triangular(rho=0.3), id="triangular-rho0.3"),
+        pytest.param(cardioid(rho=0.2, mu=0.3), id="cardioid-rho0.2"),
+        pytest.param(cardioid(rho=0.49, mu=np.pi / 2), id="cardioid-rho0.49"),
+        pytest.param(cartwright(zeta=0.2, mu=0.1), id="cartwright-zeta0.2"),
+        pytest.param(cartwright(zeta=1.0, mu=np.pi), id="cartwright-zeta1"),
+        pytest.param(cartwright(zeta=5.0, mu=2.0), id="cartwright-zeta5"),
+        pytest.param(wrapnorm(rho=0.1, mu=0.0), id="wrapnorm-rho0.1"),
+        pytest.param(wrapnorm(rho=0.25, mu=np.pi), id="wrapnorm-rho0.25"),
+        pytest.param(wrapnorm(rho=0.9, mu=np.pi / 4), id="wrapnorm-rho0.9"),
+        pytest.param(wrapcauchy(rho=0.2, mu=0.5), id="wrapcauchy-rho0.2"),
+        pytest.param(wrapcauchy(rho=0.95, mu=np.pi), id="wrapcauchy-rho0.95"),
+        pytest.param(vonmises(kappa=0.05, mu=0.0), id="vonmises-kappa0.05"),
+        pytest.param(vonmises(kappa=5.0, mu=np.pi / 4), id="vonmises-kappa5"),
+        pytest.param(vonmises(kappa=25.0, mu=np.pi), id="vonmises-kappa25"),
+    ],
+)
+def test_continuous_circular_monotonic(dist):
+    theta = np.linspace(0.0, 2.0 * np.pi, 1024)
+    q = np.linspace(1e-12, 1.0 - 1e-12, 1024)
+    _assert_monotonic_cdf_ppf(dist, theta, q)
 
 
 def test_vonmises_cdf_matches_numeric():

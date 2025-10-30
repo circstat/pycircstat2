@@ -3839,7 +3839,10 @@ class vonmises_gen(CircularContinuous):
 
         cdf_raw = 0.5 + phi / two_pi + (1.0 / np.pi) * term_sum
         base_val = 0.5 + base_phi / two_pi + (1.0 / np.pi) * term_base
-        cdf = (cdf_raw - base_val) % 1.0
+
+        forward = np.clip(cdf_raw - base_val, 0.0, 1.0)
+        backward = np.clip(base_val - cdf_raw, 0.0, 1.0)
+        cdf = np.where(phi >= base_phi, forward, 1.0 - backward)
         cdf = np.clip(cdf, 0.0, 1.0)
 
         if arr.ndim == 0:
