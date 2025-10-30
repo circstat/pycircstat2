@@ -78,6 +78,23 @@ def test_cartwright():
     )
 
 
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
+@pytest.mark.parametrize("zeta", [0.2, 1.5])
+def test_cartwright_cdf_ppf_roundtrip(mu, zeta):
+    cw = cartwright(zeta=zeta, mu=mu)
+    q = np.linspace(0.0, 1.0, num=9)
+    theta = cw.ppf(q)
+    np.testing.assert_array_less(-1e-12, theta)
+    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
+    np.testing.assert_allclose(cw.cdf(theta), q, atol=5e-12)
+
+    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
+    q_grid = cw.cdf(grid)
+    theta_back = cw.ppf(q_grid)
+    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
+
+
 def test_triangular_ppf_vectorized():
     q = np.linspace(0.1, 0.9, num=5)
     out_zero = triangular.ppf(q, rho=0.0)

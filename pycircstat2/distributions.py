@@ -5,7 +5,7 @@ import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.optimize import minimize, root, brentq
 from scipy.special import beta as beta_fn
-from scipy.special import gamma, i0, i1, ndtr, iv, betainc, gammaln, digamma
+from scipy.special import gamma, i0, i1, ndtr, iv, betainc, betaincinv, gammaln, digamma
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -1648,6 +1648,15 @@ class cartwright_gen(CircularContinuous):
     cdf(x, mu, zeta)
         Cumulative distribution function.
 
+    ppf(q, mu, zeta)
+        Percent-point function obtained by inverting the regularised incomplete beta.
+
+    rvs(mu, zeta, size=None, random_state=None)
+        Random variates via a Beta-to-angle transform consistent with the quantile.
+
+    fit(data, *args, **kwargs)
+        Estimate ``(mu, zeta)`` using moments or maximum likelihood.
+
     Note
     ----
     Implementation based on Section 4.3.5 of Pewsey et al. (2014)
@@ -1706,6 +1715,30 @@ class cartwright_gen(CircularContinuous):
 
         return super().pdf(x, mu, zeta, *args, **kwargs)
 
+    @staticmethod
+    def _cartwright_cumulative(phi, a, b, half_norm):
+        phi_arr = np.asarray(phi, dtype=float)
+        scalar_input = np.isscalar(phi_arr)
+        phi_vec = np.atleast_1d(phi_arr)
+        two_pi = 2.0 * np.pi
+        result = np.empty_like(phi_vec, dtype=float)
+
+        mask_lower = phi_vec <= np.pi
+        if np.any(mask_lower):
+            s_small = np.sin(0.5 * phi_vec[mask_lower]) ** 2
+            val = betainc(a, b, np.clip(s_small, 0.0, 1.0))
+            result[mask_lower] = half_norm * val
+
+        if np.any(~mask_lower):
+            phi_ref = two_pi - phi_vec[~mask_lower]
+            s_large = np.sin(0.5 * phi_ref) ** 2
+            val = betainc(a, b, np.clip(s_large, 0.0, 1.0))
+            result[~mask_lower] = 1.0 - half_norm * val
+
+        if scalar_input:
+            return float(result[0])
+        return result.reshape(phi_arr.shape)
+
     def _cdf(self, x, mu, zeta):
         wrapped = self._wrap_angles(x)
         arr = np.asarray(wrapped, dtype=float)
@@ -1734,25 +1767,13 @@ class cartwright_gen(CircularContinuous):
         )
         beta_term = beta_fn(a, b)
         half_norm = const * (2.0 ** (1.0 / zeta_val)) * beta_term  # equals 0.5
-
-        def cumulative(phi_mod):
-            mask = phi_mod <= np.pi
-            result = np.empty_like(phi_mod)
-
-            if np.any(mask):
-                s_small = np.sin(0.5 * phi_mod[mask]) ** 2
-                result[mask] = half_norm * betainc(a, b, s_small)
-            if np.any(~mask):
-                phi_ref = two_pi - phi_mod[~mask]
-                s_large = np.sin(0.5 * phi_ref) ** 2
-                result[~mask] = 1.0 - half_norm * betainc(a, b, s_large)
-            return result
+        half_norm = float(np.clip(half_norm, np.finfo(float).tiny, None))
 
         phi_start = (-mu_val) % two_pi
         phi_end = (flat - mu_val) % two_pi
 
-        H_start = cumulative(np.array([phi_start]))[0]
-        H_end = cumulative(phi_end)
+        H_start = self._cartwright_cumulative(np.array([phi_start]), a, b, half_norm)[0]
+        H_end = self._cartwright_cumulative(phi_end, a, b, half_norm)
 
         cdf = np.where(
             phi_end >= phi_start,
@@ -1793,6 +1814,117 @@ class cartwright_gen(CircularContinuous):
         """
         return super().cdf(x, mu, zeta, *args, **kwargs)
 
+    def _ppf(self, q, mu, zeta):
+        mu_arr = np.asarray(mu, dtype=float)
+        zeta_arr = np.asarray(zeta, dtype=float)
+        if mu_arr.size != 1 or zeta_arr.size != 1:
+            raise ValueError("cartwright parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        zeta_val = float(zeta_arr.reshape(-1)[0])
+        if zeta_val <= 0.0:
+            raise ValueError("`zeta` must be positive.")
+
+        q_arr = np.asarray(q, dtype=float)
+        if q_arr.size == 0:
+            return q_arr.astype(float)
+
+        two_pi = 2.0 * np.pi
+        a = 0.5
+        b = 1.0 / zeta_val + 0.5
+        const = (
+            2.0 ** (-1.0 + 1.0 / zeta_val)
+            * gamma(1.0 + 1.0 / zeta_val) ** 2
+            / (np.pi * gamma(1.0 + 2.0 / zeta_val))
+        )
+        half_norm = const * (2.0 ** (1.0 / zeta_val)) * beta_fn(a, b)
+        half_norm = float(np.clip(half_norm, np.finfo(float).tiny, None))
+
+        phi_start = (-mu_val) % two_pi
+        H_start = self._cartwright_cumulative(np.array([phi_start]), a, b, half_norm)[0]
+
+        flat = q_arr.reshape(-1)
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if np.any(valid):
+            q_valid = flat[valid]
+
+            # Handle exact boundary quantiles explicitly
+            close_zero = np.isclose(q_valid, 0.0, rtol=0.0, atol=1e-12)
+            close_one = np.isclose(q_valid, 1.0, rtol=0.0, atol=1e-12)
+
+            s = (H_start + q_valid) % 1.0
+
+            phi = np.empty_like(q_valid)
+            mask_lower = s <= 0.5
+
+            if np.any(mask_lower):
+                u = np.clip(s[mask_lower] / half_norm, 0.0, 1.0)
+                t = betaincinv(a, b, np.clip(u, 0.0, 1.0))
+                t = np.clip(t, 0.0, 1.0)
+                phi[mask_lower] = 2.0 * np.arcsin(np.sqrt(t))
+
+            if np.any(~mask_lower):
+                s_upper = s[~mask_lower]
+                u = np.clip((1.0 - s_upper) / half_norm, 0.0, 1.0)
+                t = betaincinv(a, b, np.clip(u, 0.0, 1.0))
+                t = np.clip(t, 0.0, 1.0)
+                phi[~mask_lower] = two_pi - 2.0 * np.arcsin(np.sqrt(t))
+
+            theta = (mu_val + phi) % two_pi
+
+            if np.any(close_zero):
+                theta[close_zero] = float(np.mod(mu_val + phi_start, two_pi))
+            if np.any(close_one):
+                theta[close_one] = two_pi
+
+            result[valid] = theta
+
+        result = result.reshape(q_arr.shape)
+        if q_arr.ndim == 0:
+            return float(result)
+        return result
+
+    def ppf(self, q, mu, zeta, *args, **kwargs):
+        r"""
+        Percent-point function (inverse CDF) of the Cartwright distribution.
+
+        The quantile inversion exploits the beta integral governing the CDF.
+        With
+        $$
+        t = \sin^2\!\left(\tfrac{1}{2}\phi\right), \qquad
+        a = \tfrac{1}{2}, \qquad b = \tfrac{1}{\zeta} + \tfrac{1}{2},
+        $$
+        the cumulative distribution reduces to
+        $$
+        H(\phi) =
+        \begin{cases}
+        \tfrac{1}{2} I_t(a, b), & 0 \le \phi \le \pi, \\[6pt]
+        1 - \tfrac{1}{2} I_t(a, b), & \pi < \phi < 2\pi,
+        \end{cases}
+        $$
+        where $I_t$ is the regularised incomplete beta function. The inverse
+        quantile solves $H(\phi) = s$ via the inverse regularised incomplete
+        beta, ``betaincinv``, yielding the exact $O(1)$ mapping used here and in
+        ``rvs``.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (0 <= q <= 1).
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        zeta : float
+            Shape parameter, zeta > 0.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles corresponding to the given quantiles.
+        """
+        return super().ppf(q, mu, zeta, *args, **kwargs)
+
     def _rvs(self, mu, zeta, size=None, random_state=None):
         rng = self._init_rng(random_state)
 
@@ -1825,6 +1957,45 @@ class cartwright_gen(CircularContinuous):
         if theta.ndim == 0:
             return float(theta)
         return theta.reshape(shape)
+
+    def rvs(self, size=None, random_state=None, *args, **kwargs):
+        r"""
+        Draw random variates from the Cartwright distribution.
+
+        Sampling follows the same Beta-to-angle transform as the quantile
+        function: draw $T \sim \mathrm{Beta}\!\left(\tfrac{1}{2},
+        \tfrac{1}{\zeta} + \tfrac{1}{2}\right)$, map it via
+        $\phi = 2\arcsin(\sqrt{T})$, then reflect $\phi$ with equal probability
+        around $\mu$. This construction keeps ``rvs`` numerically consistent
+        with ``ppf``.
+
+        Parameters
+        ----------
+        mu : float, optional
+            Mean direction, ``0 <= mu <= 2*pi``. Supply explicitly or by
+            freezing the distribution.
+        zeta : float, optional
+            Shape parameter, ``zeta > 0``. Supply explicitly or by freezing the
+            distribution.
+        size : int or tuple of ints, optional
+            Number of samples to draw. ``None`` (default) returns a scalar.
+        random_state : np.random.Generator, np.random.RandomState, or None, optional
+            Random number generator to use.
+
+        Returns
+        -------
+        samples : ndarray or float
+            Random variates on ``[0, 2π)``.
+        """
+        mu = kwargs.pop("mu", getattr(self, "mu", None))
+        zeta = kwargs.pop("zeta", getattr(self, "zeta", None))
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
+        if mu is None or zeta is None:
+            raise ValueError("Both 'mu' and 'zeta' must be provided.")
+
+        return self._rvs(mu, zeta, size=size, random_state=random_state)
 
     def fit(
         self,
