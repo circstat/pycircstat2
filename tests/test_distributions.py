@@ -229,6 +229,46 @@ def test_wrapcauchy_cdf_matches_numeric():
     assert np.all(diffs >= -1e-10)
 
 
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
+@pytest.mark.parametrize("rho", [0.0, 0.4, 0.95])
+def test_wrapcauchy_cdf_ppf_roundtrip(mu, rho):
+    wc = wrapcauchy(mu=mu, rho=rho)
+    q = np.linspace(0.0, 1.0, num=9)
+    theta = wc.ppf(q)
+    np.testing.assert_array_less(-1e-12, theta)
+    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
+    np.testing.assert_allclose(wc.cdf(theta), q, atol=5e-12)
+
+    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
+    q_grid = wc.cdf(grid)
+    theta_back = wc.ppf(q_grid)
+    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
+
+
+@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
+@pytest.mark.parametrize("rho", [0.2, 0.8])
+def test_wrapcauchy_rvs_matches_constructor(mu, rho):
+    rng_samples = np.random.default_rng(654)
+    rng_replay = np.random.default_rng(654)
+
+    wc = wrapcauchy(mu=mu, rho=rho)
+    samples = wc.rvs(size=512, random_state=rng_samples)
+    if np.isscalar(samples):
+        samples = np.array([samples])
+
+    expected = wc.dist._rvs(mu, rho, size=512, random_state=rng_replay)
+    if np.isscalar(expected):
+        expected = np.array([expected])
+
+    np.testing.assert_allclose(
+        np.sort(samples),
+        np.sort(expected),
+        atol=1e-12,
+        rtol=0.0,
+    )
+
+
 def test_cartwright_cdf_matches_numeric():
     mu, zeta = 1.2, 0.8
     theta = np.linspace(0.0, 2.0 * np.pi, 9)

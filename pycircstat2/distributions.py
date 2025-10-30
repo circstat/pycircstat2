@@ -2348,8 +2348,6 @@ class wrapnorm_gen(CircularContinuous):
     def _ppf(self, q, mu, rho):
         mu_arr = np.asarray(mu, dtype=float)
         rho_arr = np.asarray(rho, dtype=float)
-        if mu_arr.size != 1 or rho_arr.size != 1:
-            raise ValueError("wrapnorm parameters must be scalar-valued.")
 
         mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
         rho_val = float(rho_arr.reshape(-1)[0])
@@ -2730,6 +2728,9 @@ class wrapcauchy_gen(CircularContinuous):
     cdf(x, mu, rho)
         Cumulative distribution function.
 
+    ppf(q, mu, rho)
+        Percent-point function (inverse CDF) via the Möbius mapping.
+
     rvs(mu, rho, size=None, random_state=None)
         Random variates.
 
@@ -2816,10 +2817,9 @@ class wrapcauchy_gen(CircularContinuous):
         A = (1.0 + rho_val) / (1.0 - rho_val)
 
         phi = (flat - mu_val + np.pi) % two_pi - np.pi
-        half_phi = 0.5 * phi
-        angle = np.arctan2(A * np.sin(half_phi), np.cos(half_phi))
-
         base_phi = (-mu_val + np.pi) % two_pi - np.pi
+
+        angle = np.arctan2(A * np.sin(0.5 * phi), np.cos(0.5 * phi))
         base_angle = np.arctan2(A * np.sin(0.5 * base_phi), np.cos(0.5 * base_phi))
 
         cdf = 0.5 + angle / np.pi
@@ -2854,6 +2854,74 @@ class wrapcauchy_gen(CircularContinuous):
             CDF evaluated at `x`.
         """
         return super().cdf(x, mu, rho, *args, **kwargs)
+
+    @staticmethod
+    def _wrapcauchy_H(phi, A):
+        phi_arr = np.asarray(phi, dtype=float)
+        angle = np.arctan2(A * np.sin(0.5 * phi_arr), np.cos(0.5 * phi_arr))
+        H = 0.5 + angle / np.pi
+        return float(H) if np.isscalar(phi) else H
+
+    def _ppf(self, q, mu, rho):
+        mu_arr = np.asarray(mu, dtype=float)
+        rho_arr = np.asarray(rho, dtype=float)
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        rho_val = float(rho_arr.reshape(-1)[0])
+        if not (0.0 <= rho_val < 1.0):
+            raise ValueError("`rho` must lie in [0, 1).")
+
+        q_arr = np.asarray(q, dtype=float)
+        flat = q_arr.reshape(-1)
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        lower_mask = flat <= 0.0
+        upper_mask = flat >= 1.0
+        result[lower_mask] = 0.0
+        result[upper_mask] = 2.0 * np.pi
+
+        interior = ~(lower_mask | upper_mask)
+        if not np.any(interior):
+            return result.reshape(q_arr.shape)
+
+        q_int = flat[interior]
+        two_pi = 2.0 * np.pi
+
+        if rho_val <= 1e-15:
+            result[interior] = (two_pi * q_int) % two_pi
+            return result.reshape(q_arr.shape)
+
+        A = (1.0 + rho_val) / (1.0 - rho_val)
+        phi0 = (-mu_val + np.pi) % two_pi - np.pi
+        H_start = float(self._wrapcauchy_H(phi0, A))
+
+        s = (H_start + q_int) % 1.0
+        eps = 1e-15
+        alpha = np.pi * (np.clip(s, eps, 1.0 - eps) - 0.5)
+        tan_alpha = np.tan(alpha)
+        phi = 2.0 * np.arctan(tan_alpha / A)
+        theta = (mu_val + phi) % two_pi
+        result[interior] = theta
+
+        return result.reshape(q_arr.shape)
+
+    def ppf(self, q, mu, rho, *args, **kwargs):
+        r"""
+        Percent-point function (inverse CDF) of the Wrapped Cauchy distribution.
+
+        The quantile is obtained by inverting the Möbius form of the CDF:
+        $$
+        \phi = 2 \arctan\!\left(\frac{\tan\left(\pi (s-\tfrac12)\right)}{A}\right),
+        \qquad A=\frac{1+\rho}{1-\rho},
+        $$
+        where $s = (H(\phi_0) + q) \bmod 1$ and $\phi_0$ is the anchored angle
+        at $x=0$. This matches the direct normalised CDF and keeps ``ppf`` in
+        sync with ``cdf`` and the Möbius sampler used by ``rvs``.
+        """
+        return super().ppf(q, mu, rho, *args, **kwargs)
 
     def _rvs(self, mu, rho, size=None, random_state=None):
         rng = self._init_rng(random_state)
@@ -2912,6 +2980,36 @@ class wrapcauchy_gen(CircularContinuous):
         if target_shape == ():
             return float(theta)
         return theta.reshape(target_shape)
+
+    def rvs(self, mu=None, rho=None, size=None, random_state=None):
+        """
+        Draw random variates from the Wrapped Cauchy distribution.
+
+        Parameters
+        ----------
+        mu : float, optional
+            Mean direction, ``0 <= mu <= 2*pi``. Supply explicitly or by
+            freezing the distribution.
+        rho : float, optional
+            Shape parameter, ``0 <= rho < 1``. Supply explicitly or by freezing
+            the distribution.
+        size : int or tuple of ints, optional
+            Number of samples to draw. ``None`` (default) returns a scalar.
+        random_state : np.random.Generator, np.random.RandomState, or None, optional
+            Random number generator to use.
+
+        Returns
+        -------
+        samples : ndarray or float
+            Random variates on ``[0, 2π)``.
+        """
+        mu_val = getattr(self, "mu", None) if mu is None else mu
+        rho_val = getattr(self, "rho", None) if rho is None else rho
+
+        if mu_val is None or rho_val is None:
+            raise ValueError("Both 'mu' and 'rho' must be provided.")
+
+        return self._rvs(mu_val, rho_val, size=size, random_state=random_state)
 
     def fit(
         self,
