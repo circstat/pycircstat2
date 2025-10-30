@@ -4428,24 +4428,42 @@ class jonespewsey_gen(CircularContinuous):
         return bool(self._validate_params(mu, kappa, psi))
 
     def _pdf(self, x, mu, kappa, psi):
-        if np.all(kappa < 0.001):
-            return 1 / (2 * np.pi)
-        else:
-            norm = self._get_cached_normalizer(
-                lambda: _c_jonespewsey(mu, kappa, psi), mu, kappa, psi
-            )
-            self._c = norm
-            if np.isclose(np.abs(psi), 0).all():
-                return norm * np.exp(kappa * np.cos(x - mu))
-            return _kernel_jonespewsey(x, mu, kappa, psi) / norm
+        x = np.asarray(x, dtype=float)
+        kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
+        psi_scalar = _jp_ensure_scalar(psi, "psi")
+
+        if not np.isfinite(kappa_scalar) or not np.isfinite(psi_scalar):
+            return np.full_like(x, np.nan, dtype=float)
+
+        if abs(kappa_scalar) < _JP_KAPPA_TOL:
+            return np.full_like(x, 1.0 / (2.0 * np.pi), dtype=float)
+
+        normalizer = self._get_cached_normalizer(
+            lambda: _c_jonespewsey(mu, kappa_scalar, psi_scalar),
+            mu,
+            kappa_scalar,
+            psi_scalar,
+        )
+        self._c = normalizer
+
+        if abs(psi_scalar) < _JP_PSI_TOL:
+            return normalizer * np.exp(kappa_scalar * np.cos(x - mu))
+
+        return normalizer * _kernel_jonespewsey(x, mu, kappa_scalar, psi_scalar)
 
     def pdf(self, x, mu, kappa, psi, *args, **kwargs):
         r"""
         Probability density function of the Jones-Pewsey distribution.
 
         $$
-        f(\theta) = \frac{(\cosh(\kappa \psi) + \sinh(\kappa \psi) \cos(\theta - \mu))^{1/\psi}}{2\pi \cosh(\kappa \pi)}
+        f(\theta) = c(\kappa, \psi)
+        \Big(\cosh(\kappa \psi) + \sinh(\kappa \psi) \cos(\theta - \mu)\Big)^{1/\psi},
         $$
+
+        where ``c(\kappa, \psi)`` is the normalizing constant, evaluated numerically with
+        stable special-case reductions:
+            - ``c = 1 / (2\pi)`` when ``\kappa`` is effectively zero (uniform limit).
+            - ``c = 1 / (2\pi I_0(\kappa))`` as ``\psi \to 0`` (von Mises limit).
 
         Parameters
         ----------
@@ -4489,23 +4507,55 @@ jonespewsey = jonespewsey_gen(name="jonespewsey")
 ####################################
 
 
+_JP_KAPPA_TOL = 1e-3
+_JP_PSI_TOL = 1e-6
+_JP_MIN_BASE = np.finfo(float).tiny
+
+
+def _jp_ensure_scalar(value, name):
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        return float(arr)
+    if arr.size == 1:
+        return float(arr.reshape(()))
+    unique = np.unique(arr)
+    if unique.size == 1:
+        return float(unique[0])
+    raise ValueError(f"Jones-Pewsey parameter '{name}' must be a scalar.")
+
+
+def _jp_kernel_base(phi, kappa, psi):
+    phi = np.asarray(phi, dtype=float)
+    if abs(psi) < _JP_PSI_TOL:
+        return np.exp(kappa * np.cos(phi))
+
+    A = kappa * psi
+    base = np.cosh(A) + np.sinh(A) * np.cos(phi)
+    base = np.clip(base, _JP_MIN_BASE, None)
+    return np.power(base, 1.0 / psi)
+
+
 def _kernel_jonespewsey(x, mu, kappa, psi):
-    return (np.cosh(kappa * psi) + np.sinh(kappa * psi) * np.cos(x - mu)) ** (
-        1 / psi
-    ) / (2 * np.pi * np.cosh(kappa * np.pi))
+    phi = np.asarray(x, dtype=float) - mu
+    return _jp_kernel_base(phi, kappa, psi)
 
 
 def _c_jonespewsey(mu, kappa, psi):
-    if np.all(kappa < 0.001):
-        return np.ones_like(kappa) * 1 / 2 / np.pi
-    else:
-        if np.isclose(np.abs(psi), 0).all():
-            return 1 / (2 * np.pi * i0(kappa))
-        else:
-            c = quad_vec(_kernel_jonespewsey, a=-np.pi, b=np.pi, args=(mu, kappa, psi))[
-                0
-            ]
-            return c
+    if kappa < _JP_KAPPA_TOL:
+        return 1.0 / (2.0 * np.pi)
+
+    if np.isclose(psi, 0.0, atol=_JP_PSI_TOL):
+        return 1.0 / (2.0 * np.pi * i0(kappa))
+
+    integral = quad_vec(
+        _kernel_jonespewsey,
+        a=-np.pi,
+        b=np.pi,
+        args=(mu, kappa, psi),
+        epsabs=1e-10,
+        epsrel=1e-10,
+    )[0]
+    return 1.0 / integral
 
 
 ###########################
@@ -4547,25 +4597,25 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
         return bool(self._validate_params(xi, kappa, psi, lmbd))
 
     def _pdf(self, x, xi, kappa, psi, lmbd):
-        if np.all(kappa < 0.001):
-            return 1 / (2 * np.pi) * (1 + lmbd * np.sin(x - xi))
-        else:
-            norm = self._get_cached_normalizer(
-                lambda: _c_jonespewsey(xi, kappa, psi), xi, kappa, psi
-            )
-            self._c = norm
-            if np.isclose(np.abs(psi), 0).all():
-                return (
-                    norm
-                    * np.exp(kappa * np.cos(x - xi))
-                    * (1 + lmbd * np.sin(x - xi))
-                )
-            else:
-                return (
-                    (1 + lmbd * np.sin(x - xi))
-                    * _kernel_jonespewsey(x, xi, kappa, psi)
-                    / norm
-                )
+        x = np.asarray(x, dtype=float)
+        xi_scalar = _jp_ensure_scalar(xi, "xi")
+        kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
+        psi_scalar = _jp_ensure_scalar(psi, "psi")
+        lmbd_scalar = _jp_ensure_scalar(lmbd, "lmbd")
+
+        if abs(kappa_scalar) < _JP_KAPPA_TOL:
+            return (1.0 / (2.0 * np.pi)) * (1.0 + lmbd_scalar * np.sin(x - xi_scalar))
+
+        normalizer = self._get_cached_normalizer(
+            lambda: _c_jonespewsey(xi_scalar, kappa_scalar, psi_scalar),
+            xi_scalar,
+            kappa_scalar,
+            psi_scalar,
+        )
+        self._c = normalizer
+
+        base = _kernel_jonespewsey(x, xi_scalar, kappa_scalar, psi_scalar)
+        return normalizer * base * (1.0 + lmbd_scalar * np.sin(x - xi_scalar))
 
     def pdf(self, x, xi, kappa, psi, lmbd, *args, **kwargs):
         r"""
@@ -4642,11 +4692,25 @@ class jonespewsey_asym_gen(CircularContinuous):
         return bool(self._validate_params(xi, kappa, psi, nu))
 
     def _pdf(self, x, xi, kappa, psi, nu):
+        x = np.asarray(x, dtype=float)
+        xi_scalar = _jp_ensure_scalar(xi, "xi")
+        kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
+        psi_scalar = _jp_ensure_scalar(psi, "psi")
+        nu_scalar = _jp_ensure_scalar(nu, "nu")
+
+        if abs(kappa_scalar) < _JP_KAPPA_TOL:
+            return np.full_like(x, 1.0 / (2.0 * np.pi), dtype=float)
+
         norm = self._get_cached_normalizer(
-            lambda: _c_jonespewsey_asym(xi, kappa, psi, nu), xi, kappa, psi, nu
+            lambda: _c_jonespewsey_asym(xi_scalar, kappa_scalar, psi_scalar, nu_scalar),
+            xi_scalar,
+            kappa_scalar,
+            psi_scalar,
+            nu_scalar,
         )
         self._c = norm
-        return _kernel_jonespewsey_asym(x, xi, kappa, psi, nu) / norm
+        base = _kernel_jonespewsey_asym(x, xi_scalar, kappa_scalar, psi_scalar, nu_scalar)
+        return norm * base
 
     def pdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
         r"""
@@ -4709,23 +4773,25 @@ jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
 
 
 def _kernel_jonespewsey_asym(x, xi, kappa, psi, nu):
-    if np.isclose(np.abs(psi), 0).all():
-        return np.exp(kappa * np.cos(x - xi + nu * np.cos(x - xi)))
-    else:
-        return (
-            np.cosh(kappa * psi)
-            + np.sinh(kappa * psi) * np.cos(x - xi + nu * np.cos(x - xi))
-        ) ** (1 / psi)
+    x = np.asarray(x, dtype=float)
+    phi = x - xi
+    phi = phi + nu * np.cos(phi)
+    return _jp_kernel_base(phi, kappa, psi)
 
 
 def _c_jonespewsey_asym(xi, kappa, psi, nu):
-    c = quad_vec(
+    if kappa < _JP_KAPPA_TOL:
+        return 1.0 / (2.0 * np.pi)
+
+    integral = quad_vec(
         _kernel_jonespewsey_asym,
         a=-np.pi,
         b=np.pi,
         args=(xi, kappa, psi, nu),
+        epsabs=1e-10,
+        epsrel=1e-10,
     )[0]
-    return c
+    return 1.0 / integral
 
 
 class inverse_batschelet_gen(CircularContinuous):
