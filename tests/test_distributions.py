@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from scipy import stats
 
 from pycircstat2.distributions import (
     cardioid,
@@ -695,6 +696,18 @@ def test_jonespewsey():
     )
 
 
+def test_jonespewsey_cdf_ppf_roundtrip():
+    dist = jonespewsey(kappa=1.2, psi=0.8, mu=1.1)
+    q = np.linspace(0.05, 0.95, 9)
+    theta = dist.ppf(q)
+    np.testing.assert_allclose(dist.cdf(theta), q, atol=5e-6)
+
+
+def test_jonespewsey_rvs_reasonable():
+    dist = jonespewsey(kappa=1.4, psi=-0.6, mu=1.0)
+    _assert_rvs_reasonable(dist, size=256, seed=42)
+
+
 def test_vonmises_flattopped():
 
     vme = vonmises_flattopped(kappa=2, nu=-0.5, mu=np.pi / 2)
@@ -726,6 +739,11 @@ def test_jonespewsey_sineskewed():
     )
 
 
+def test_jonespewsey_sineskewed_rvs_reasonable():
+    dist = jonespewsey_sineskewed(kappa=1.1, psi=0.4, lmbd=0.3, xi=1.0)
+    _assert_rvs_reasonable(dist, size=256, seed=123)
+
+
 def test_jonespewsey_asym():
 
     jpa = jonespewsey_asym(kappa=2, psi=-1, nu=0.75, xi=np.pi / 2)
@@ -739,6 +757,11 @@ def test_jonespewsey_asym():
         1.0499,
         significant=4,
     )
+
+
+def test_jonespewsey_asym_rvs_reasonable():
+    dist = jonespewsey_asym(kappa=1.8, psi=-0.9, nu=0.4, xi=0.7)
+    _assert_rvs_reasonable(dist, size=256, seed=321)
 
 
 def test_inverse_batschelet():
@@ -800,3 +823,13 @@ def test_katojones_fit_methods_agree():
     np.testing.assert_allclose(gamma_mle, gamma, atol=0.05)
     np.testing.assert_allclose(rho_mle, rho, atol=0.08)
     np.testing.assert_allclose(_angle_diff(lam_mle, lam), 0.0, atol=0.2)
+def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05):
+    rng = np.random.default_rng(seed)
+    samples = dist.rvs(size=size, random_state=rng)
+    samples = np.asarray(samples, dtype=float)
+    assert samples.size == size
+
+    u = dist.cdf(samples)
+    u = np.mod(u, 1.0)
+    stat, pvalue = stats.kstest(u, "uniform")
+    assert pvalue > uniform_tol, f"kstest failed: statistic={stat}, p={pvalue}"

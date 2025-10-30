@@ -3,9 +3,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.integrate import quad, quad_vec
-from scipy.optimize import minimize, root, brentq
+from scipy.optimize import minimize, minimize_scalar, root, brentq
 from scipy.special import beta as beta_fn
-from scipy.special import gamma, i0, i1, ndtr, ndtri, iv, betainc, betaincinv, gammaln, digamma
+from scipy.special import gamma, i0, i0e, i1, ndtr, ndtri, iv, betainc, betaincinv, gammaln, digamma
+from scipy.special import lpmv
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -4421,6 +4422,11 @@ class jonespewsey_gen(CircularContinuous):
     Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sampler_cache = {}
+        self._series_cache = {}
+
     def _validate_params(self, mu, kappa, psi):
         return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
 
@@ -4484,20 +4490,404 @@ class jonespewsey_gen(CircularContinuous):
         return super().pdf(x, mu, kappa, psi, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, psi):
-        if np.isclose(np.abs(psi), 0).all():
-            normalizer = self._get_cached_normalizer(
-                lambda: _c_jonespewsey(mu, kappa, psi), mu, kappa, psi
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+        if flat.size == 0:
+            return arr.astype(float)
+
+        mu_val = _jp_ensure_scalar(mu, "mu")
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+
+        two_pi = 2.0 * np.pi
+
+        if kappa_val < _JP_KAPPA_TOL:
+            result = np.mod(flat, two_pi) / two_pi
+            return result.reshape(arr.shape)
+
+        if abs(psi_val) < _JP_PSI_TOL:
+            return vonmises.cdf(arr, mu=mu_val, kappa=kappa_val)
+
+        try:
+            n_idx, coeffs = self._jp_get_series(kappa_val, psi_val)
+        except Exception:  # pragma: no cover - defensive fallback
+            cdf_vals = self._cdf_from_pdf(arr, mu_val, kappa_val, psi_val)
+            return np.asarray(cdf_vals, dtype=float).reshape(arr.shape)
+
+        phi_start = (-mu_val) % two_pi
+        phi_end = (flat - mu_val) % two_pi
+
+        H_start = float(self._jp_series_cumulative(np.array([phi_start]), n_idx, coeffs)[0])
+        H_end = self._jp_series_cumulative(phi_end, n_idx, coeffs)
+
+        cdf = np.where(
+            phi_end >= phi_start,
+            np.clip(H_end - H_start, 0.0, 1.0),
+            np.clip(1.0 - (H_start - H_end), 0.0, 1.0),
+        )
+
+        return cdf.reshape(arr.shape)
+
+    def _ppf(self, q, mu, kappa, psi):
+        mu_val = _jp_ensure_scalar(mu, "mu")
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        two_pi = 2.0 * np.pi
+
+        q_arr = np.asarray(q, dtype=float)
+        if q_arr.size == 0:
+            return q_arr.astype(float)
+
+        flat = q_arr.reshape(-1)
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if np.any(valid):
+            q_valid = flat[valid]
+
+            boundary_lo = q_valid <= 0.0
+            boundary_hi = q_valid >= 1.0
+            interior = (~boundary_lo) & (~boundary_hi)
+            theta_vals = np.zeros_like(q_valid)
+
+            theta_vals[boundary_lo] = 0.0
+            theta_vals[boundary_hi] = two_pi
+
+            if np.any(interior):
+                q_int = q_valid[interior]
+                eps = 1e-15
+                q_clipped = np.clip(q_int, eps, 1.0 - eps)
+                if kappa_val < _JP_KAPPA_TOL:
+                    theta_vals[interior] = two_pi * q_clipped
+                elif abs(psi_val) < _JP_PSI_TOL:
+                    vm = vonmises(kappa=kappa_val, mu=mu_val)
+                    theta_vals[interior] = vm.ppf(q_clipped)
+                else:
+                    theta_curr = two_pi * q_clipped
+                    L = np.zeros_like(theta_curr)
+                    H = np.full_like(theta_curr, two_pi)
+                    tol_cdf = 1e-12
+                    tol_theta = 1e-10
+                    max_iter = 8
+
+                    for _ in range(max_iter):
+                        cdf_vals = np.asarray(
+                            self.cdf(theta_curr, mu_val, kappa_val, psi_val), dtype=float
+                        )
+                        pdf_vals = np.asarray(
+                            self.pdf(theta_curr, mu_val, kappa_val, psi_val), dtype=float
+                        )
+                        delta = cdf_vals - q_clipped
+
+                        L = np.where(delta <= 0.0, theta_curr, L)
+                        H = np.where(delta > 0.0, theta_curr, H)
+
+                        converged = (np.abs(delta) <= tol_cdf) & ((H - L) <= tol_theta)
+                        if np.all(converged):
+                            break
+
+                        denom = np.clip(pdf_vals, 1e-15, None)
+                        step = np.clip(delta / denom, -np.pi, np.pi)
+                        theta_next = theta_curr - step
+                        midpoint = 0.5 * (L + H)
+                        theta_next = np.where(
+                            (theta_next <= L) | (theta_next >= H),
+                            midpoint,
+                            theta_next,
+                        )
+                        theta_curr = np.clip(theta_next, 0.0, two_pi)
+
+                    residual = np.asarray(
+                        self.cdf(theta_curr, mu_val, kappa_val, psi_val),
+                        dtype=float,
+                    ) - q_clipped
+                    mask = (np.abs(residual) > tol_cdf) | ((H - L) > tol_theta)
+                    if np.any(mask):
+                        theta_b = theta_curr.copy()
+                        L_b = L.copy()
+                        H_b = H.copy()
+                        for _ in range(30):
+                            if not np.any(mask):
+                                break
+                            mid = 0.5 * (L_b + H_b)
+                            cdf_mid = np.asarray(
+                                self.cdf(mid, mu_val, kappa_val, psi_val),
+                                dtype=float,
+                            )
+                            delta_mid = cdf_mid - q_clipped
+                            take_upper = (delta_mid > 0.0) & mask
+                            take_lower = (~take_upper) & mask
+                            H_b = np.where(take_upper, mid, H_b)
+                            L_b = np.where(take_lower, mid, L_b)
+                            theta_b = np.where(mask, mid, theta_b)
+                            mask = mask & (np.abs(delta_mid) > tol_cdf)
+                        theta_curr = np.where(mask, 0.5 * (L_b + H_b), theta_b)
+
+                    theta_vals[interior] = theta_curr
+
+            result_vals = theta_vals
+            result_vals[boundary_lo] = 0.0
+            result_vals[boundary_hi] = two_pi
+            result[valid] = result_vals
+
+        result = result.reshape(q_arr.shape)
+        return result
+
+    def _rvs(self, mu, kappa, psi, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_val = _jp_ensure_scalar(mu, "mu")
+        mu_val = float(np.mod(mu_val, 2.0 * np.pi))
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+
+        if size is None:
+            size_tuple = ()
+            total = 1
+        elif np.isscalar(size):
+            size_tuple = (int(size),)
+            total = int(size_tuple[0])
+        else:
+            size_tuple = tuple(int(s) for s in np.atleast_1d(size))
+            total = int(np.prod(size_tuple))
+
+        two_pi = 2.0 * np.pi
+        if kappa_val < _JP_KAPPA_TOL:
+            samples = rng.uniform(0.0, two_pi, size=total)
+            return samples.reshape(size_tuple)
+
+        if abs(psi_val) < _JP_PSI_TOL:
+            return vonmises.rvs(mu=mu_val, kappa=kappa_val, size=size_tuple or None, random_state=rng)
+
+        kappa_env, envelope_const = self._jp_sampler_envelope(mu_val, kappa_val, psi_val)
+        samples = np.empty(total, dtype=float)
+        filled = 0
+
+        while filled < total:
+            remaining = total - filled
+            proposals = vonmises.rvs(
+                mu=mu_val,
+                kappa=kappa_env,
+                size=remaining,
+                random_state=rng,
             )
-            self._c = normalizer
+            target_vals = self.pdf(proposals, mu_val, kappa_val, psi_val)
+            proposal_vals = vonmises.pdf(proposals, mu=mu_val, kappa=kappa_env)
+            ratio = np.where(proposal_vals > 0.0, target_vals / (envelope_const * proposal_vals), 0.0)
+            u = rng.uniform(0.0, 1.0, size=remaining)
+            accept = ratio >= u
+            n_accept = int(np.sum(accept))
+            if n_accept > 0:
+                samples[filled:filled + n_accept] = proposals[accept][:n_accept]
+                filled += n_accept
 
-            def _vm_integrand(theta, mu_val, kappa_val, psi_val, c_val):
-                return c_val * np.exp(kappa_val * np.cos(theta - mu_val))
+        return samples.reshape(size_tuple)
 
-            return self._cdf_integral(
-                x, _vm_integrand, (mu, kappa, psi, normalizer)
+    def _jp_sampler_envelope(self, mu, kappa, psi):
+        key = (float(np.mod(mu, 2.0 * np.pi)), float(kappa), float(psi))
+        cached = self._sampler_cache.get(key)
+        if cached is not None:
+            return cached
+
+        kappa_env = _jp_effective_kappa(kappa, psi)
+        phi_grid = np.linspace(0.0, 2.0 * np.pi, 2048, endpoint=False)
+        theta_grid = np.mod(mu + phi_grid, 2.0 * np.pi)
+
+        target_vals = self.pdf(theta_grid, mu, kappa, psi)
+        log_target = np.log(np.clip(target_vals, np.finfo(float).tiny, None))
+
+        kappa_env, envelope_const = _optimize_vonmises_envelope(
+            theta_grid,
+            log_target,
+            mu,
+            max(kappa_env, 1e-6),
+        )
+
+        self._sampler_cache[key] = (kappa_env, envelope_const)
+        return kappa_env, envelope_const
+
+    def _jp_get_series(self, kappa, psi, max_harmonics=256, grid_size=4096):
+        key = (float(kappa), float(psi))
+        cached = self._series_cache.get(key)
+        if cached is not None:
+            return cached
+
+        phi = np.linspace(-np.pi, np.pi, int(grid_size), endpoint=False)
+        theta = np.mod(phi, 2.0 * np.pi)
+        pdf_vals = self.pdf(theta, 0.0, kappa, psi)
+        pdf_vals = np.asarray(pdf_vals, dtype=float)
+
+        delta = (2.0 * np.pi) / float(grid_size)
+        harmonics = np.arange(0, max_harmonics + 1, dtype=float)
+        cos_matrix = np.cos(np.outer(harmonics, phi))
+        cos_coeffs = delta * cos_matrix @ pdf_vals
+        cos_coeffs[0] = 1.0
+        cos_coeffs = np.clip(cos_coeffs, -1.0, 1.0)
+
+        n_idx = harmonics[1:]
+        coeffs = cos_coeffs[1:]
+        if n_idx.size == 0:
+            result = (n_idx, coeffs)
+            self._series_cache[key] = result
+            return result
+
+        contributions = np.abs(coeffs / n_idx)
+        tol = 5e-12
+        mask = contributions > tol
+        if not np.any(mask):
+            n_used = n_idx[:1]
+            coeffs_used = coeffs[:1]
+        else:
+            last = int(np.nonzero(mask)[0][-1]) + 1
+            n_used = n_idx[:last]
+            coeffs_used = coeffs[:last]
+        result = (n_used, coeffs_used)
+        self._series_cache[key] = result
+        return result
+
+    @staticmethod
+    def _jp_series_cumulative(phi_values, n_idx, coeffs):
+        phi_values = np.asarray(phi_values, dtype=float)
+        phi_flat = phi_values.reshape(-1)
+        result = phi_flat / (2.0 * np.pi)
+        if n_idx.size:
+            sin_terms = np.sin(np.outer(phi_flat, n_idx))
+            result += (sin_terms @ (coeffs / n_idx)) / np.pi
+        return result.reshape(phi_values.shape)
+
+    @staticmethod
+    def _jp_series_skew_integral(phi_values, n_idx, coeffs):
+        phi_values = np.asarray(phi_values, dtype=float)
+        phi_flat = phi_values.reshape(-1)
+        base = (1.0 - np.cos(phi_flat)) / (2.0 * np.pi)
+        if n_idx.size:
+            n_arr = n_idx
+            coeff_arr = coeffs
+            contributions = np.zeros_like(phi_flat)
+
+            mask_one = np.isclose(n_arr, 1.0)
+            if np.any(mask_one):
+                coeff_one = float(np.sum(coeff_arr[mask_one]))
+                contributions += coeff_one * ((1.0 - np.cos(2.0 * phi_flat)) / 4.0)
+
+            mask_other = ~mask_one
+            if np.any(mask_other):
+                n_other = n_arr[mask_other]
+                coeff_other = coeff_arr[mask_other]
+                phi_matrix = np.outer(phi_flat, n_other)
+                term_plus = (1.0 - np.cos(phi_matrix + phi_flat[:, None])) / (n_other + 1.0)
+                term_minus = (1.0 - np.cos(phi_matrix - phi_flat[:, None])) / (n_other - 1.0)
+                contributions += 0.5 * (term_plus - term_minus) @ coeff_other
+
+            base += contributions / np.pi
+        return base.reshape(phi_values.shape)
+
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        psi_bounds=(-4.0, 4.0),
+        kappa_bounds=(1e-6, 1e3),
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        mu_mom, r1 = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = 0.0
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        r1 = float(np.clip(r1, 1e-12, 1.0 - 1e-12))
+        n_adjust = int(max(1, round(w_sum)))
+        kappa_mom = float(np.clip(circ_kappa(r=r1, n=n_adjust), kappa_bounds[0], kappa_bounds[1]))
+
+        psi_low, psi_high = psi_bounds
+        psi_grid = np.linspace(psi_low, psi_high, 9)
+
+        def nll(params):
+            mu_param, kappa_param, psi_param = params
+            if not (kappa_bounds[0] <= kappa_param <= kappa_bounds[1]):
+                return np.inf
+            if not (psi_low <= psi_param <= psi_high):
+                return np.inf
+            mu_wrapped = float(np.mod(mu_param, 2.0 * np.pi))
+            pdf_vals = self.pdf(x, mu_wrapped, kappa_param, psi_param)
+            if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
+                return np.inf
+            return float(-np.sum(w * np.log(pdf_vals)))
+
+        psi_init = 0.0
+        best_score = nll((mu_mom, kappa_mom, psi_init))
+        for candidate in psi_grid:
+            score = nll((mu_mom, kappa_mom, candidate))
+            if score < best_score:
+                best_score = score
+                psi_init = float(candidate)
+
+        method_key = method.lower()
+        alias = {"analytical": "moments", "numerical": "mle"}
+        method_key = alias.get(method_key, method_key)
+        if method_key not in {"moments", "mle"}:
+            raise ValueError("`method` must be either 'moments' or 'mle'.")
+
+        if method_key == "moments":
+            estimates = (self._wrap_direction(mu_mom), kappa_mom, 0.0)
+            info = {
+                "method": "moments",
+                "loglik": float(-best_score),
+                "n_effective": float(n_eff),
+                "converged": True,
+            }
+        else:
+            bounds = [(0.0, 2.0 * np.pi), kappa_bounds, psi_bounds]
+            init = np.array([mu_mom, kappa_mom, psi_init], dtype=float)
+            result = minimize(
+                nll,
+                init,
+                method=optimizer,
+                bounds=bounds,
+                **kwargs,
             )
+            if not result.success:
+                raise RuntimeError(f"jonespewsey.fit(method='mle') failed: {result.message}")
+            mu_hat = self._wrap_direction(float(result.x[0]))
+            kappa_hat = float(np.clip(result.x[1], kappa_bounds[0], kappa_bounds[1]))
+            psi_hat = float(np.clip(result.x[2], psi_bounds[0], psi_bounds[1]))
+            final_nll = float(result.fun)
+            estimates = (mu_hat, kappa_hat, psi_hat)
+            info = {
+                "method": "mle",
+                "loglik": float(-final_nll),
+                "n_effective": float(n_eff),
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "optimizer": optimizer,
+                "initial": (mu_mom, kappa_mom, psi_init),
+            }
 
-        return self._cdf_from_pdf(x, mu, kappa, psi)
+        if return_info:
+            return estimates, info
+        return estimates
 
 
 jonespewsey = jonespewsey_gen(name="jonespewsey")
@@ -4510,6 +4900,7 @@ jonespewsey = jonespewsey_gen(name="jonespewsey")
 _JP_KAPPA_TOL = 1e-3
 _JP_PSI_TOL = 1e-6
 _JP_MIN_BASE = np.finfo(float).tiny
+_JP_MAX_EXP_ARGUMENT = 350.0  # guard for exp overflow
 
 
 def _jp_ensure_scalar(value, name):
@@ -4530,9 +4921,92 @@ def _jp_kernel_base(phi, kappa, psi):
         return np.exp(kappa * np.cos(phi))
 
     A = kappa * psi
-    base = np.cosh(A) + np.sinh(A) * np.cos(phi)
+    cos_phi = np.cos(phi)
+
+    cosh_A = np.cosh(A)
+    sinh_A = np.sinh(A)
+    if not np.isfinite(cosh_A) or not np.isfinite(sinh_A):
+        # Fallback to stable exponential representation
+        if A >= 0:
+            exp_A = np.exp(np.clip(A, None, _JP_MAX_EXP_ARGUMENT))
+            exp_negA = np.exp(np.clip(-A, -_JP_MAX_EXP_ARGUMENT, None))
+        else:
+            exp_A = np.exp(np.clip(A, -_JP_MAX_EXP_ARGUMENT, None))
+            exp_negA = np.exp(np.clip(-A, None, _JP_MAX_EXP_ARGUMENT))
+        cosh_A = 0.5 * (exp_A + exp_negA)
+        sinh_A = 0.5 * (exp_A - exp_negA)
+
+    base = cosh_A + sinh_A * cos_phi
     base = np.clip(base, _JP_MIN_BASE, None)
     return np.power(base, 1.0 / psi)
+
+
+def _jp_effective_kappa(kappa, psi):
+    if abs(psi) < _JP_PSI_TOL:
+        return max(kappa, 1e-6)
+    A = kappa * psi
+    with np.errstate(over="ignore"):
+        factor = 1.0 - np.exp(-2.0 * A)
+    kappa_eff = factor / (2.0 * psi)
+    if not np.isfinite(kappa_eff) or kappa_eff <= 0.0:
+        return max(kappa, 1e-6)
+    return float(kappa_eff)
+
+
+def _log_vonmises_pdf(theta, mu, kappa):
+    theta = np.asarray(theta, dtype=float)
+    if kappa < 1e-8:
+        return np.full_like(theta, -np.log(2.0 * np.pi), dtype=float)
+    diff = theta - mu
+    log_i0 = kappa + np.log(i0e(kappa))
+    return kappa * np.cos(diff) - (np.log(2.0 * np.pi) + log_i0)
+
+
+def _optimize_vonmises_envelope(theta, log_target, mu, initial_guess, *, max_iter=3):
+    min_kappa = 1e-6
+    max_kappa = 1e4
+    best_kappa = max(initial_guess, min_kappa)
+    log_M_best = np.inf
+
+    def evaluate(candidates):
+        nonlocal best_kappa, log_M_best
+        for kappa_env in candidates:
+            kappa_env = float(np.clip(kappa_env, min_kappa, max_kappa))
+            log_proposal = _log_vonmises_pdf(theta, mu, kappa_env)
+            log_ratio = log_target - log_proposal
+            log_ratio_max = float(np.max(log_ratio))
+            if not np.isfinite(log_ratio_max):
+                continue
+            if log_ratio_max < log_M_best:
+                log_M_best = log_ratio_max
+                best_kappa = kappa_env
+
+    candidate_pool = np.array(
+        [
+            initial_guess,
+            max(initial_guess * 0.5, min_kappa),
+            initial_guess * 2.0,
+            max(initial_guess * 0.25, min_kappa),
+            initial_guess * 4.0,
+            0.5,
+            1.0,
+            max(initial_guess, 1.5),
+            max(initial_guess, 3.0),
+        ],
+        dtype=float,
+    )
+    candidate_pool = np.unique(np.clip(candidate_pool, min_kappa, max_kappa))
+    evaluate(candidate_pool)
+
+    for _ in range(max_iter):
+        span = np.linspace(best_kappa * 0.5, best_kappa * 1.5, num=7)
+        span = np.clip(span, min_kappa, max_kappa)
+        evaluate(span)
+
+    log_M_best = float(log_M_best)
+    K = float(best_kappa)
+    M = float(np.exp(log_M_best + np.log1p(0.02)))
+    return K, max(M, 1.01)
 
 
 def _kernel_jonespewsey(x, mu, kappa, psi):
@@ -4544,8 +5018,12 @@ def _c_jonespewsey(mu, kappa, psi):
     if kappa < _JP_KAPPA_TOL:
         return 1.0 / (2.0 * np.pi)
 
-    if np.isclose(psi, 0.0, atol=_JP_PSI_TOL):
+    if abs(psi) < _JP_PSI_TOL:
         return 1.0 / (2.0 * np.pi * i0(kappa))
+
+    constant = _jp_legendre_normalizer(kappa, psi)
+    if np.isfinite(constant) and 1e-12 <= constant <= 1e6:
+        return constant
 
     integral = quad_vec(
         _kernel_jonespewsey,
@@ -4556,6 +5034,25 @@ def _c_jonespewsey(mu, kappa, psi):
         epsrel=1e-10,
     )[0]
     return 1.0 / integral
+
+
+def _jp_legendre_normalizer(kappa, psi):
+    try:
+        nu = 1.0 / psi
+    except ZeroDivisionError:
+        return np.nan
+
+    A = kappa * psi
+    z = np.cosh(A)
+    try:
+        legendre = lpmv(0, nu, z)
+    except ValueError:
+        return np.nan
+
+    if not np.isfinite(legendre) or legendre <= 0.0:
+        return np.nan
+
+    return 1.0 / (2.0 * np.pi * legendre)
 
 
 ###########################
@@ -4648,7 +5145,344 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
         return super().pdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, lmbd):
-        return self._cdf_from_pdf(x, xi, kappa, psi, lmbd)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+        if flat.size == 0:
+            return arr.astype(float)
+
+        xi_val = _jp_ensure_scalar(xi, "xi")
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        lmbd_val = _jp_ensure_scalar(lmbd, "lmbd")
+
+        two_pi = 2.0 * np.pi
+
+        if kappa_val < _JP_KAPPA_TOL:
+            phi = (flat - xi_val) % two_pi
+            base = phi / two_pi
+            skew = (1.0 - np.cos(phi)) / (2.0 * np.pi)
+            cdf = base + lmbd_val * skew
+            return np.clip(cdf, 0.0, 1.0).reshape(arr.shape)
+
+        if abs(psi_val) < _JP_PSI_TOL and abs(lmbd_val) < 1e-12:
+            return jonespewsey.cdf(arr, mu=xi_val, kappa=kappa_val, psi=psi_val)
+
+        n_idx, coeffs = jonespewsey._jp_get_series(kappa_val, psi_val)
+
+        phi_start = (-xi_val) % two_pi
+        phi_end = (flat - xi_val) % two_pi
+
+        H_start = float(jonespewsey._jp_series_cumulative(np.array([phi_start]), n_idx, coeffs)[0])
+        H_end = jonespewsey._jp_series_cumulative(phi_end, n_idx, coeffs)
+
+        if abs(lmbd_val) > 0:
+            J_start = float(jonespewsey._jp_series_skew_integral(np.array([phi_start]), n_idx, coeffs)[0])
+            J_end = jonespewsey._jp_series_skew_integral(phi_end, n_idx, coeffs)
+        else:
+            J_start = 0.0
+            J_end = np.zeros_like(H_end)
+
+        base_cdf = np.where(
+            phi_end >= phi_start,
+            H_end - H_start,
+            1.0 - (H_start - H_end),
+        )
+
+        skew_cdf = np.where(
+            phi_end >= phi_start,
+            J_end - J_start,
+            -(J_start - J_end),
+        )
+
+        cdf = base_cdf + lmbd_val * skew_cdf
+        return np.clip(cdf, 0.0, 1.0).reshape(arr.shape)
+
+    def _ppf(self, q, xi, kappa, psi, lmbd):
+        xi_val = _jp_ensure_scalar(xi, "xi")
+        xi_val = float(np.mod(xi_val, 2.0 * np.pi))
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        lmbd_val = _jp_ensure_scalar(lmbd, "lmbd")
+
+        two_pi = 2.0 * np.pi
+        q_arr = np.asarray(q, dtype=float)
+        if q_arr.size == 0:
+            return q_arr.astype(float)
+
+        flat = q_arr.reshape(-1)
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if np.any(valid):
+            q_valid = flat[valid]
+            boundary_lo = q_valid <= 0.0
+            boundary_hi = q_valid >= 1.0
+            interior = (~boundary_lo) & (~boundary_hi)
+            theta_vals = np.zeros_like(q_valid)
+            theta_vals[boundary_lo] = 0.0
+            theta_vals[boundary_hi] = two_pi
+
+            if np.any(interior):
+                q_int = q_valid[interior]
+                eps = 1e-15
+                q_clipped = np.clip(q_int, eps, 1.0 - eps)
+                if kappa_val < _JP_KAPPA_TOL:
+                    theta_vals[interior] = two_pi * q_clipped
+                elif abs(lmbd_val) < 1e-12:
+                    theta_vals[interior] = jonespewsey.ppf(
+                        q_clipped, mu=xi_val, kappa=kappa_val, psi=psi_val
+                    )
+                else:
+                    theta_curr = two_pi * q_clipped
+                    L = np.zeros_like(theta_curr)
+                    H = np.full_like(theta_curr, two_pi)
+                    tol_cdf = 1e-12
+                    tol_theta = 1e-10
+                    max_iter = 8
+
+                    for _ in range(max_iter):
+                        cdf_vals = np.asarray(
+                            self.cdf(theta_curr, xi_val, kappa_val, psi_val, lmbd_val),
+                            dtype=float,
+                        )
+                        pdf_vals = np.asarray(
+                            self.pdf(theta_curr, xi_val, kappa_val, psi_val, lmbd_val),
+                            dtype=float,
+                        )
+                        delta = cdf_vals - q_clipped
+                        L = np.where(delta <= 0.0, theta_curr, L)
+                        H = np.where(delta > 0.0, theta_curr, H)
+
+                        converged = (np.abs(delta) <= tol_cdf) & ((H - L) <= tol_theta)
+                        if np.all(converged):
+                            break
+
+                        denom = np.clip(pdf_vals, 1e-15, None)
+                        step = np.clip(delta / denom, -np.pi, np.pi)
+                        theta_next = theta_curr - step
+                        midpoint = 0.5 * (L + H)
+                        theta_next = np.where(
+                            (theta_next <= L) | (theta_next >= H),
+                            midpoint,
+                            theta_next,
+                        )
+                        theta_curr = np.clip(theta_next, 0.0, two_pi)
+
+                    residual = np.asarray(
+                        self.cdf(theta_curr, xi_val, kappa_val, psi_val, lmbd_val),
+                        dtype=float,
+                    ) - q_clipped
+                    mask = (np.abs(residual) > tol_cdf) | ((H - L) > tol_theta)
+                    if np.any(mask):
+                        theta_b = theta_curr.copy()
+                        L_b = L.copy()
+                        H_b = H.copy()
+                        for _ in range(30):
+                            if not np.any(mask):
+                                break
+                            mid = 0.5 * (L_b + H_b)
+                            cdf_mid = np.asarray(
+                                self.cdf(mid, xi_val, kappa_val, psi_val, lmbd_val),
+                                dtype=float,
+                            )
+                            delta_mid = cdf_mid - q_clipped
+                            take_upper = (delta_mid > 0.0) & mask
+                            take_lower = (~take_upper) & mask
+                            H_b = np.where(take_upper, mid, H_b)
+                            L_b = np.where(take_lower, mid, L_b)
+                            theta_b = np.where(mask, mid, theta_b)
+                            mask = mask & (np.abs(delta_mid) > tol_cdf)
+                        theta_curr = np.where(mask, 0.5 * (L_b + H_b), theta_b)
+
+                    theta_vals[interior] = theta_curr
+
+            result_vals = theta_vals
+            result_vals[boundary_lo] = 0.0
+            result_vals[boundary_hi] = two_pi
+            result[valid] = result_vals
+
+        return result.reshape(q_arr.shape)
+
+    def _rvs(self, xi, kappa, psi, lmbd, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        xi_val = _jp_ensure_scalar(xi, "xi")
+        xi_val = float(np.mod(xi_val, 2.0 * np.pi))
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        lmbd_val = _jp_ensure_scalar(lmbd, "lmbd")
+        if abs(lmbd_val) >= 1.0:
+            raise ValueError("|lmbd| must be < 1 for sine-skewed Jones-Pewsey.")
+
+        if size is None:
+            size_tuple = ()
+            total = 1
+        elif np.isscalar(size):
+            size_tuple = (int(size),)
+            total = int(size_tuple[0])
+        else:
+            size_tuple = tuple(int(s) for s in np.atleast_1d(size))
+            total = int(np.prod(size_tuple))
+
+        base_dist = jonespewsey(kappa=kappa_val, psi=psi_val, mu=xi_val)
+        weights_max = 1.0 + abs(lmbd_val)
+
+        samples = np.empty(total, dtype=float)
+        filled = 0
+        while filled < total:
+            remaining = total - filled
+            proposals = base_dist.rvs(size=remaining, random_state=rng)
+            accept_prob = (1.0 + lmbd_val * np.sin(proposals - xi_val)) / weights_max
+            u = rng.uniform(0.0, 1.0, size=remaining)
+            accept = u <= accept_prob
+            n_accept = int(np.sum(accept))
+            if n_accept > 0:
+                samples[filled:filled + n_accept] = proposals[accept][:n_accept]
+                filled += n_accept
+
+        return samples.reshape(size_tuple)
+
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="two-step",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        refine=False,
+        psi_bounds=(-4.0, 4.0),
+        kappa_bounds=(1e-6, 1e3),
+        lmbd_bounds=(-0.99, 0.99),
+        base_kwargs=None,
+        **kwargs,
+    ):
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        base_kwargs = {} if base_kwargs is None else dict(base_kwargs)
+        base_estimates, base_info = jonespewsey.fit(
+            x,
+            weights=w,
+            method="mle",
+            psi_bounds=psi_bounds,
+            kappa_bounds=kappa_bounds,
+            optimizer=optimizer,
+            return_info=True,
+            **base_kwargs,
+        )
+        xi_hat, kappa_hat, psi_hat = base_estimates
+
+        lam_low, lam_high = lmbd_bounds
+
+        def lambda_nll(lmbd):
+            if not (lam_low < lmbd < lam_high):
+                return np.inf
+            vals = 1.0 + lmbd * np.sin(x - xi_hat)
+            if np.any(vals <= 0.0) or not np.all(np.isfinite(vals)):
+                return np.inf
+            return float(-np.sum(w * np.log(vals)))
+
+        lambda_result = minimize_scalar(
+            lambda_nll,
+            bounds=lmbd_bounds,
+            method="bounded",
+        )
+        if not lambda_result.success:
+            raise RuntimeError("Failed to estimate skewness parameter `lmbd`.")
+        lmbd_hat = float(np.clip(lambda_result.x, lam_low, lam_high))
+
+        method_key = method.lower()
+        alias = {"twostep": "two-step", "two_step": "two-step", "mle": "mle"}
+        method_key = alias.get(method_key, method_key)
+        if method_key not in {"two-step", "mle"}:
+            raise ValueError("`method` must be either 'two-step' or 'mle'.")
+
+        if method_key == "mle":
+            refine = True
+
+        info = {
+            "base": base_info,
+            "lambda_opt": {
+                "success": bool(lambda_result.success),
+                "nit": getattr(lambda_result, "nit", None),
+                "nfev": getattr(lambda_result, "nfev", None),
+            },
+            "n_effective": float(n_eff),
+        }
+
+        if refine:
+            bounds = [
+                (0.0, 2.0 * np.pi),
+                kappa_bounds,
+                psi_bounds,
+                lmbd_bounds,
+            ]
+
+            def total_nll(params):
+                xi_param, kappa_param, psi_param, lmbd_param = params
+                if not (kappa_bounds[0] <= kappa_param <= kappa_bounds[1]):
+                    return np.inf
+                if not (psi_bounds[0] <= psi_param <= psi_bounds[1]):
+                    return np.inf
+                if not (lmbd_bounds[0] < lmbd_param < lmbd_bounds[1]):
+                    return np.inf
+                xi_wrapped = float(np.mod(xi_param, 2.0 * np.pi))
+                pdf_vals = self.pdf(x, xi_wrapped, kappa_param, psi_param, lmbd_param)
+                if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
+                    return np.inf
+                return float(-np.sum(w * np.log(pdf_vals)))
+
+            init = np.array([xi_hat, kappa_hat, psi_hat, lmbd_hat], dtype=float)
+            result = minimize(
+                total_nll,
+                init,
+                method=optimizer,
+                bounds=bounds,
+                **kwargs,
+            )
+            if not result.success:
+                raise RuntimeError("Sine-skewed JP fit refinement failed: " + result.message)
+            xi_hat = self._wrap_direction(float(result.x[0]))
+            kappa_hat = float(np.clip(result.x[1], kappa_bounds[0], kappa_bounds[1]))
+            psi_hat = float(np.clip(result.x[2], psi_bounds[0], psi_bounds[1]))
+            lmbd_hat = float(np.clip(result.x[3], lmbd_bounds[0], lmbd_bounds[1]))
+            info["refinement"] = {
+                "success": bool(result.success),
+                "nit": result.nit,
+                "optimizer": optimizer,
+            }
+
+        final_pdf = self.pdf(x, xi_hat, kappa_hat, psi_hat, lmbd_hat)
+        loglik = float(np.sum(w * np.log(final_pdf)))
+
+        estimates = (xi_hat, kappa_hat, psi_hat, lmbd_hat)
+        if return_info:
+            info.update(
+                {
+                    "loglik": loglik,
+                    "method": method_key,
+                    "estimates": estimates,
+                }
+            )
+            return estimates, info
+        return estimates
 
 
 jonespewsey_sineskewed = jonespewsey_sineskewed_gen(name="jonespewsey_sineskewed")
@@ -4679,6 +5513,11 @@ class jonespewsey_asym_gen(CircularContinuous):
     ----
     Implementation from 4.3.12 of Pewsey et al. (2014)
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sampler_cache = {}
+        self._cdf_table_cache = {}
 
     def _validate_params(self, xi, kappa, psi, nu):
         return (
@@ -4766,7 +5605,341 @@ class jonespewsey_asym_gen(CircularContinuous):
         return super().pdf(x, xi, kappa, psi, nu, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, nu):
-        return self._cdf_from_pdf(x, xi, kappa, psi, nu)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+        if flat.size == 0:
+            return arr.astype(float)
+
+        xi_val = _jp_ensure_scalar(xi, "xi")
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        nu_val = _jp_ensure_scalar(nu, "nu")
+
+        two_pi = 2.0 * np.pi
+
+        if kappa_val < _JP_KAPPA_TOL and abs(nu_val) < 1e-12:
+            return jonespewsey.cdf(arr, mu=xi_val, kappa=kappa_val, psi=psi_val)
+
+        phi_start = (-xi_val) % two_pi
+        phi_end = (flat - xi_val) % two_pi
+
+        phi_grid, cdf_grid = self._asym_cdf_table(xi_val, kappa_val, psi_val, nu_val)
+
+        H_start = float(np.interp(phi_start, phi_grid, cdf_grid, left=0.0, right=1.0))
+        H_end = np.interp(phi_end, phi_grid, cdf_grid, left=0.0, right=1.0)
+
+        cdf = np.where(
+            phi_end >= phi_start,
+            np.clip(H_end - H_start, 0.0, 1.0),
+            np.clip(1.0 - (H_start - H_end), 0.0, 1.0),
+        )
+
+        return cdf.reshape(arr.shape)
+
+    def _ppf(self, q, xi, kappa, psi, nu):
+        xi_val = _jp_ensure_scalar(xi, "xi")
+        xi_val = float(np.mod(xi_val, 2.0 * np.pi))
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        nu_val = _jp_ensure_scalar(nu, "nu")
+
+        two_pi = 2.0 * np.pi
+        q_arr = np.asarray(q, dtype=float)
+        if q_arr.size == 0:
+            return q_arr.astype(float)
+
+        flat = q_arr.reshape(-1)
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if np.any(valid):
+            q_valid = flat[valid]
+            boundary_lo = q_valid <= 0.0
+            boundary_hi = q_valid >= 1.0
+            interior = (~boundary_lo) & (~boundary_hi)
+            theta_vals = np.zeros_like(q_valid)
+            theta_vals[boundary_lo] = 0.0
+            theta_vals[boundary_hi] = two_pi
+
+            if np.any(interior):
+                q_int = q_valid[interior]
+                eps = 1e-15
+                q_clipped = np.clip(q_int, eps, 1.0 - eps)
+                if kappa_val < _JP_KAPPA_TOL and nu_val < 1e-12:
+                    theta_vals[interior] = two_pi * q_clipped
+                else:
+                    theta_curr = two_pi * q_clipped
+                    L = np.zeros_like(theta_curr)
+                    H = np.full_like(theta_curr, two_pi)
+                    tol_cdf = 1e-12
+                    tol_theta = 1e-10
+                    max_iter = 8
+
+                    for _ in range(max_iter):
+                        cdf_vals = np.asarray(
+                            self.cdf(theta_curr, xi_val, kappa_val, psi_val, nu_val),
+                            dtype=float,
+                        )
+                        pdf_vals = np.asarray(
+                            self.pdf(theta_curr, xi_val, kappa_val, psi_val, nu_val),
+                            dtype=float,
+                        )
+                        delta = cdf_vals - q_clipped
+                        L = np.where(delta <= 0.0, theta_curr, L)
+                        H = np.where(delta > 0.0, theta_curr, H)
+
+                        converged = (np.abs(delta) <= tol_cdf) & ((H - L) <= tol_theta)
+                        if np.all(converged):
+                            break
+
+                        denom = np.clip(pdf_vals, 1e-15, None)
+                        step = np.clip(delta / denom, -np.pi, np.pi)
+                        theta_next = theta_curr - step
+                        midpoint = 0.5 * (L + H)
+                        theta_next = np.where(
+                            (theta_next <= L) | (theta_next >= H),
+                            midpoint,
+                            theta_next,
+                        )
+                        theta_curr = np.clip(theta_next, 0.0, two_pi)
+
+                    residual = np.asarray(
+                        self.cdf(theta_curr, xi_val, kappa_val, psi_val, nu_val),
+                        dtype=float,
+                    ) - q_clipped
+                    mask = (np.abs(residual) > tol_cdf) | ((H - L) > tol_theta)
+                    if np.any(mask):
+                        theta_b = theta_curr.copy()
+                        L_b = L.copy()
+                        H_b = H.copy()
+                        for _ in range(30):
+                            if not np.any(mask):
+                                break
+                            mid = 0.5 * (L_b + H_b)
+                            cdf_mid = np.asarray(
+                                self.cdf(mid, xi_val, kappa_val, psi_val, nu_val),
+                                dtype=float,
+                            )
+                            delta_mid = cdf_mid - q_clipped
+                            take_upper = (delta_mid > 0.0) & mask
+                            take_lower = (~take_upper) & mask
+                            H_b = np.where(take_upper, mid, H_b)
+                            L_b = np.where(take_lower, mid, L_b)
+                            theta_b = np.where(mask, mid, theta_b)
+                            mask = mask & (np.abs(delta_mid) > tol_cdf)
+                        theta_curr = np.where(mask, 0.5 * (L_b + H_b), theta_b)
+
+                    theta_vals[interior] = theta_curr
+
+            result_vals = theta_vals
+            result_vals[boundary_lo] = 0.0
+            result_vals[boundary_hi] = two_pi
+            result[valid] = result_vals
+
+        return result.reshape(q_arr.shape)
+
+    def _rvs(self, xi, kappa, psi, nu, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        xi_val = _jp_ensure_scalar(xi, "xi")
+        xi_val = float(np.mod(xi_val, 2.0 * np.pi))
+        kappa_val = _jp_ensure_scalar(kappa, "kappa")
+        psi_val = _jp_ensure_scalar(psi, "psi")
+        nu_val = _jp_ensure_scalar(nu, "nu")
+        if not (0.0 <= nu_val < 1.0):
+            raise ValueError("`nu` must lie in [0, 1).")
+
+        if size is None:
+            size_tuple = ()
+            total = 1
+        elif np.isscalar(size):
+            size_tuple = (int(size),)
+            total = int(size_tuple[0])
+        else:
+            size_tuple = tuple(int(s) for s in np.atleast_1d(size))
+            total = int(np.prod(size_tuple))
+
+        two_pi = 2.0 * np.pi
+        if kappa_val < _JP_KAPPA_TOL:
+            samples = rng.uniform(0.0, two_pi, size=total)
+            return samples.reshape(size_tuple)
+
+        if abs(psi_val) < _JP_PSI_TOL and nu_val < 1e-12:
+            return vonmises.rvs(mu=xi_val, kappa=kappa_val, size=size_tuple or None, random_state=rng)
+
+        kappa_env, envelope_const = self._asym_sampler_envelope(xi_val, kappa_val, psi_val, nu_val)
+        samples = np.empty(total, dtype=float)
+        filled = 0
+
+        while filled < total:
+            remaining = total - filled
+            proposals = vonmises.rvs(
+                mu=xi_val,
+                kappa=kappa_env,
+                size=remaining,
+                random_state=rng,
+            )
+            target_vals = self.pdf(proposals, xi_val, kappa_val, psi_val, nu_val)
+            proposal_vals = vonmises.pdf(proposals, mu=xi_val, kappa=kappa_env)
+            ratio = np.where(proposal_vals > 0.0, target_vals / (envelope_const * proposal_vals), 0.0)
+            u = rng.uniform(0.0, 1.0, size=remaining)
+            accept = ratio >= u
+            n_accept = int(np.sum(accept))
+            if n_accept > 0:
+                samples[filled:filled + n_accept] = proposals[accept][:n_accept]
+                filled += n_accept
+
+        return samples.reshape(size_tuple)
+
+    def _asym_sampler_envelope(self, xi, kappa, psi, nu):
+        key = (float(np.mod(xi, 2.0 * np.pi)), float(kappa), float(psi), float(nu))
+        cached = self._sampler_cache.get(key)
+        if cached is not None:
+            return cached
+
+        kappa_env = _jp_effective_kappa(kappa, psi)
+        phi_grid = np.linspace(0.0, 2.0 * np.pi, 2048, endpoint=False)
+        theta_grid = np.mod(xi + phi_grid, 2.0 * np.pi)
+
+        target_vals = self.pdf(theta_grid, xi, kappa, psi, nu)
+        log_target = np.log(np.clip(target_vals, np.finfo(float).tiny, None))
+
+        kappa_env, envelope_const = _optimize_vonmises_envelope(
+            theta_grid,
+            log_target,
+            xi,
+            max(kappa_env, 1e-6),
+        )
+
+        self._sampler_cache[key] = (kappa_env, envelope_const)
+        return kappa_env, envelope_const
+
+    def _asym_cdf_table(self, xi, kappa, psi, nu, grid_size=4096):
+        key = (float(np.mod(xi, 2.0 * np.pi)), float(kappa), float(psi), float(nu), int(grid_size))
+        cached = self._cdf_table_cache.get(key)
+        if cached is not None:
+            return cached
+
+        phi_grid = np.linspace(0.0, 2.0 * np.pi, int(grid_size) + 1)
+        theta = np.mod(xi + phi_grid, 2.0 * np.pi)
+        pdf_vals = self.pdf(theta, xi, kappa, psi, nu)
+        pdf_vals = np.asarray(pdf_vals, dtype=float)
+
+        delta = (2.0 * np.pi) / float(grid_size)
+        trap = 0.5 * (pdf_vals[:-1] + pdf_vals[1:]) * delta
+        cdf_vals = np.empty_like(phi_grid)
+        cdf_vals[0] = 0.0
+        cdf_vals[1:] = np.cumsum(trap)
+        total = cdf_vals[-1]
+        if not np.isfinite(total) or total <= 0.0:
+            total = 1.0
+        cdf_vals /= total
+
+        result = (phi_grid, cdf_vals)
+        self._cdf_table_cache[key] = result
+        return result
+
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        return_info=False,
+        optimizer="L-BFGS-B",
+        psi_bounds=(-4.0, 4.0),
+        kappa_bounds=(1e-6, 1e3),
+        nu_bounds=(0.0, 0.99),
+        base_kwargs=None,
+        **kwargs,
+    ):
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        base_kwargs = {} if base_kwargs is None else dict(base_kwargs)
+        init_estimates, base_info = jonespewsey.fit(
+            x,
+            weights=w,
+            method="mle",
+            psi_bounds=psi_bounds,
+            kappa_bounds=kappa_bounds,
+            optimizer=optimizer,
+            return_info=True,
+            **base_kwargs,
+        )
+        xi_init, kappa_init, psi_init = init_estimates
+        nu_init = 0.0
+
+        kappa_low, kappa_high = kappa_bounds
+        psi_low, psi_high = psi_bounds
+        nu_low, nu_high = nu_bounds
+
+        def nll(params):
+            xi_param, kappa_param, psi_param, nu_param = params
+            if not (kappa_low <= kappa_param <= kappa_high):
+                return np.inf
+            if not (psi_low <= psi_param <= psi_high):
+                return np.inf
+            if not (nu_low <= nu_param < nu_high):
+                return np.inf
+            xi_wrapped = float(np.mod(xi_param, 2.0 * np.pi))
+            pdf_vals = self.pdf(x, xi_wrapped, kappa_param, psi_param, nu_param)
+            if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
+                return np.inf
+            return float(-np.sum(w * np.log(pdf_vals)))
+
+        init = np.array([xi_init, kappa_init, psi_init, nu_init], dtype=float)
+        bounds = [
+            (0.0, 2.0 * np.pi),
+            kappa_bounds,
+            psi_bounds,
+            nu_bounds,
+        ]
+        result = minimize(
+            nll,
+            init,
+            method=optimizer,
+            bounds=bounds,
+            **kwargs,
+        )
+        if not result.success:
+            raise RuntimeError("jonespewsey_asym.fit failed: " + result.message)
+
+        xi_hat = self._wrap_direction(float(result.x[0]))
+        kappa_hat = float(np.clip(result.x[1], kappa_low, kappa_high))
+        psi_hat = float(np.clip(result.x[2], psi_low, psi_high))
+        nu_hat = float(np.clip(result.x[3], nu_low, nu_high - 1e-9))
+
+        final_pdf = self.pdf(x, xi_hat, kappa_hat, psi_hat, nu_hat)
+        loglik = float(np.sum(w * np.log(final_pdf)))
+
+        estimates = (xi_hat, kappa_hat, psi_hat, nu_hat)
+        if return_info:
+            info = {
+                "base": base_info,
+                "loglik": loglik,
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "optimizer": optimizer,
+                "n_effective": float(n_eff),
+            }
+            return estimates, info
+        return estimates
 
 
 jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
