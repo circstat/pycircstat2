@@ -3156,8 +3156,7 @@ class katojones_gen(CircularContinuous):
         Probability density function.
     cdf(x, mu, gamma, rho, lam)
         Cumulative distribution function (numeric integration).
-    logpdf(x, mu, gamma, rho, lam)
-        Logarithm of the probability density function.
+
     rvs(mu, gamma, rho, lam, size=None, random_state=None)
         Random variates via a wrapped-Cauchy-based composition sampler.
     fit(data, method=\"moments\" | \"mle\", ...)
@@ -3778,11 +3777,14 @@ class vonmises_gen(CircularContinuous):
 
         mu_arr = np.asarray(mu, dtype=float)
         kappa_arr = np.asarray(kappa, dtype=float)
-        if mu_arr.size != 1 or kappa_arr.size != 1:
-            raise ValueError("vonmises parameters must be scalar-valued.")
 
         mu_val = float(mu_arr.reshape(-1)[0])
+        if mu_arr.size > 1 and not np.allclose(mu_arr, mu_val, atol=0.0, rtol=0.0):
+            raise ValueError("vonmises parameters must be broadcastable scalars.")
+
         kappa_val = float(kappa_arr.reshape(-1)[0])
+        if kappa_arr.size > 1 and not np.allclose(kappa_arr, kappa_val, atol=0.0, rtol=0.0):
+            raise ValueError("vonmises parameters must be broadcastable scalars.")
         two_pi = 2.0 * np.pi
 
         if kappa_val < 1e-9:
@@ -3870,9 +3872,111 @@ class vonmises_gen(CircularContinuous):
         """
         return super().cdf(x, mu, kappa, *args, **kwargs)
 
+    def _ppf(self, q, mu, kappa):
+        mu_arr = np.asarray(mu, dtype=float)
+        kappa_arr = np.asarray(kappa, dtype=float)
+        if mu_arr.size != 1 or kappa_arr.size != 1:
+            raise ValueError("vonmises parameters must be scalar-valued.")
+
+        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        kappa_val = float(kappa_arr.reshape(-1)[0])
+        if kappa_val < 0.0:
+            raise ValueError("`kappa` must be non-negative.")
+
+        q_arr = np.asarray(q, dtype=float)
+        flat = q_arr.reshape(-1)
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        lower_mask = flat <= 0.0
+        upper_mask = flat >= 1.0
+        result[lower_mask] = 0.0
+        result[upper_mask] = 2.0 * np.pi
+
+        interior = ~(lower_mask | upper_mask)
+        if not np.any(interior):
+            return result.reshape(q_arr.shape)
+
+        q_int = flat[interior]
+        two_pi = 2.0 * np.pi
+
+        if kappa_val <= 1e-9:
+            result[interior] = (two_pi * q_int) % two_pi
+            return result.reshape(q_arr.shape)
+
+        eps = 1e-15
+        q_clipped = np.clip(q_int, eps, 1.0 - eps)
+
+        theta = (mu_val + two_pi * (q_clipped - 0.5)) % two_pi
+        if kappa_val < 0.3:
+            theta = (two_pi * q_clipped) % two_pi
+        elif kappa_val > 5.0:
+            normal_guess = mu_val + ndtri(q_clipped) / np.sqrt(kappa_val)
+            normal_guess = np.mod(normal_guess, two_pi)
+            blend = 0.5 if kappa_val < 20.0 else 0.8
+            theta = np.mod(blend * normal_guess + (1.0 - blend) * (two_pi * q_clipped), two_pi)
+
+        L = np.zeros_like(theta)
+        H = np.full_like(theta, two_pi)
+
+        tol_cdf = 1e-12
+        tol_theta = 1e-10
+        max_iter = 6
+
+        theta_curr = theta.copy()
+        for _ in range(max_iter):
+            cdf_vals = np.asarray(self.cdf(theta_curr, mu_val, kappa_val), dtype=float)
+            pdf_vals = np.exp(kappa_val * np.cos(theta_curr - mu_val)) / (2.0 * np.pi * i0(kappa_val))
+            delta = cdf_vals - q_clipped
+
+            L = np.where(delta <= 0.0, theta_curr, L)
+            H = np.where(delta > 0.0, theta_curr, H)
+
+            converged = (np.abs(delta) <= tol_cdf) & ((H - L) <= tol_theta)
+            if np.all(converged):
+                break
+
+            denom = np.where(pdf_vals > 1e-15, pdf_vals, 1e-15)
+            step = np.clip(delta / denom, -np.pi, np.pi)
+            theta_next = theta_curr - step
+            midpoint = 0.5 * (L + H)
+            theta_next = np.where((theta_next <= L) | (theta_next >= H), midpoint, theta_next)
+            theta_next = np.mod(theta_next, two_pi)
+            theta_curr = theta_next
+
+        delta = np.asarray(self.cdf(theta_curr, mu_val, kappa_val), dtype=float) - q_clipped
+        mask = (np.abs(delta) > tol_cdf) | ((H - L) > tol_theta)
+        if np.any(mask):
+            theta_b = theta_curr.copy()
+            L_b = L.copy()
+            H_b = H.copy()
+            for _ in range(30):
+                if not np.any(mask):
+                    break
+                mid = 0.5 * (L_b + H_b)
+                mid_vals = np.asarray(self.cdf(mid, mu_val, kappa_val), dtype=float)
+                delta_mid = mid_vals - q_clipped
+                take_upper = (delta_mid > 0.0) & mask
+                take_lower = (~take_upper) & mask
+                H_b = np.where(take_upper, mid, H_b)
+                L_b = np.where(take_lower, mid, L_b)
+                theta_b = np.where(mask, mid, theta_b)
+                mask = mask & (np.abs(delta_mid) > tol_cdf)
+            theta_curr = np.where(mask, 0.5 * (L_b + H_b), theta_b)
+
+        result[interior] = np.mod(theta_curr, two_pi)
+        return result.reshape(q_arr.shape)
+
+
     def ppf(self, q, mu, kappa, *args, **kwargs):
         """
         Percent-point function (inverse of the CDF) of the Von Mises distribution.
+
+        The quantile is obtained by inverting the analytic Fourier–Bessel series
+        using a safeguarded Newton iteration with the exact von Mises PDF as the
+        slope, followed by a bisection polish.
 
         Parameters
         ----------
@@ -3895,11 +3999,15 @@ class vonmises_gen(CircularContinuous):
 
         mu_arr = np.asarray(mu, dtype=float)
         kappa_arr = np.asarray(kappa, dtype=float)
-        if mu_arr.size != 1 or kappa_arr.size != 1:
-            raise ValueError("vonmises parameters must be scalar-valued.")
 
-        mu_val = float(np.mod(mu_arr.reshape(-1)[0], 2.0 * np.pi))
+        mu_val = float(mu_arr.reshape(-1)[0])
+        if mu_arr.size > 1 and not np.allclose(mu_arr, mu_val, atol=0.0, rtol=0.0):
+            raise ValueError("vonmises parameters must be broadcastable scalars.")
+        mu_val = float(np.mod(mu_val, 2.0 * np.pi))
+
         kappa_val = float(kappa_arr.reshape(-1)[0])
+        if kappa_arr.size > 1 and not np.allclose(kappa_arr, kappa_val, atol=0.0, rtol=0.0):
+            raise ValueError("vonmises parameters must be broadcastable scalars.")
         two_pi = 2.0 * np.pi
 
         if kappa_val <= 1e-9:

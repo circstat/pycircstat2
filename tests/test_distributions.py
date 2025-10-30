@@ -364,6 +364,50 @@ def test_vonmises_cdf_matches_numeric():
     assert np.all(diffs >= -1e-10)
 
 
+@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
+@pytest.mark.parametrize("kappa", [0.05, 1.0, 10.0, 50.0])
+def test_vonmises_cdf_ppf_roundtrip(mu, kappa):
+    vm = vonmises(mu=mu, kappa=kappa)
+    q = np.linspace(0.0, 1.0, num=11)
+    theta = vm.ppf(q)
+    np.testing.assert_array_less(-1e-12, theta)
+    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-10)
+    cdf_theta = vm.cdf(theta)
+    np.testing.assert_allclose(cdf_theta, q, atol=5e-12)
+
+    grid = np.linspace(0.0, 2.0 * np.pi, num=15)
+    q_grid = vm.cdf(grid)
+    theta_back = vm.ppf(q_grid)
+    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
+    pdf_grid = vonmises.pdf(grid, mu=mu, kappa=kappa)
+    high_slope = pdf_grid > 1e-4
+    if np.any(high_slope):
+        np.testing.assert_allclose(wrapped[high_slope], 0.0, atol=5e-6)
+
+
+@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
+@pytest.mark.parametrize("kappa", [0.2, 2.0, 15.0])
+def test_vonmises_rvs_matches_constructor(mu, kappa):
+    rng_samples = np.random.default_rng(987)
+    rng_replay = np.random.default_rng(987)
+
+    vm = vonmises(mu=mu, kappa=kappa)
+    samples = vm.rvs(size=1024, random_state=rng_samples)
+    if np.isscalar(samples):
+        samples = np.array([samples])
+
+    expected = vm.dist._rvs(mu, kappa, size=1024, random_state=rng_replay)
+    if np.isscalar(expected):
+        expected = np.array([expected])
+
+    np.testing.assert_allclose(
+        np.sort(samples),
+        np.sort(expected),
+        atol=1e-10,
+        rtol=0.0,
+    )
+
+
 def test_circular_loc_scale_rejected():
     rng = np.random.default_rng(1234)
     sample = vonmises.rvs(kappa=1.0, mu=0.0, size=8, random_state=rng)
