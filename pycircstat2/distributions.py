@@ -3,9 +3,24 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.integrate import quad, quad_vec
+from scipy.interpolate import PchipInterpolator
 from scipy.optimize import minimize, minimize_scalar, root, brentq
 from scipy.special import beta as beta_fn
-from scipy.special import gamma, i0, i0e, i1, ndtr, ndtri, iv, betainc, betaincinv, gammaln, digamma, lpmv
+from scipy.special import (
+    gamma,
+    i0,
+    i0e,
+    i1,
+    ndtr,
+    ndtri,
+    iv,
+    betainc,
+    betaincinv,
+    gammaln,
+    digamma,
+    lpmv,
+    logsumexp,
+)
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -31,6 +46,17 @@ __all__ = [
 
 INV_SQRT_2PI = 1.0 / np.sqrt(2.0 * np.pi)
 
+_VMFT_MIN_GRID = 512
+_VMFT_MAX_GRID = 8192
+_VMFT_GRID_BASE = 64.0
+_VMFT_GRID_SHARPNESS = 12.0
+_VMFT_KAPPA_TOL = 1e-9
+_VMFT_KAPPA_UPPER = 1e3
+_VMFT_ENV_MIN_KAPPA = 1e-6
+_VMFT_ACCEPT_EPS = 1e-12
+_VMFT_NEWTON_MAXITER = 50
+_VMFT_NEWTON_TOL = 1e-12
+_VMFT_NEWTON_WIDTH_TOL = 1e-10
 
 OPTIMIZERS = [
     "Nelder-Mead",
@@ -3812,33 +3838,42 @@ class vonmises_flattopped_gen(CircularContinuous):
     Implementation based on Section 4.3.10 of Pewsey et al. (2014)
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._vmft_table_cache = {}
+        self._vmft_sampler_cache = {}
+
     def _validate_params(self, mu, kappa, nu):
-        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-1 <= nu <= 1)
+        return (0 <= mu <= np.pi * 2) and (0 <= kappa <= _VMFT_KAPPA_UPPER) and (-1 <= nu <= 1)
 
     def _argcheck(self, mu, kappa, nu):
         return bool(self._validate_params(mu, kappa, nu))
 
+    def _clear_normalization_cache(self):
+        super()._clear_normalization_cache()
+        self._vmft_table_cache = {}
+        self._vmft_sampler_cache = {}
+
     def _pdf(self, x, mu, kappa, nu):
         x_arr = np.asarray(x, dtype=float)
         mu_val = _vmft_ensure_scalar(mu, "mu")
-        kappa_val = _vmft_ensure_scalar(kappa, "kappa")
+        kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
         nu_val = _vmft_ensure_scalar(nu, "nu")
 
         if not np.isfinite(mu_val) or not np.isfinite(kappa_val) or not np.isfinite(nu_val):
             return np.full_like(x_arr, np.nan, dtype=float)
 
-        if kappa_val <= 0.0:
+        if kappa_val <= _VMFT_KAPPA_TOL:
             self._c = 1.0 / (2.0 * np.pi)
             return np.full_like(x_arr, self._c, dtype=float)
 
-        normalizer = self._get_cached_normalizer(
-            lambda: _c_vmft(kappa_val, nu_val), kappa_val, nu_val
-        )
-        if not np.isfinite(normalizer) or normalizer <= 0.0:
-            return np.full_like(x_arr, np.nan, dtype=float)
-
-        self._c = normalizer  # retain attribute for existing code paths
-        return normalizer * _kernel_vmft(x_arr, mu_val, kappa_val, nu_val)
+        table = self._get_vmft_table(kappa_val, nu_val)
+        phi = ((x_arr - mu_val + np.pi) % (2.0 * np.pi)) - np.pi
+        log_kernel = kappa_val * np.cos(phi + nu_val * np.sin(phi))
+        log_pdf = log_kernel + table["log_normalizer"]
+        pdf_vals = np.exp(log_pdf)
+        self._c = table["normalizer"]  # retain attribute for existing code paths
+        return pdf_vals
 
     def pdf(self, x, mu, kappa, nu, *args, **kwargs):
         r"""
@@ -3882,12 +3917,570 @@ class vonmises_flattopped_gen(CircularContinuous):
             - When $\kappa = 0$, the distribution becomes uniform on $[0, 2\pi)$.
         """
         mu_val = _vmft_ensure_scalar(mu, "mu")
-        kappa_val = _vmft_ensure_scalar(kappa, "kappa")
+        kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
         nu_val = _vmft_ensure_scalar(nu, "nu")
         return super().pdf(x, mu_val, kappa_val, nu_val, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, nu):
-        return self._cdf_from_pdf(x, mu, kappa, nu)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        mu_val = _vmft_ensure_scalar(mu, "mu")
+        kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+
+        if not np.isfinite(mu_val) or not np.isfinite(kappa_val) or not np.isfinite(nu_val):
+            return np.full_like(arr, np.nan, dtype=float)
+
+        two_pi = 2.0 * np.pi
+
+        if kappa_val <= _VMFT_KAPPA_TOL:
+            cdf_flat = flat / two_pi
+        else:
+            table = self._get_vmft_table(kappa_val, nu_val)
+            phi = ((flat - mu_val + np.pi) % two_pi) - np.pi
+            phi_start = ((-mu_val + np.pi) % two_pi) - np.pi
+            H = table["cdf_interp"](phi)
+            H_start = float(table["cdf_interp"](phi_start))
+            cdf_flat = np.where(H < H_start, H - H_start + 1.0, H - H_start)
+            cdf_flat = np.clip(cdf_flat, 0.0, 1.0)
+
+        if arr.ndim == 0:
+            value = float(cdf_flat[0])
+            if np.isclose(float(wrapped), two_pi, rtol=0.0, atol=1e-12):
+                return 1.0
+            return value
+
+        result = cdf_flat.reshape(arr.shape)
+        mask_upper = np.isclose(arr, two_pi, rtol=0.0, atol=1e-12)
+        if np.any(mask_upper):
+            result = result.copy()
+            result[mask_upper] = 1.0
+        return result
+
+    def _ppf(self, q, mu, kappa, nu):
+        mu_val = _vmft_ensure_scalar(mu, "mu")
+        kappa_val = _vmft_ensure_scalar(kappa, "kappa")
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+
+        q_arr = np.asarray(q, dtype=float)
+        flat = q_arr.reshape(-1)
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        if not np.isfinite(mu_val) or not np.isfinite(kappa_val) or not np.isfinite(nu_val):
+            return np.full_like(q_arr, np.nan, dtype=float)
+
+        two_pi = 2.0 * np.pi
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if not np.any(valid):
+            shaped = result.reshape(q_arr.shape)
+            return float(shaped) if q_arr.ndim == 0 else shaped
+
+        q_valid = flat[valid]
+        close_zero = np.isclose(q_valid, 0.0, rtol=0.0, atol=1e-12)
+        close_one = np.isclose(q_valid, 1.0, rtol=0.0, atol=1e-12)
+
+        if kappa_val <= _VMFT_KAPPA_TOL:
+            theta = (two_pi * q_valid) % two_pi
+            if np.any(close_zero):
+                theta[close_zero] = 0.0
+            if np.any(close_one):
+                theta[close_one] = two_pi
+            result[valid] = theta
+        else:
+            table = self._get_vmft_table(kappa_val, nu_val)
+            phi_grid = table["phi"]
+            cdf_grid = table["cdf"]
+            cdf_interp = table["cdf_interp"]
+            inv_interp = table["inv_cdf_interp"]
+
+            phi_start = ((-mu_val + np.pi) % two_pi) - np.pi
+            H_start = float(cdf_interp(phi_start))
+
+            # Prepare bracket indices for each quantile
+            targets = (H_start + q_valid) % 1.0
+            phi_guess = (
+                inv_interp(targets)
+                if inv_interp is not None
+                else np.interp(targets, cdf_grid, phi_grid, left=phi_grid[0], right=phi_grid[-1])
+            )
+
+            theta = np.empty_like(q_valid)
+            for idx, (q_val, target, phi0) in enumerate(zip(q_valid, targets, phi_guess)):
+                if close_zero[idx]:
+                    theta[idx] = 0.0
+                    continue
+                if close_one[idx]:
+                    theta[idx] = two_pi
+                    continue
+
+                i_hi = int(np.clip(np.searchsorted(cdf_grid, target, side="right"), 1, len(phi_grid) - 1))
+                phi_lo = float(phi_grid[i_hi - 1])
+                phi_hi = float(phi_grid[i_hi])
+                phi = float(np.clip(phi0, phi_lo, phi_hi))
+
+                for _ in range(_VMFT_NEWTON_MAXITER):
+                    H_phi = float(cdf_interp(phi))
+                    residual = H_phi - target
+                    derivative = np.exp(
+                        kappa_val * np.cos(phi + nu_val * np.sin(phi)) + table["log_normalizer"]
+                    )
+                    derivative = max(derivative, np.finfo(float).tiny)
+
+                    if abs(residual) <= _VMFT_NEWTON_TOL and (phi_hi - phi_lo) <= _VMFT_NEWTON_WIDTH_TOL:
+                        break
+
+                    if residual > 0.0:
+                        phi_hi = min(phi_hi, phi)
+                    else:
+                        phi_lo = max(phi_lo, phi)
+
+                    step = residual / derivative
+                    phi_candidate = phi - step
+                    if not np.isfinite(phi_candidate) or phi_candidate <= phi_lo or phi_candidate >= phi_hi:
+                        phi_candidate = 0.5 * (phi_lo + phi_hi)
+                    phi = float(np.clip(phi_candidate, phi_lo, phi_hi))
+
+                theta[idx] = (mu_val + phi) % two_pi
+
+            result[valid] = theta
+
+        shaped = result.reshape(q_arr.shape)
+        if q_arr.ndim == 0:
+            return float(shaped)
+        return shaped
+
+    def ppf(self, q, mu, kappa, nu, *args, **kwargs):
+        r"""
+        Percent-point function (quantile) of the flat-topped von Mises distribution.
+
+        Quantiles are computed by reusing the cached cumulative table described in
+        :meth:`cdf`. Starting from the monotone inverse of the tabulated primitive
+        $H_{\kappa,\nu}$, the implementation applies up to
+        :data:`_VMFT_NEWTON_MAXITER` safeguarded Newton steps with derivative
+        $f(\theta) = \exp[\kappa \cos(\phi + \nu \sin \phi)]/Z$ to achieve
+        machine-precision agreement (dual stopping on residual and bracket width).
+        Boundary quantiles default to the support endpoints $0$ and $2\pi$.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (0 <= q <= 1).
+        mu : float
+            Location parameter, $0 \le \mu \le 2\pi$.
+        kappa : float
+            Concentration parameter, $\kappa \ge 0$.
+        nu : float
+            Shape parameter, $-1 \le \nu \le 1$.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles corresponding to the probabilities in `q`.
+        """
+        mu_val = _vmft_ensure_scalar(mu, "mu")
+        kappa_val = _vmft_ensure_scalar(kappa, "kappa")
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+        return super().ppf(q, mu_val, kappa_val, nu_val, *args, **kwargs)
+
+    def _rvs(self, mu, kappa, nu, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu_val = _vmft_ensure_scalar(mu, "mu") % (2.0 * np.pi)
+        kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+
+        if not np.isfinite(mu_val) or not np.isfinite(kappa_val) or not np.isfinite(nu_val):
+            raise ValueError("`mu`, `kappa`, and `nu` must be finite scalars.")
+
+        if size is None:
+            shape = ()
+            total = 1
+        else:
+            if np.isscalar(size):
+                shape = (int(size),)
+            else:
+                shape = tuple(int(dim) for dim in np.atleast_1d(size))
+            total = int(np.prod(shape, dtype=int))
+            if total < 0:
+                raise ValueError("`size` must describe a non-negative number of samples.")
+        two_pi = 2.0 * np.pi
+
+        if total == 0:
+            empty = np.empty(shape, dtype=float)
+            return float(empty) if empty.ndim == 0 else empty
+
+        if kappa_val <= _VMFT_KAPPA_TOL:
+            samples = rng.uniform(0.0, two_pi, size=shape)
+            if samples.ndim == 0:
+                return float(samples)
+            return samples
+
+        table = self._get_vmft_table(kappa_val, nu_val)
+        sampler_params = self._get_vmft_sampler_params(kappa_val, nu_val)
+        kappa_env = sampler_params["kappa_env"]
+        log_env_norm = sampler_params["log_env_norm"]
+        log_multiplier = sampler_params["log_multiplier"]
+
+        samples = np.empty(total, dtype=float)
+        filled = 0
+        batch_base = max(8, min(4 * total, 4096))
+
+        while filled < total:
+            batch = min(batch_base, total - filled) if filled > 0 else batch_base
+            proposals = rng.vonmises(mu_val, kappa_env, size=batch)
+            phi = ((proposals - mu_val + np.pi) % two_pi) - np.pi
+
+            log_target = kappa_val * np.cos(phi + nu_val * np.sin(phi)) + table["log_normalizer"]
+            log_env = kappa_env * np.cos(phi) - log_env_norm
+            log_accept = log_target - log_env - log_multiplier
+
+            accept_mask = np.log(rng.random(size=batch)) <= log_accept
+            if not np.any(accept_mask):
+                continue
+
+            accepted = proposals[accept_mask]
+            take = min(accepted.size, total - filled)
+            samples[filled : filled + take] = accepted[:take]
+            filled += take
+
+        samples = np.mod(samples, two_pi)
+        samples = samples.reshape(shape)
+        if samples.ndim == 0:
+            return float(samples)
+        return samples
+
+    def rvs(self, mu=None, kappa=None, nu=None, size=None, random_state=None):
+        r"""
+        Draw random variates from the flat-topped von Mises distribution.
+
+        Sampling uses an acceptance–rejection scheme with a curvature-matched
+        von Mises envelope. Writing $\phi = \theta - \mu$ and matching the
+        curvature at the mode yields a proposal concentration
+        $\kappa_e = \kappa(1+\nu)^2$ (clipped to a small positive value). The
+        envelope constant $M \ge \sup_\phi f(\phi)/g(\phi)$ is precomputed on
+        the same spectral grid used for :meth:`cdf`, so once calibrated the
+        sampler draws each variate with a single von Mises proposal followed by
+        a scalar acceptance test.
+
+        Parameters
+        ----------
+        mu : float
+            Location parameter, $0 \le \mu \le 2\pi$.
+        kappa : float
+            Concentration parameter, $\kappa \ge 0$.
+        nu : float
+            Shape parameter, $-1 \le \nu \le 1$.
+        size : int or tuple of ints, optional
+            Output shape.
+        random_state : {None, int, np.random.Generator}, optional
+            Random number generator specification.
+
+        Returns
+        -------
+        rvs : array_like
+            Random variates on $[0, 2\pi)$.
+        """
+        return super().rvs(mu, kappa, nu, size=size, random_state=random_state)
+
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        optimizer="L-BFGS-B",
+        options=None,
+        nu_grid=None,
+        kappa_bounds=(1e-6, _VMFT_KAPPA_UPPER),
+        nu_bounds=(-0.99, 0.99),
+        return_info=False,
+        **minimize_kwargs,
+    ):
+        r"""
+        Estimate $(\mu, \kappa, \nu)$ from circular data.
+
+        The default ``method='mle'`` maximises the weighted log-likelihood
+
+        $$
+        \ell(\mu, \kappa, \nu) = \sum_i w_i
+        \left[
+            \kappa \cos(\phi_i + \nu \sin \phi_i) - \log Z(\kappa, \nu)
+        \right],\quad
+        \phi_i = (\theta_i - \mu) \bmod 2\pi,
+        $$
+
+        where $Z$ is the normalising constant reused from the cached spectral
+        table. The routine initialises $(\mu, \kappa)$ from the first trigonometric
+        moment and profiles a small grid for $\nu$ before bounded optimisation
+        (default L-BFGS-B) with $\kappa \in$ ``kappa_bounds`` and
+        $\nu \in$ ``nu_bounds``.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample of angles.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {'mle', 'moments'}, default 'mle'
+            Estimation method. ``'moments'`` returns the circular mean,
+            ``circ_kappa``, and $\nu=0$.
+        optimizer : str, optional
+            SciPy optimiser to use when ``method='mle'``.
+        options : dict, optional
+            Optimiser options forwarded to :func:`scipy.optimize.minimize`.
+        nu_grid : array_like, optional
+            Candidate $\nu$ values for initial profiling. Defaults to a small grid
+            spanning ``nu_bounds``.
+        kappa_bounds : tuple, optional
+            Lower/upper bounds for $\kappa$ during optimisation.
+        nu_bounds : tuple, optional
+            Lower/upper bounds for $\nu$ during optimisation.
+        return_info : bool, optional
+            If True, also return a dictionary with optimisation diagnostics.
+        **minimize_kwargs :
+            Additional keyword arguments passed to :func:`scipy.optimize.minimize`.
+
+        Returns
+        -------
+        params : tuple
+            Estimated parameters ``(mu, kappa, nu)``.
+        info : dict, optional
+            Returned when ``return_info=True`` with fields such as ``loglik``,
+            ``n_effective`` and ``converged``.
+        """
+
+        minimize_kwargs = self._sanitize_fit_kwargs(minimize_kwargs)
+        minimize_kwargs.pop("floc", None)
+        minimize_kwargs.pop("fscale", None)
+
+        data_arr = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if data_arr.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(data_arr, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, data_arr.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0.0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = float(w_sum**2 / np.sum(w**2))
+
+        mu_mom, r1 = circ_mean_and_r(alpha=data_arr, w=w)
+        if not np.isfinite(mu_mom):
+            mu_mom = 0.0
+        mu_mom = float(np.mod(mu_mom, 2.0 * np.pi))
+        r1 = float(np.clip(r1, 1e-12, 1.0 - 1e-12))
+
+        n_adjust = int(max(1, round(w_sum)))
+        kappa_mom = float(np.clip(circ_kappa(r=r1, n=n_adjust), kappa_bounds[0], kappa_bounds[1]))
+
+        if nu_grid is None:
+            lower_nu = float(max(nu_bounds[0], -0.9))
+            upper_nu = float(min(nu_bounds[1], 0.9))
+            nu_grid = np.linspace(lower_nu, upper_nu, 7)
+        else:
+            nu_grid = np.asarray(nu_grid, dtype=float)
+
+        def nll(params):
+            mu_param, kappa_param, nu_param = params
+
+            if not (0.0 <= mu_param <= 2.0 * np.pi):
+                return np.inf
+            if not (kappa_bounds[0] <= kappa_param <= kappa_bounds[1]):
+                return np.inf
+            if not (nu_bounds[0] <= nu_param <= nu_bounds[1]):
+                return np.inf
+
+            mu_wrapped = float(np.mod(mu_param, 2.0 * np.pi))
+            two_pi = 2.0 * np.pi
+            phi = ((data_arr - mu_wrapped + np.pi) % two_pi) - np.pi
+
+            if kappa_param <= _VMFT_KAPPA_TOL:
+                log_pdf = -np.log(two_pi)
+                return float(-np.sum(w * log_pdf))
+
+            table = self._get_vmft_table(float(kappa_param), float(nu_param))
+
+            log_kernel = kappa_param * np.cos(phi + nu_param * np.sin(phi))
+            log_pdf = log_kernel + table["log_normalizer"]
+            if not np.all(np.isfinite(log_pdf)):
+                return np.inf
+            return float(-np.sum(w * log_pdf))
+
+        method_key = str(method).lower()
+
+        if method_key == "moments":
+            estimates = (mu_mom, kappa_mom, 0.0)
+            if return_info:
+                info = {
+                    "method": "moments",
+                    "converged": True,
+                    "loglik": float(-nll(estimates)),
+                    "n_effective": n_eff,
+                }
+                return estimates, info
+            return estimates
+
+        if method_key != "mle":
+            raise ValueError("`method` must be one of {'mle', 'moments'}.")
+
+        best_nu = 0.0
+        best_score = nll((mu_mom, kappa_mom, best_nu))
+        for candidate in np.unique(np.concatenate(([0.0], nu_grid))):
+            score = nll((mu_mom, kappa_mom, float(candidate)))
+            if score < best_score:
+                best_score = score
+                best_nu = float(candidate)
+
+        init = np.array([mu_mom, kappa_mom, best_nu], dtype=float)
+        bounds = [
+            (0.0, 2.0 * np.pi),
+            (kappa_bounds[0], kappa_bounds[1]),
+            (nu_bounds[0], nu_bounds[1]),
+        ]
+
+        options = {} if options is None else dict(options)
+
+        optimizer_used = optimizer
+
+        result = minimize(
+            nll,
+            init,
+            method=optimizer,
+            bounds=bounds,
+            options=options,
+            **minimize_kwargs,
+        )
+
+        if not result.success and optimizer != "Powell":
+            fallback = minimize(
+                nll,
+                init,
+                method="Powell",
+                bounds=bounds,
+                options={},
+                **minimize_kwargs,
+            )
+            if fallback.success:
+                result = fallback
+                optimizer_used = "Powell"
+
+        if not result.success:
+            raise RuntimeError(f"Maximum likelihood fit failed: {result.message}")
+
+        mu_hat = self._wrap_direction(float(result.x[0]))
+        kappa_hat = float(np.clip(result.x[1], kappa_bounds[0], kappa_bounds[1]))
+        nu_hat = float(np.clip(result.x[2], nu_bounds[0], nu_bounds[1]))
+
+        estimates = (mu_hat, kappa_hat, nu_hat)
+        if not return_info:
+            return estimates
+
+        info = {
+            "method": "mle",
+            "loglik": float(-result.fun),
+            "n_effective": n_eff,
+            "converged": bool(result.success),
+            "optimizer": optimizer_used,
+            "nit": getattr(result, "nit", np.nan),
+            "nfev": getattr(result, "nfev", np.nan),
+            "message": result.message,
+        }
+        return estimates, info
+
+    def cdf(self, x, mu, kappa, nu, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the flat-topped von Mises distribution.
+
+        Let $\phi = (\theta - \mu) \bmod 2\pi$ re-centred onto $[-\pi, \pi]$ and
+        $g_{\kappa,\nu}(\phi) = \exp\!\bigl[\kappa \cos(\phi + \nu \sin \phi)\bigr]$.
+        The normalised primitive
+        $$
+        H_{\kappa,\nu}(\phi) = \frac{1}{Z} \int_{-\pi}^{\phi} g_{\kappa,\nu}(t)\,dt,
+        \qquad Z = \int_{-\pi}^{\pi} g_{\kappa,\nu}(t)\,dt,
+        $$
+        is approximated with spectral accuracy by a trapezoidal rule on an
+        equispaced grid (size selected from $O(\sqrt{\kappa})$). The CDF on
+        $[0, 2\pi)$ then follows from $F(\theta) = H_{\kappa,\nu}(\phi) -
+        H_{\kappa,\nu}(\phi_0)$ with $\phi_0 = ((-\mu) \bmod 2\pi) - \pi$. The
+        precomputed cumulative grid is cached per $(\kappa, \nu)$, so repeated
+        evaluations are $O(1)$ once the table is built.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        mu : float
+            Location parameter, $0 \le \mu \le 2\pi$.
+        kappa : float
+            Concentration parameter, $\kappa \ge 0$ (capped internally at
+            :data:`_VMFT_KAPPA_UPPER` for numerical stability).
+        nu : float
+            Shape parameter, $-1 \le \nu \le 1$.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative probabilities corresponding to `x`.
+        """
+        mu_val = _vmft_ensure_scalar(mu, "mu")
+        kappa_val = _vmft_ensure_scalar(kappa, "kappa")
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+        return super().cdf(x, mu_val, kappa_val, nu_val, *args, **kwargs)
+
+    def _get_vmft_table(self, kappa, nu, grid_size=None):
+        kappa_val = float(kappa)
+        nu_val = float(nu)
+        if grid_size is None:
+            grid_size = _vmft_grid_size(kappa_val, nu_val)
+        grid_int = int(grid_size)
+        key = (kappa_val, nu_val, grid_int)
+        table = self._vmft_table_cache.get(key)
+        if table is None:
+            table = _vmft_build_table(kappa_val, nu_val, grid_int)
+            self._vmft_table_cache[key] = table
+        return table
+
+    def _get_vmft_sampler_params(self, kappa, nu):
+        key = (float(kappa), float(nu))
+        params = self._vmft_sampler_cache.get(key)
+        if params is not None:
+            return params
+
+        table = self._get_vmft_table(kappa, nu)
+        kappa_env = float(np.clip(kappa * (1.0 + nu) ** 2, _VMFT_ENV_MIN_KAPPA, _VMFT_KAPPA_UPPER))
+
+        log_env_norm = (
+            np.log(2.0 * np.pi)
+            + np.log(i0e(kappa_env))
+            + kappa_env
+        )
+        log_env_pdf = kappa_env * np.cos(table["phi"]) - log_env_norm
+        log_ratio = np.log(table["pdf"]) - log_env_pdf
+        log_multiplier = float(np.max(log_ratio))
+        multiplier = float(np.exp(log_multiplier) * (1.0 + 5e-12))
+
+        params = {
+            "kappa_env": kappa_env,
+            "log_env_norm": float(log_env_norm),
+            "log_multiplier": float(np.log(multiplier)),
+            "multiplier": multiplier,
+        }
+        self._vmft_sampler_cache[key] = params
+        return params
 
 
 vonmises_flattopped = vonmises_flattopped_gen(name="vonmises_flattopped")
@@ -3897,15 +4490,76 @@ vonmises_flattopped = vonmises_flattopped_gen(name="vonmises_flattopped")
 ##############################################
 
 
+def _vmft_grid_size(kappa, nu):
+    sharpness = (1.0 + abs(nu)) * np.sqrt(max(kappa, 0.0) + 1.0)
+    target = _VMFT_GRID_BASE + _VMFT_GRID_SHARPNESS * sharpness
+    target = float(np.clip(target, _VMFT_MIN_GRID, _VMFT_MAX_GRID))
+    power = int(np.ceil(np.log2(target)))
+    size = 1 << power
+    size = int(np.clip(size, _VMFT_MIN_GRID, _VMFT_MAX_GRID))
+    if size % 2 != 0:
+        size += 1
+    return size
+
+
+def _vmft_build_table(kappa, nu, grid_size):
+    if grid_size < 4:
+        raise ValueError("grid_size must be at least 4.")
+    two_pi = 2.0 * np.pi
+    phi = np.linspace(-np.pi, np.pi, grid_size + 1, dtype=float)
+    log_kernel = kappa * np.cos(phi + nu * np.sin(phi))
+    log_max = np.max(log_kernel)
+    shifted = log_kernel - log_max
+    weights = np.ones_like(phi)
+    weights[0] = 0.5
+    weights[-1] = 0.5
+    log_sum = logsumexp(shifted, b=weights)
+    log_Z = np.log(two_pi / grid_size) + log_max + log_sum
+    log_normalizer = -log_Z
+    normalizer = float(np.exp(log_normalizer))
+
+    log_pdf = log_kernel + log_normalizer
+    pdf = np.exp(np.clip(log_pdf, -700.0, 700.0))
+    pdf = np.maximum(pdf, np.finfo(float).tiny)
+    pdf[-1] = pdf[0]
+
+    avg = 0.5 * (pdf[:-1] + pdf[1:])
+    cumulative = np.concatenate(([0.0], np.cumsum(avg))) * (two_pi / grid_size)
+    cumulative = np.clip(cumulative, 0.0, 1.0)
+    cumulative = np.maximum.accumulate(cumulative)
+    cumulative[-1] = 1.0
+
+    cdf_interp = PchipInterpolator(phi, cumulative, extrapolate=True)
+
+    unique_vals, unique_idx = np.unique(cumulative, return_index=True)
+    if unique_vals.size >= 2:
+        inv_interp = PchipInterpolator(unique_vals, phi[unique_idx], extrapolate=True)
+    else:
+        inv_interp = None
+
+    return {
+        "phi": phi,
+        "pdf": pdf,
+        "cdf": cumulative,
+        "normalizer": normalizer,
+        "log_normalizer": float(log_normalizer),
+        "cdf_interp": cdf_interp,
+        "inv_cdf_interp": inv_interp,
+        "grid_size": int(grid_size),
+        "kappa": float(kappa),
+        "nu": float(nu),
+    }
+
+
 def _kernel_vmft(x, mu, kappa, nu):
     return np.exp(kappa * np.cos(x - mu + nu * np.sin(x - mu)))
 
 
 def _c_vmft(kappa, nu):
-    # Normalizing constant does not depend on mu; integrate with mu fixed at 0.
-    integral = quad_vec(_kernel_vmft, a=-np.pi, b=np.pi, args=(0.0, kappa, nu))[0]
-    c = 1.0 / float(integral)
-    return c
+    if kappa <= _VMFT_KAPPA_TOL:
+        return 1.0 / (2.0 * np.pi)
+    table = _vmft_build_table(float(kappa), float(nu), _vmft_grid_size(float(kappa), float(nu)))
+    return table["normalizer"]
 
 
 def _vmft_ensure_scalar(value, name):

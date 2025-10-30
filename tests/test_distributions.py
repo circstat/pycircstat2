@@ -215,6 +215,66 @@ def test_vonmises_periodic_evaluation():
     np.testing.assert_allclose(vm.pdf(x_neg), vm.pdf(x_mod), atol=1e-12)
 
 
+@pytest.mark.parametrize("mu", [0.0, np.pi / 5, 1.7])
+@pytest.mark.parametrize("kappa", [0.0, 0.5, 5.0, 25.0])
+@pytest.mark.parametrize("nu", [-0.8, 0.0, 0.7])
+def test_vonmises_flattopped_cdf_ppf_roundtrip(mu, kappa, nu):
+    dist = vonmises_flattopped(mu=mu, kappa=kappa, nu=nu)
+    theta_grid = np.linspace(0.0, 2.0 * np.pi, num=129)
+    q_grid = np.linspace(0.0, 1.0, num=129)
+    _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, cdf_tol=5e-12, ppf_tol=5e-12)
+
+    q = np.linspace(0.0, 1.0, num=33)
+    theta = dist.ppf(q)
+    q_back = dist.cdf(theta)
+    np.testing.assert_allclose(q_back, q, atol=5e-12, rtol=0.0)
+
+
+def test_vonmises_flattopped_uniform_limit():
+    mu = 1.5
+    kappa = 0.0
+    nu = 0.3
+    dist = vonmises_flattopped(mu=mu, kappa=kappa, nu=nu)
+
+    theta = np.linspace(0.0, 2.0 * np.pi, num=11)
+    expected = theta / (2.0 * np.pi)
+    expected[np.isclose(theta, 2.0 * np.pi)] = 1.0
+
+    np.testing.assert_allclose(dist.pdf(theta), 1.0 / (2.0 * np.pi), atol=5e-14)
+    np.testing.assert_allclose(dist.cdf(theta), expected, atol=5e-12)
+
+
+def test_vonmises_flattopped_rvs_pit():
+    mu = 0.8
+    kappa = 7.5
+    nu = -0.35
+    rng = np.random.default_rng(1234)
+
+    samples = vonmises_flattopped.rvs(mu=mu, kappa=kappa, nu=nu, size=4096, random_state=rng)
+    u = vonmises_flattopped.cdf(samples, mu=mu, kappa=kappa, nu=nu)
+    ks_stat, _ = stats.kstest(u, stats.uniform.cdf)
+    assert ks_stat < 0.035, f"PIT KS statistic too large ({ks_stat})"
+
+
+def test_vonmises_flattopped_fit_recovers_parameters():
+    mu_true, kappa_true, nu_true = 1.1, 4.0, -0.25
+    rng = np.random.default_rng(2024)
+    sample = vonmises_flattopped.rvs(mu=mu_true, kappa=kappa_true, nu=nu_true, size=6000, random_state=rng)
+
+    estimates, info = vonmises_flattopped.fit(sample, method="mle", return_info=True)
+    assert info["converged"]
+
+    mu_hat, kappa_hat, nu_hat = estimates
+    mu_diff = np.mod(mu_hat - mu_true + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(mu_diff, 0.0, atol=5e-2)
+    np.testing.assert_allclose(kappa_hat, kappa_true, atol=0.6)
+    np.testing.assert_allclose(nu_hat, nu_true, atol=0.08)
+
+    moments = vonmises_flattopped.fit(sample, method="moments")
+    assert moments[2] == 0.0
+    np.testing.assert_allclose(np.mod(moments[0] - mu_true + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=1e-1)
+
+
 def test_vonmises_fit_wraps_data():
     data = np.array([-0.8, 0.2, 6.6, 7.1, -3.0])
 
@@ -823,6 +883,7 @@ def test_katojones_fit_methods_agree():
     np.testing.assert_allclose(gamma_mle, gamma, atol=0.05)
     np.testing.assert_allclose(rho_mle, rho, atol=0.08)
     np.testing.assert_allclose(_angle_diff(lam_mle, lam), 0.0, atol=0.2)
+    
 def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05):
     rng = np.random.default_rng(seed)
     samples = dist.rvs(size=size, random_state=rng)
