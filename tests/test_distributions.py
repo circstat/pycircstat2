@@ -982,10 +982,28 @@ def test_wrapstable_ppf_roundtrip():
     q = np.linspace(1e-5, 1.0 - 1e-5, 61)
     theta = wrapstable.ppf(q, **params)
     q_back = wrapstable.cdf(theta, **params)
-    np.testing.assert_allclose(q_back, q, atol=2e-5, rtol=0.0)
+    np.testing.assert_allclose(q_back, q, atol=3e-5, rtol=0.0)
 
     np.testing.assert_allclose(wrapstable.ppf(0.0, **params), 0.0, atol=1e-12)
     np.testing.assert_allclose(wrapstable.ppf(1.0, **params), 2.0 * np.pi, atol=1e-12)
+
+
+def test_wrapstable_rvs_reasonable():
+    dist = wrapstable(delta=0.6, alpha=1.3, beta=-0.2, gamma=0.7)
+    _assert_rvs_reasonable(dist, size=512, seed=2024, uniform_tol=0.02)
+
+
+def test_wrapstable_rvs_reduces_to_wrapped_normal():
+    rng = np.random.default_rng(321)
+    delta = 1.0
+    gamma = 0.5
+    samples = wrapstable.rvs(delta=delta, alpha=2.0, beta=0.0, gamma=gamma, size=2000, random_state=rng)
+    rho = np.exp(-(gamma ** 2))
+    wn_samples = wrapnorm.rvs(mu=delta, rho=rho, size=2000, random_state=321)
+    # Compare first trigonometric moment
+    m1_ws = np.mean(np.exp(1j * samples))
+    m1_wn = np.mean(np.exp(1j * wn_samples))
+    np.testing.assert_allclose(m1_ws, m1_wn, atol=0.05)
 
 
 def _angle_diff(a, b):

@@ -7546,6 +7546,60 @@ class wrapstable_gen(CircularContinuous):
             return float(shaped)
         return shaped
 
+    def _rvs(self, delta, alpha, beta, gamma, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        delta_val = self._scalar_param(delta)
+        alpha_val = self._scalar_param(alpha)
+        beta_val = self._scalar_param(beta)
+        gamma_val = self._scalar_param(gamma)
+
+        if not (0.0 < alpha_val <= 2.0):
+            raise ValueError("`alpha` must lie in (0, 2].")
+        if not (-1.0 < beta_val < 1.0):
+            raise ValueError("`beta` must lie in (-1, 1).")
+        if not (gamma_val > 0.0):
+            raise ValueError("`gamma` must be positive.")
+
+        if size is None:
+            shape = ()
+            total = 1
+        else:
+            if np.isscalar(size):
+                shape = (int(size),)
+            else:
+                shape = tuple(int(dim) for dim in np.atleast_1d(size))
+            total = int(np.prod(shape, dtype=int))
+            if total < 0:
+                raise ValueError("`size` must describe a non-negative number of samples.")
+
+        if total == 0:
+            empty = np.empty(shape, dtype=float)
+            return float(empty) if empty.ndim == 0 else empty
+
+        linear_samples = _wrapstable_sample_linear(
+            alpha=alpha_val,
+            beta=beta_val,
+            gamma=gamma_val,
+            delta=delta_val,
+            size=total,
+            rng=rng,
+        )
+
+        samples = np.mod(linear_samples, 2.0 * np.pi).reshape(shape)
+        if samples.ndim == 0:
+            return float(samples)
+        return samples
+
+    def rvs(self, delta=None, alpha=None, beta=None, gamma=None, size=None, random_state=None):
+        r"""Draw random variates from the wrapped stable distribution."""
+
+        delta_val = self._scalar_param(delta)
+        alpha_val = self._scalar_param(alpha)
+        beta_val = self._scalar_param(beta)
+        gamma_val = self._scalar_param(gamma)
+        return super().rvs(delta_val, alpha_val, beta_val, gamma_val, size=size, random_state=random_state)
+
     def _get_series_terms(self, delta, alpha, beta, gamma):
         delta_s = self._scalar_param(delta)
         alpha_s = self._scalar_param(alpha)
@@ -7587,11 +7641,9 @@ class wrapstable_gen(CircularContinuous):
         rho_vals = np.exp(-((gamma * p) ** alpha))
 
         if abs(alpha - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
-            mu_vals = delta * p - (2.0 / np.pi) * beta * gamma * p * np.log(gamma * p)
+            mu_vals = delta * p + (2.0 / np.pi) * beta * gamma * p * np.log(gamma * p)
         else:
-            mu_vals = delta * p + beta * np.tan(0.5 * np.pi * alpha) * (
-                (gamma * p) ** alpha - gamma * p
-            )
+            mu_vals = delta * p + beta * np.tan(0.5 * np.pi * alpha) * ((gamma * p) ** alpha)
 
         return rho_vals, mu_vals, p
 
@@ -7607,6 +7659,42 @@ class wrapstable_gen(CircularContinuous):
 
 
 wrapstable = wrapstable_gen(name="wrapstable")
+
+
+def _wrapstable_sample_linear(alpha, beta, gamma, delta, *, size, rng):
+    size = int(size)
+    if size <= 0:
+        return np.empty(0, dtype=float)
+
+    alpha = float(alpha)
+    beta = float(beta)
+    gamma = float(gamma)
+    delta = float(delta)
+
+    V = rng.uniform(-0.5 * np.pi, 0.5 * np.pi, size=size)
+    W = rng.exponential(1.0, size=size)
+
+    if abs(alpha - 1.0) > _WRAPSTABLE_ALPHA_TOL:
+        tan_term = np.tan(0.5 * np.pi * alpha)
+        theta0 = np.arctan(beta * tan_term) / alpha
+        factor = (1.0 + (beta * tan_term) ** 2) ** (1.0 / (2.0 * alpha))
+
+        delta_s1 = delta - gamma * beta * tan_term
+        part1 = np.sin(alpha * (V + theta0)) / (np.cos(V) ** (1.0 / alpha))
+        part2 = (np.cos(V - alpha * (V + theta0)) / W) ** ((1.0 - alpha) / alpha)
+        x_s1 = gamma * factor * part1 * part2 + delta_s1
+        x = x_s1 + (delta - delta_s1)
+    else:
+        factor = 2.0 / np.pi
+        delta_s1 = delta - factor * beta * gamma * np.log(gamma)
+        term = (
+            (0.5 * np.pi + beta * V) * np.tan(V)
+            - beta * np.log((0.5 * np.pi * W * np.cos(V)) / (0.5 * np.pi + beta * V))
+        )
+        x_s1 = gamma * factor * term + delta_s1
+        x = x_s1 + (delta - delta_s1)
+
+    return x
 
 class katojones_gen(CircularContinuous):
     """
