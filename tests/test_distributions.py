@@ -955,6 +955,28 @@ def test_wrapstable_series_adaptive_truncation():
     assert rho_vals.shape == mu_vals.shape == p.shape
 
 
+def test_wrapstable_cdf_series_matches_numeric():
+    params = dict(delta=0.9, alpha=1.4, beta=0.25, gamma=0.5)
+    theta = np.linspace(0.0, 2.0 * np.pi, 33)
+    analytic = wrapstable.cdf(theta, **params)
+    numeric = wrapstable._cdf_from_pdf(
+        theta,
+        params["delta"],
+        params["alpha"],
+        params["beta"],
+        params["gamma"],
+    )
+    np.testing.assert_allclose(analytic, numeric, atol=5e-7, rtol=1e-6)
+
+
+def test_wrapstable_cdf_monotonic():
+    params = dict(delta=0.2, alpha=1.8, beta=-0.2, gamma=0.7)
+    theta = np.linspace(0.0, 2.0 * np.pi, 257)
+    cdf_vals = wrapstable.cdf(theta, **params)
+    diffs = np.diff(cdf_vals)
+    assert np.all(diffs >= -1e-11)
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 

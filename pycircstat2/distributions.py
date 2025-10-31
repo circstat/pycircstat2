@@ -7436,7 +7436,32 @@ class wrapstable_gen(CircularContinuous):
         return super().pdf(x, delta, alpha, beta, gamma, *args, **kwargs)
 
     def _cdf(self, x, delta, alpha, beta, gamma):
-        return self._cdf_from_pdf(x, delta, alpha, beta, gamma)
+        x_arr = np.asarray(x, dtype=float)
+        scalar_input = x_arr.ndim == 0
+        theta = np.atleast_1d(x_arr)
+
+        rho_vals, mu_vals, p = self._get_series_terms(delta, alpha, beta, gamma)
+        theta_flat = theta.reshape(1, -1)
+        p_vals = p.astype(float)
+
+        sin_args = p_vals[:, np.newaxis] * theta_flat - mu_vals[:, np.newaxis]
+        coeffs = (rho_vals / p_vals)[:, np.newaxis]
+        series_sum = np.sum(coeffs * np.sin(sin_args), axis=0)
+        cdf_vals = (theta_flat[0] / (2.0 * np.pi)) + (1.0 / np.pi) * series_sum
+
+        anchor = (1.0 / np.pi) * np.sum((rho_vals / p_vals) * np.sin(-mu_vals))
+        cdf_vals = cdf_vals - anchor
+        cdf_vals = np.where(cdf_vals < 0.0, cdf_vals + 1.0, cdf_vals)
+        cdf_vals = np.clip(cdf_vals, 0.0, 1.0)
+
+        # Ensure exact endpoints
+        two_pi = 2.0 * np.pi
+        cdf_vals[np.isclose(theta_flat[0], 0.0, atol=1e-12)] = 0.0
+        cdf_vals[np.isclose(theta_flat[0], two_pi, atol=1e-12)] = 1.0
+
+        if scalar_input:
+            return float(cdf_vals.reshape(-1)[0])
+        return cdf_vals.reshape(x_arr.shape)
 
     def _get_series_terms(self, delta, alpha, beta, gamma):
         delta_s = self._scalar_param(delta)
