@@ -7,7 +7,7 @@ import numpy as np
 from scipy.special import logsumexp
 
 from .descriptive import circ_dist, circ_kappa, circ_mean_and_r
-from .distributions import CircularContinuous, vonmises
+from .distributions import CircularContinuous, vonmises, katojones
 from .utils import data2rad
 
 ALLOWED_MOCD_DISTRIBUTIONS = {
@@ -434,6 +434,435 @@ class MovM:
         """
         proba = self.predict_proba(x, unit=unit, full_cycle=full_cycle)
         return proba.argmax(axis=0)
+
+
+class MoKJ:
+    """
+    Mixture of Kato–Jones (MoKJ) Clustering.
+
+    EM algorithm for clustering circular data with a mixture of Kato–Jones
+    components (Kato & Jones, 2015). Each component controls mean direction (mu),
+    mean resultant length (gamma), and second-order moment magnitude/phase (rho, lam),
+    thus flexibly capturing skewness and peakedness per mode.
+
+    References
+    ----------
+    - Kato, S., & Jones, M.C. (2015). A tractable and interpretable four-parameter
+      family of unimodal distributions on the circle. *Biometrika*, 102(1), 181–190.
+    - Nagasaki, K., Kato, S., Nakanishi, W., & Jones, M.C. (2024/2025).
+      Traffic count data analysis using mixtures of Kato–Jones distributions.
+      *JRSS C (Applied Statistics)*. (EM for KJ mixtures; reparametrization details.)
+
+    Parameters
+    ----------
+    burnin : int, default=30
+        Number of initial EM iterations before checking convergence.
+    n_clusters : int, default=5
+        Number of Kato–Jones mixture components.
+    n_iters : int, default=100
+        Maximum EM iterations.
+    full_cycle : int or float, default=360
+        Used to convert degrees to radians when unit="degree".
+    unit : {"degree", "radian"}, default="degree"
+        Input unit of X.
+    random_seed : int or None, default=2046
+        RNG seed for initialization.
+    threshold : float, default=1e-16
+        Convergence threshold on |nLL_t - nLL_{t-1}|.
+    mle_maxiter : int, default=500
+        Max iterations for per-component weighted MLE in M-step.
+    mle_ftol : float, default=1e-9
+        Function tolerance for per-component weighted MLE.
+    min_comp_weight : float, default=1e-6
+        Minimum mixture weight; components below may be reinitialized/frozen.
+
+    Attributes (after fit)
+    ----------------------
+    converged : bool
+    converged_iters : Optional[int]
+    nLL : np.ndarray
+        Negative log-likelihood history (finite prefix).
+    mu_ : np.ndarray  shape (K,)
+    gamma_ : np.ndarray  shape (K,)
+    rho_ : np.ndarray  shape (K,)
+    lam_ : np.ndarray  shape (K,)
+    p_ : np.ndarray  shape (K,)
+        Mixture weights.
+    gamma_resp_ : np.ndarray  shape (K, n)
+        Responsibilities.
+    labels_ : np.ndarray  shape (n,)
+        MAP component labels.
+    data : np.ndarray
+        Original X as provided.
+    alpha : np.ndarray
+        Data in radians.
+    n : int
+    """
+
+    def __init__(
+        self,
+        burnin: int = 30,
+        n_clusters: int = 5,
+        n_iters: int = 100,
+        full_cycle: Union[int, float] = 360,
+        unit: str = "degree",
+        random_seed: Optional[int] = 2046,
+        threshold: float = 1e-16,
+        mle_maxiter: int = 500,
+        mle_ftol: float = 1e-9,
+        min_comp_weight: float = 1e-6,
+    ):
+        if burnin < 0:
+            raise ValueError("`burnin` must be non-negative.")
+        if n_clusters <= 0:
+            raise ValueError("`n_clusters` must be a positive integer.")
+        if n_iters <= 0:
+            raise ValueError("`n_iters` must be a positive integer.")
+        if threshold <= 0:
+            raise ValueError("`threshold` must be positive.")
+        if unit not in {"degree", "radian"}:
+            raise ValueError("`unit` must be either 'degree' or 'radian'.")
+
+        self.burnin = burnin
+        self.threshold = threshold
+        self.n_clusters = n_clusters
+        self.n_iters = n_iters
+        self.full_cycle = full_cycle
+        self.unit = unit
+        self._rng = np.random.default_rng(random_seed)
+
+        self.mle_maxiter = int(mle_maxiter)
+        self.mle_ftol = float(mle_ftol)
+        self.min_comp_weight = float(min_comp_weight)
+        self._gamma_floor = 1e-4
+        self._gamma_margin = 5e-4
+        self._rho_margin = 5e-4
+        self._constraint_margin = 5e-4
+        self._s_shrink = 5e-3
+
+        self.converged = False
+        self.converged_iters: Optional[int] = None
+
+        self.mu_: Optional[np.ndarray] = None
+        self.gamma_: Optional[np.ndarray] = None
+        self.rho_: Optional[np.ndarray] = None
+        self.lam_: Optional[np.ndarray] = None
+        self.p_: Optional[np.ndarray] = None
+        self.gamma_resp_: Optional[np.ndarray] = None
+        self.labels_: Optional[np.ndarray] = None
+        self.nLL: Optional[np.ndarray] = None
+        self.data: Optional[np.ndarray] = None
+        self.alpha: Optional[np.ndarray] = None
+        self.n: Optional[int] = None
+
+    # ---------- initialization ----------
+
+    def _initialize(
+        self,
+        x_rad: np.ndarray,
+        n_clusters_init: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Random-assign points to K clusters (no empty clusters), then per-cluster
+        initialize KJ params via method-of-moments."""
+        n = len(x_rad)
+        if n_clusters_init > n:
+            raise ValueError("Number of clusters exceeds sample size during initialization.")
+
+        labels = None
+        if "CircKMeans" in globals():
+            try:
+                seed = int(self._rng.integers(0, 2**32 - 1))
+                kmeans = CircKMeans(
+                    n_clusters=n_clusters_init,
+                    unit="radian",
+                    metric="center",
+                    random_seed=seed,
+                )
+                kmeans.fit(x_rad)
+                labels = kmeans.labels_.astype(int, copy=True)
+                if len({int(c) for c in labels}) < n_clusters_init:
+                    labels = None
+            except Exception:
+                labels = None
+
+        if labels is None:
+            for _ in range(100):
+                candidate = self._rng.integers(n_clusters_init, size=n)
+                if all(np.any(candidate == c) for c in range(n_clusters_init)):
+                    labels = candidate
+                    break
+            else:
+                raise RuntimeError("Failed to initialize clusters without empty components.")
+
+        mu0 = np.zeros(n_clusters_init, float)
+        gamma0 = np.zeros(n_clusters_init, float)
+        rho0 = np.zeros(n_clusters_init, float)
+        lam0 = np.zeros(n_clusters_init, float)
+
+        for c in range(n_clusters_init):
+            subset = x_rad[labels == c]
+            # Moments init (fast, robust). Your katojones.fit already wraps moments logic.
+            est = katojones.fit(subset, method="moments", return_info=False)
+            mu0[c], gamma0[c], rho0[c], lam0[c] = self._regularise_params(est)
+
+        p0 = np.full(n_clusters_init, 1.0 / n_clusters_init, dtype=float)
+        return mu0, gamma0, rho0, lam0, p0
+
+    # ---------- regularisation helpers ----------
+
+    def _constraint_value(self, gamma: float, rho: float, lam: float) -> float:
+        cos_lam = np.cos(lam)
+        sin_lam = np.sin(lam)
+        return (rho * cos_lam - gamma) ** 2 + (rho * sin_lam) ** 2
+
+    def _regularise_params(self, params: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
+        mu, gamma, rho, lam = params
+        mu = float(np.mod(mu, 2.0 * np.pi))
+        gamma = float(np.clip(gamma, self._gamma_floor, 1.0 - self._gamma_margin))
+        rho = float(np.clip(rho, 0.0, 1.0 - self._rho_margin))
+        lam = float(np.mod(lam, 2.0 * np.pi))
+
+        limit = (1.0 - gamma) ** 2
+        if limit <= 0.0:
+            gamma = 1.0 - self._gamma_margin
+            limit = (1.0 - gamma) ** 2
+
+        if self._constraint_value(gamma, rho, lam) >= limit - self._constraint_margin:
+            # steer back inside feasible disk
+            s, phi = katojones._aux_from_rho_lam(gamma, rho, lam)
+            s = float(np.clip(s, 0.0, 1.0 - self._s_shrink))
+            s *= (1.0 - self._s_shrink)
+            rho, lam = katojones._rho_lam_from_aux(gamma, s, phi)
+            rho = float(np.clip(rho, 0.0, 1.0 - self._rho_margin))
+            lam = float(np.mod(lam, 2.0 * np.pi))
+
+        return mu, gamma, rho, lam
+
+    def _violates_or_degenerate(self, params: Tuple[float, float, float, float]) -> bool:
+        mu, gamma, rho, lam = params
+        if not np.all(np.isfinite([mu, gamma, rho, lam])):
+            return True
+        if gamma <= self._gamma_floor or rho >= 1.0 - self._rho_margin:
+            return True
+        limit = (1.0 - gamma) ** 2
+        if limit <= 0.0:
+            return True
+        return self._constraint_value(gamma, rho, lam) >= limit - self._constraint_margin / 2.0
+
+    # ---------- core likelihood pieces ----------
+
+    def _component_logpdf(
+        self,
+        alpha: np.ndarray,
+        mu: np.ndarray,
+        gamma: np.ndarray,
+        rho: np.ndarray,
+        lam: np.ndarray,
+    ) -> np.ndarray:
+        """Return array shape (K, n) of component log-densities."""
+        K = mu.size
+        logs = np.vstack(
+            [
+                katojones.logpdf(alpha, mu=mu[k], gamma=gamma[k], rho=rho[k], lam=lam[k])
+                for k in range(K)
+            ]
+        )
+        return logs
+
+    def _log_gamma(self, alpha, p, mu, gamma, rho, lam) -> np.ndarray:
+        """Unnormalized log-responsibilities, shape (K, n)."""
+        log_mix = np.log(np.clip(p, 1e-300, None))[:, None]
+        log_comp = self._component_logpdf(alpha, mu, gamma, rho, lam)
+        return log_mix + log_comp
+
+    def _nll(self, alpha, p, mu, gamma, rho, lam) -> float:
+        log_gamma = self._log_gamma(alpha, p, mu, gamma, rho, lam)
+        ll = np.sum(logsumexp(log_gamma, axis=0))
+        return float(-ll)
+
+    # ---------- public API ----------
+
+    def fit(self, X: np.ndarray, verbose: Union[bool, int] = 0):
+        """
+        Fit the MoKJ model by EM.
+
+        Parameters
+        ----------
+        X : array-like, shape (n,)
+            Circular data in degrees or radians (see `unit`).
+        verbose : bool or int
+            If True, print progress each iteration; if int > 0, print every `verbose` iters.
+        """
+        X = np.asarray(X, dtype=float).reshape(-1)
+        if X.size == 0:
+            raise ValueError("Input data must contain at least one observation.")
+        alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
+
+        self.data = X
+        self.alpha = alpha
+        self.n = n = alpha.size
+
+        mu, gamma, rho, lam, p = self._initialize(alpha, self.n_clusters)
+
+        if verbose:
+            print("Iter".ljust(10) + "nLL")
+
+        nLL_hist = np.full(self.n_iters, np.nan)
+        last_nll = np.inf
+
+        for it in range(self.n_iters):
+            # E-step
+            log_resp = self._log_gamma(alpha, p, mu, gamma, rho, lam)
+            log_norm = logsumexp(log_resp, axis=0, keepdims=True)
+            resp = np.exp(log_resp - log_norm)  # (K, n)
+
+            # M-step: weights
+            p = resp.sum(axis=1)
+            p = np.clip(p, self.min_comp_weight, None)
+            p /= p.sum()
+
+            # M-step: per-component params via weighted MLE, with fallback to moments
+            mu_new = np.empty_like(mu)
+            gamma_new = np.empty_like(gamma)
+            rho_new = np.empty_like(rho)
+            lam_new = np.empty_like(lam)
+
+            for k in range(self.n_clusters):
+                w = resp[k]
+                wsum = float(w.sum())
+
+                moment_est = self._regularise_params(
+                    katojones.fit(alpha, method="moments", weights=w, return_info=False)
+                )
+
+                if not np.isfinite(wsum) or wsum <= self.min_comp_weight * n:
+                    # too small / degenerate: keep previous or reinit via moments
+                    mu_new[k], gamma_new[k], rho_new[k], lam_new[k] = moment_est
+                    continue
+
+                # Start from current params; do weighted MLE as in the EM literature
+                mle_params = None
+                initial_params = self._regularise_params((mu[k], gamma[k], rho[k], lam[k]))
+                for start_params in (initial_params, moment_est):
+                    try:
+                        est, _info = katojones.fit(
+                            alpha,
+                            method="mle",
+                            weights=w,
+                            initial=start_params,
+                            optimizer="L-BFGS-B",
+                            options={"maxiter": self.mle_maxiter, "ftol": self.mle_ftol},
+                            return_info=True,
+                        )
+                        est = self._regularise_params(est)
+                        if not self._violates_or_degenerate(est):
+                            mle_params = est
+                            break
+                    except Exception:
+                        continue
+
+                if mle_params is None:
+                    mle_params = moment_est
+
+                mu_new[k], gamma_new[k], rho_new[k], lam_new[k] = mle_params
+
+            mu, gamma, rho, lam = mu_new, gamma_new, rho_new, lam_new
+
+            # bookkeeping
+            nLL = self._nll(alpha, p, mu, gamma, rho, lam)
+            nLL_hist[it] = nLL
+            if verbose and (it % int(verbose or 1) == 0):
+                print(f"{it}".ljust(10) + f"{nLL:.6f}")
+
+            # convergence check
+            if it > self.burnin and abs(last_nll - nLL) < self.threshold:
+                self.converged = True
+                self.converged_iters = it + 1
+                if verbose:
+                    print(f"Converged at iter {it}. Final nLL = {nLL:.6f}\n")
+                break
+            last_nll = nLL
+        else:
+            if verbose:
+                print(f"Reached max iter {self.n_iters}. Final nLL = {nLL:.6f}\n")
+
+        # Save final state
+        self.nLL = nLL_hist[~np.isnan(nLL_hist)]
+        self.mu_, self.gamma_, self.rho_, self.lam_ = mu, gamma, rho, lam
+        self.p_ = p
+        # final responsibilities & labels
+        log_resp = self._log_gamma(alpha, p, mu, gamma, rho, lam)
+        log_norm = logsumexp(log_resp, axis=0, keepdims=True)
+        self.gamma_resp_ = np.exp(log_resp - log_norm)
+        self.labels_ = self.gamma_resp_.argmax(axis=0)
+        return self
+
+    # ---------- utilities ----------
+
+    def compute_BIC(self) -> float:
+        """
+        Bayesian Information Criterion for the original KJ mixture.
+        Uses p = 4*K + (K-1) = 5K - 1 parameters.
+        """
+        if self.gamma_resp_ is None:
+            raise ValueError("Model must be fitted before computing BIC.")
+        nLL = self._nll(self.alpha, self.p_, self.mu_, self.gamma_, self.rho_, self.lam_)
+        nparams = 5 * self.n_clusters - 1
+        return 2 * nLL + np.log(self.n) * nparams
+
+    def predict_proba(
+        self,
+        x: np.ndarray,
+        unit: Union[str, None] = None,
+        full_cycle: Union[float, int, None] = None,
+    ) -> np.ndarray:
+        """
+        Posterior component probabilities for new points.
+        """
+        if self.p_ is None:
+            raise ValueError("Model must be fitted before calling predict_proba().")
+        unit = self.unit if unit is None else unit
+        full_cycle = self.full_cycle if full_cycle is None else full_cycle
+        x = np.asarray(x, dtype=float).reshape(-1)
+        alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
+        log_resp = self._log_gamma(alpha, self.p_, self.mu_, self.gamma_, self.rho_, self.lam_)
+        log_norm = logsumexp(log_resp, axis=0, keepdims=True)
+        return np.exp(log_resp - log_norm)
+
+    def predict(
+        self,
+        x: np.ndarray,
+        unit: Union[str, None] = None,
+        full_cycle: Union[float, int, None] = None,
+    ) -> np.ndarray:
+        """MAP assignments for new data."""
+        return self.predict_proba(x, unit=unit, full_cycle=full_cycle).argmax(axis=0)
+
+    def predict_density(
+        self,
+        x: Optional[np.ndarray] = None,
+        unit: Union[str, None] = None,
+        full_cycle: Union[float, int, None] = None,
+    ) -> np.ndarray:
+        """
+        Mixture density at points x.
+        """
+        if self.p_ is None:
+            raise ValueError("Model must be fitted before calling predict_density().")
+        unit = self.unit if unit is None else unit
+        full_cycle = self.full_cycle if full_cycle is None else full_cycle
+
+        if x is None:
+            x = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+            if unit == "degree":
+                x = np.rad2deg(x)
+        x = np.asarray(x, dtype=float).reshape(-1)
+        alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
+
+        dens = np.zeros_like(alpha, dtype=float)
+        for pc, muc, gc, rhoc, lamc in zip(self.p_, self.mu_, self.gamma_, self.rho_, self.lam_):
+            dens += pc * katojones.pdf(alpha, mu=muc, gamma=gc, rho=rhoc, lam=lamc)
+        return dens
 
 
 class MoCD:
