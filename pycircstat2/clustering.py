@@ -1,9 +1,13 @@
+from __future__ import annotations
+
+import inspect
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
+from scipy.special import logsumexp
 
 from .descriptive import circ_dist, circ_kappa, circ_mean_and_r
-from .distributions import vonmises
+from .distributions import CircularContinuous, vonmises
 from .utils import data2rad
 
 
@@ -256,13 +260,14 @@ class MovM:
         self.labels_ = gamma_final.argmax(axis=0)
         return self
 
+
     def compute_gamma(
         self,
         alpha: np.ndarray,
         p: np.ndarray,
         m: np.ndarray,
         kappa: np.ndarray,
-    )-> np.ndarray:
+    ) -> np.ndarray:
         """
         Computes posterior probabilities (responsibilities) for each cluster.
 
@@ -291,7 +296,13 @@ class MovM:
         )
         return log_prob
 
-    def compute_nLL(self, alpha: np.ndarray, p: np.ndarray, m: np.ndarray, kappa: np.ndarray)-> float:
+    def compute_nLL(
+        self,
+        alpha: np.ndarray,
+        p: np.ndarray,
+        m: np.ndarray,
+        kappa: np.ndarray,
+    ) -> float:
         """
         Computes the negative log-likelihood.
 
@@ -315,7 +326,7 @@ class MovM:
         log_norm = np.logaddexp.reduce(log_gamma, axis=0)
         return -float(np.sum(log_norm))
 
-    def compute_BIC(self)-> float:
+    def compute_BIC(self) -> float:
         """
         Computes the Bayesian Information Criterion (BIC) for model selection.
 
@@ -337,7 +348,7 @@ class MovM:
         x: Optional[np.ndarray] = None,
         unit: Union[str, None] = None,
         full_cycle: Union[float, int, None] = None,
-    )-> np.ndarray:
+    ) -> np.ndarray:
         """
         Predicts density estimates for given points.
 
@@ -359,20 +370,47 @@ class MovM:
         full_cycle = self.full_cycle if full_cycle is None else full_cycle
 
         if x is None:
-            x = np.linspace(0, 2 * np.pi, 100)
-
-        if self.p_ is None or self.kappa_ is None or self.m_ is None:
-            raise ValueError("Model must be fitted before calling predict_density().")
-
+            x = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+            if unit == "degree":
+                x = np.rad2deg(x)
+        x = np.asarray(x, dtype=float).reshape(-1)
         alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
 
-        d = [
-            self.p_[i] * vonmises.pdf(alpha, self.m_[i], self.kappa_[i])
-            for i in range(self.n_clusters)
-        ]
-        return np.sum(d, axis=0)
+        density_components = np.array(
+            [
+                p_c * vonmises.pdf(alpha, mu=m_c, kappa=k_c)
+                for p_c, m_c, k_c in zip(self.p_, self.m_, self.kappa_)
+            ]
+        )
+        return density_components.sum(axis=0)
 
-    def predict(self, x: np.ndarray)-> np.ndarray:
+    def predict_proba(
+        self,
+        x: np.ndarray,
+        unit: Union[str, None] = None,
+        full_cycle: Union[float, int, None] = None,
+    ) -> np.ndarray:
+        """
+        Returns component posterior probabilities for new observations.
+        """
+        if self.p_ is None or self.kappa_ is None or self.m_ is None:
+            raise ValueError("Model must be fitted before calling predict_proba().")
+
+        unit = self.unit if unit is None else unit
+        full_cycle = self.full_cycle if full_cycle is None else full_cycle
+        x = np.asarray(x, dtype=float).reshape(-1)
+        alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
+
+        log_gamma = self._log_gamma(alpha, self.p_, self.m_, self.kappa_)
+        log_norm = np.logaddexp.reduce(log_gamma, axis=0, keepdims=True)
+        return np.exp(log_gamma - log_norm)
+
+    def predict(
+        self,
+        x: np.ndarray,
+        unit: Union[str, None] = None,
+        full_cycle: Union[float, int, None] = None,
+    ) -> np.ndarray:
         """
         Predicts cluster assignments for new data.
 
@@ -386,16 +424,328 @@ class MovM:
         np.ndarray
             Predicted cluster labels.
         """
-        if self.p_ is None or self.m_ is None or self.kappa_ is None:
-            raise ValueError("Model must be fitted before calling predict().")
+        proba = self.predict_proba(x, unit=unit, full_cycle=full_cycle)
+        return proba.argmax(axis=0)
 
-        alpha = x if self.unit == "radian" else data2rad(x, k=self.full_cycle)
 
-        gamma = self.compute_gamma(
-            alpha=alpha, p=self.p_, m=self.m_, kappa=self.kappa_
+class MoCD:
+    """
+    Mixture of Circular Distributions (MoCD).
+
+    This class generalises :class:`MovM` to any circular distribution that exposes
+    ``logpdf`` and ``fit`` methods accepting weighted observations.  All mixture
+    components share the same distribution family (e.g. von Mises, wrapped Cauchy,
+    wrapped normal, inverse Batschelet).  Users choose the underlying family and
+    the EM algorithm re-estimates the component parameters and mixing weights.
+
+    Notes
+    -----
+    * The current implementation assumes each component uses **the same**
+      distribution.  Extending EM to support heterogeneous components
+      (different families per cluster) is feasible – responsibilities are still
+      well-defined – but requires bookkeeping for a potentially different set of
+      parameters and optimisation routines per component.  That design is left
+      for future work.
+    * The supplied distribution must expose ``logpdf`` and a ``fit`` method with
+      a ``weights`` keyword argument.  Most distributions in :mod:`pycircstat2`
+      follow that convention.
+    * Parameter order is inferred from ``distribution.shapes`` where available;
+      otherwise ``param_names`` must be provided.
+    """
+
+    def __init__(
+        self,
+        distribution: CircularContinuous = vonmises,
+        *,
+        param_names: Optional[List[str]] = None,
+        fit_method: Optional[str] = "mle",
+        fit_kwargs: Optional[Dict[str, object]] = None,
+        n_clusters: int = 3,
+        n_iters: int = 100,
+        burnin: int = 20,
+        threshold: float = 1e-6,
+        unit: str = "degree",
+        full_cycle: Union[int, float] = 360,
+        random_seed: Optional[int] = None,
+    ) -> None:
+        if not isinstance(distribution, CircularContinuous):
+            raise TypeError("`distribution` must be an instance of CircularContinuous (e.g. vonmises).")
+        if n_clusters <= 0:
+            raise ValueError("`n_clusters` must be positive.")
+        if n_iters <= 0:
+            raise ValueError("`n_iters` must be positive.")
+        if burnin < 0:
+            raise ValueError("`burnin` must be non-negative.")
+        if threshold <= 0:
+            raise ValueError("`threshold` must be positive.")
+        if unit not in {"degree", "radian"}:
+            raise ValueError("`unit` must be either 'degree' or 'radian'.")
+
+        self.distribution = distribution
+        self.n_clusters = int(n_clusters)
+        self.n_iters = int(n_iters)
+        self.burnin = int(burnin)
+        self.threshold = float(threshold)
+        self.unit = unit
+        self.full_cycle = full_cycle
+        self.fit_method = fit_method
+        self.fit_kwargs = {} if fit_kwargs is None else dict(fit_kwargs)
+        self._rng = np.random.default_rng(random_seed)
+
+        fit_signature = inspect.signature(self.distribution.fit)
+        if "weights" not in fit_signature.parameters:
+            raise ValueError(
+                "The selected distribution does not expose a `weights=` keyword in its fit method. "
+                "MoCD requires weighted fitting to perform the EM M-step."
+            )
+
+        inferred_names: List[str] = []
+        if param_names is not None:
+            inferred_names = list(param_names)
+        else:
+            shapes = getattr(self.distribution, "shapes", None)
+            if shapes:
+                inferred_names = [name.strip() for name in shapes.split(",") if name.strip()]
+
+        if not inferred_names:
+            raise ValueError(
+                "`param_names` could not be inferred. Please provide the parameter order explicitly."
+            )
+
+        self.param_names = inferred_names
+
+        # Model attributes populated after fitting
+        self.converged: bool = False
+        self.converged_iters: Optional[int] = None
+        self.nLL: Optional[np.ndarray] = None
+        self.p_: Optional[np.ndarray] = None
+        self.params_: Optional[List[Dict[str, float]]] = None
+        self.param_matrix_: Optional[np.ndarray] = None
+        self.gamma_: Optional[np.ndarray] = None
+        self.labels_: Optional[np.ndarray] = None
+        self.alpha: Optional[np.ndarray] = None
+        self.data: Optional[np.ndarray] = None
+        self.n: Optional[int] = None
+
+    # ------------------------------------------------------------------ #
+    # Helper utilities
+    # ------------------------------------------------------------------ #
+    def _params_to_array(self, params: Dict[str, float]) -> np.ndarray:
+        return np.array([float(params[name]) for name in self.param_names], dtype=float)
+
+    def _array_to_params(self, values: Union[Dict[str, float], Tuple[float, ...], List[float]]) -> Dict[str, float]:
+        if isinstance(values, dict):
+            return {name: float(values[name]) for name in self.param_names}
+        arr = np.atleast_1d(values).astype(float)
+        if arr.size != len(self.param_names):
+            raise ValueError(
+                f"Expected {len(self.param_names)} parameters, but got {arr.size}. "
+                "Please supply `param_names` matching the distribution."
+            )
+        return {name: float(arr[i]) for i, name in enumerate(self.param_names)}
+
+    def _fit_component(
+        self,
+        alpha: np.ndarray,
+        weights: np.ndarray,
+        current_params: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, float]:
+        total_weight = float(np.sum(weights))
+        if total_weight <= 0.0:
+            if current_params is not None:
+                return current_params
+            raise RuntimeError("Encountered a component with zero effective weight during initialisation.")
+
+        fit_options = dict(self.fit_kwargs)
+        if self.fit_method is not None:
+            fit_options.setdefault("method", self.fit_method)
+        fit_options["weights"] = weights
+
+        try:
+            params_est, _info = self.distribution.fit(alpha, return_info=True, **fit_options)
+        except TypeError:
+            fit_options.pop("return_info", None)
+            params_est = self.distribution.fit(alpha, **fit_options)
+
+        return self._array_to_params(params_est)
+
+    def _initialize(self, alpha: np.ndarray) -> Tuple[List[Dict[str, float]], np.ndarray]:
+        n = alpha.size
+        if self.n_clusters > n:
+            raise ValueError("Number of clusters cannot exceed number of observations during initialisation.")
+
+        for _ in range(128):
+            labels = self._rng.integers(self.n_clusters, size=n)
+            if all(np.any(labels == c) for c in range(self.n_clusters)):
+                break
+        else:
+            raise RuntimeError("Failed to initialise mixture components without empty clusters.")
+
+        params_list: List[Dict[str, float]] = []
+        for c in range(self.n_clusters):
+            mask = labels == c
+            count = int(mask.sum())
+            params = self._fit_component(alpha[mask], np.ones(count, dtype=float))
+            params_list.append(params)
+
+        p = np.full(self.n_clusters, 1.0 / self.n_clusters, dtype=float)
+        return params_list, p
+
+    def _log_gamma(
+        self,
+        alpha: np.ndarray,
+        p: np.ndarray,
+        params_list: List[Dict[str, float]],
+    ) -> np.ndarray:
+        log_prob = np.vstack(
+            [
+                np.log(p[i] + 1e-32) + self.distribution.logpdf(alpha, **params_list[i])
+                for i in range(self.n_clusters)
+            ]
         )
+        return log_prob
 
-        return gamma.argmax(axis=0)
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+    def fit(self, X: np.ndarray, verbose: Union[bool, int] = 0) -> "MoCD":
+        X = np.asarray(X, dtype=float).reshape(-1)
+        if X.size == 0:
+            raise ValueError("Input data must contain at least one observation.")
+
+        alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
+
+        self.data = X
+        self.alpha = alpha
+        self.n = alpha.size
+
+        params_list, p = self._initialize(alpha)
+
+        if verbose:
+            header = "Iter".ljust(10) + "nLL"
+            print(header)
+
+        nLL_history = np.full(self.n_iters, np.nan)
+
+        for iteration in range(self.n_iters):
+            log_resp = self._log_gamma(alpha, p, params_list)
+            log_norm = logsumexp(log_resp, axis=0, keepdims=True)
+            gamma_normed = np.exp(log_resp - log_norm)
+
+            p = gamma_normed.sum(axis=1)
+            p /= p.sum()
+
+            params_updated: List[Dict[str, float]] = []
+            for c in range(self.n_clusters):
+                weights = gamma_normed[c]
+                if np.allclose(weights.sum(), 0.0):
+                    params_updated.append(params_list[c])
+                    continue
+                params_updated.append(self._fit_component(alpha, weights, current_params=params_list[c]))
+            params_list = params_updated
+
+            nLL = -float(np.sum(log_norm))
+            nLL_history[iteration] = nLL
+
+            if verbose and (iteration % int(verbose or 1) == 0):
+                print(f"{iteration}".ljust(10) + f"{nLL:.3f}")
+
+            if (
+                iteration > self.burnin
+                and np.abs(nLL_history[iteration] - nLL_history[iteration - 1])
+                < self.threshold
+            ):
+                self.converged = True
+                self.converged_iters = iteration + 1
+                if verbose:
+                    print(f"Converged at iter {iteration}. Final nLL = {nLL:.3f}\n")
+                break
+        else:
+            if verbose:
+                print(f"Reached max iter {self.n_iters}. Final nLL = {nLL_history[self.n_iters - 1]:.3f}\n")
+
+        self.nLL = nLL_history[~np.isnan(nLL_history)]
+        self.p_ = p
+        self.params_ = params_list
+        self.param_matrix_ = np.vstack([self._params_to_array(params) for params in params_list])
+
+        final_log = self._log_gamma(alpha, p, params_list)
+        final_norm = logsumexp(final_log, axis=0, keepdims=True)
+        gamma_final = np.exp(final_log - final_norm)
+        self.gamma_ = gamma_final
+        self.labels_ = gamma_final.argmax(axis=0)
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if self.gamma_ is None or self.p_ is None or self.params_ is None:
+            raise ValueError("Model must be fitted before calling `predict_proba`.")
+
+        X = np.asarray(X, dtype=float).reshape(-1)
+        alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
+
+        log_resp = self._log_gamma(alpha, self.p_, self.params_)
+        log_norm = logsumexp(log_resp, axis=0, keepdims=True)
+        return np.exp(log_resp - log_norm)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        proba = self.predict_proba(X)
+        return proba.argmax(axis=0)
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        if self.p_ is None or self.params_ is None:
+            raise ValueError("Model must be fitted before calling `score_samples`.")
+
+        X = np.asarray(X, dtype=float).reshape(-1)
+        alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
+        log_resp = self._log_gamma(alpha, self.p_, self.params_)
+        return logsumexp(log_resp, axis=0)
+
+    def score(self, X: np.ndarray) -> float:
+        log_likelihood = self.score_samples(X)
+        return float(np.mean(log_likelihood))
+
+    def predict_density(
+        self,
+        X: Optional[np.ndarray] = None,
+        *,
+        unit: Optional[str] = None,
+        full_cycle: Optional[Union[int, float]] = None,
+    ) -> np.ndarray:
+        if self.p_ is None or self.params_ is None:
+            raise ValueError("Model must be fitted before calling `predict_density`.")
+
+        unit = self.unit if unit is None else unit
+        full_cycle = self.full_cycle if full_cycle is None else full_cycle
+
+        if X is None:
+            X = np.linspace(0.0, 2.0 * np.pi, 200, endpoint=False)
+            if unit == "degree":
+                X = np.rad2deg(X)
+
+        X = np.asarray(X, dtype=float).reshape(-1)
+        alpha = X if unit == "radian" else data2rad(X, k=full_cycle)
+
+        pdf_components = np.vstack(
+            [self.distribution.pdf(alpha, **params) for params in self.params_]
+        )
+        density = np.sum(self.p_[:, None] * pdf_components, axis=0)
+        return density
+
+    def bic(self) -> float:
+        if self.alpha is None or self.p_ is None or self.params_ is None:
+            raise ValueError("Model must be fitted before computing BIC.")
+        log_likelihood = self.score_samples(self.alpha)
+        nLL = -float(np.sum(log_likelihood))
+        n_params_component = len(self.param_names)
+        n_params_total = self.n_clusters * n_params_component + (self.n_clusters - 1)
+        return 2.0 * nLL + np.log(self.n) * n_params_total
+
+    # Aliases for compatibility with the MovM API
+    def predict_density_grid(self, X: Optional[np.ndarray] = None) -> np.ndarray:
+        return self.predict_density(X)
+
+    def compute_BIC(self) -> float:
+        return self.bic()
 
 
 class CircHAC:
