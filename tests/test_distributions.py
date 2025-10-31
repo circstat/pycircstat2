@@ -1081,6 +1081,35 @@ def test_katojones_fit_methods_agree():
     np.testing.assert_allclose(gamma_mle, gamma, atol=0.05)
     np.testing.assert_allclose(rho_mle, rho, atol=0.08)
     np.testing.assert_allclose(_angle_diff(lam_mle, lam), 0.0, atol=0.2)
+
+
+def test_katojones_cdf_matches_numeric():
+    params = dict(mu=0.8, gamma=0.4, rho=0.35, lam=1.1)
+    theta = np.linspace(0.0, 2.0 * np.pi, 49)
+    analytic = katojones.cdf(theta, **params)
+    numeric = katojones._cdf_from_pdf(
+        theta,
+        params["mu"],
+        params["gamma"],
+        params["rho"],
+        params["lam"],
+    )
+    np.testing.assert_allclose(analytic, numeric, atol=5e-7, rtol=1e-6)
+
+
+def test_katojones_ppf_roundtrip():
+    params = dict(mu=0.5, gamma=0.45, rho=0.3, lam=1.4)
+    q = np.linspace(1e-5, 1.0 - 1e-5, 61)
+    theta = katojones.ppf(q, **params)
+    q_back = katojones.cdf(theta, **params)
+    np.testing.assert_allclose(q_back, q, atol=1e-5, rtol=0.0)
+    np.testing.assert_allclose(katojones.ppf(0.0, **params), 0.0, atol=1e-12)
+    np.testing.assert_allclose(katojones.ppf(1.0, **params), 2.0 * np.pi, atol=1e-12)
+
+
+def test_katojones_rvs_reasonable():
+    dist = katojones(mu=0.7, gamma=0.5, rho=0.25, lam=1.2)
+    _assert_rvs_reasonable(dist, size=512, seed=2025, uniform_tol=0.01)
     
 def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05):
     rng = np.random.default_rng(seed)

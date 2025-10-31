@@ -78,6 +78,13 @@ _WRAPSTABLE_NEWTON_MAXITER = 60
 _WRAPSTABLE_NEWTON_TOL = 1e-12
 _WRAPSTABLE_NEWTON_WIDTH_TOL = 1e-10
 
+_KJ_CDF_TOL = 1e-12
+_KJ_MAX_TERMS = 5000
+_KJ_GAMMA_TOL = 1e-12
+_KJ_NEWTON_MAXITER = 60
+_KJ_NEWTON_TOL = 1e-12
+_KJ_NEWTON_WIDTH_TOL = 1e-10
+
 OPTIMIZERS = [
     "Nelder-Mead",
     "Powell",
@@ -7942,10 +7949,10 @@ class katojones_gen(CircularContinuous):
     pdf(x, mu, gamma, rho, lam)
         Probability density function.
     cdf(x, mu, gamma, rho, lam)
-        Cumulative distribution function (numeric integration).
+        Cumulative distribution function via adaptive Fourier series.
 
     rvs(mu, gamma, rho, lam, size=None, random_state=None)
-        Random variates via a wrapped-Cauchy-based composition sampler.
+        Random variates obtained by inverting the CDF.
     fit(data, method=\"moments\" | \"mle\", ...)
         Method-of-moments or maximum-likelihood parameter estimation.
     Notes
@@ -7969,6 +7976,24 @@ class katojones_gen(CircularContinuous):
     """
 
     _moment_tolerance = 1e-12
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._series_cache = {}
+
+    def _clear_normalization_cache(self):
+        super()._clear_normalization_cache()
+        self._series_cache = {}
+
+    @staticmethod
+    def _scalar_param(value):
+        arr = np.asarray(value, dtype=float)
+        if arr.size == 1:
+            return float(np.asarray(arr, dtype=float).reshape(-1)[0])
+        first = float(arr.flat[0])
+        if not np.allclose(arr, first):
+            raise ValueError("katojones parameters must be scalar-valued.")
+        return first
 
     def _argcheck(self, mu, gamma, rho, lam):
         try:
@@ -8036,18 +8061,45 @@ class katojones_gen(CircularContinuous):
         return super().pdf(x, mu, gamma, rho, lam, *args, **kwargs)
 
     def _cdf(self, x, mu, gamma, rho, lam):
-        return self._cdf_from_pdf(x, mu, gamma, rho, lam)
+        x_arr = np.asarray(x, dtype=float)
+        scalar_input = x_arr.ndim == 0
+        flat = x_arr.reshape(-1)
+
+        mu_val = float(np.mod(self._scalar_param(mu), 2.0 * np.pi))
+        gamma_val = float(np.clip(self._scalar_param(gamma), 0.0, 1.0 - 1e-12))
+        rho_val = float(np.clip(self._scalar_param(rho), 0.0, 1.0 - 1e-12))
+        lam_val = float(np.mod(self._scalar_param(lam), 2.0 * np.pi))
+
+        if gamma_val <= _KJ_GAMMA_TOL:
+            cdf_flat = flat / (2.0 * np.pi)
+        else:
+            series = self._get_series_terms(mu_val, gamma_val, rho_val, lam_val)
+            cdf_raw = self._evaluate_cdf_series(flat, mu_val, gamma_val, rho_val, lam_val, series=series)
+            cdf_flat = np.mod(cdf_raw, 1.0)
+
+        cdf_flat = np.clip(cdf_flat, 0.0, 1.0)
+        cdf_flat[np.isclose(flat, 0.0, atol=1e-12)] = 0.0
+        cdf_flat[np.isclose(flat, 2.0 * np.pi, atol=1e-12)] = 1.0
+
+        if scalar_input:
+            return float(cdf_flat[0])
+        return cdf_flat.reshape(x_arr.shape)
 
     def cdf(self, x, mu, gamma, rho, lam, *args, **kwargs):
         r"""
         Cumulative distribution function of the Kato--Jones (2015) distribution.
 
+        The CDF has the closed-form Fourier expansion
+
         $$
-        G(\theta) = \int_{0}^{\theta} g(t)\,dt
+        G(\theta) = \frac{\theta}{2\pi}
+        + \frac{1}{\pi}\sum_{p=1}^{\infty} \frac{\gamma \rho^{p-1}}{p}
+        \sin\!\bigl(p\theta - [p\mu + (p-1)\lambda]\bigr),
         $$
 
-        where $g(\theta)$ is the density given above. The integral is evaluated
-        numerically.
+        which is evaluated adaptively by truncating the series once the tail
+        contribution drops below a specified tolerance. No numerical quadrature
+        is required.
 
         Parameters
         ----------
@@ -8099,23 +8151,115 @@ class katojones_gen(CircularContinuous):
         return super().logpdf(x, mu, gamma, rho, lam, *args, **kwargs)
 
     def _ppf(self, q, mu, gamma, rho, lam):
+        mu_val = float(np.mod(self._scalar_param(mu), 2.0 * np.pi))
+        gamma_val = float(np.clip(self._scalar_param(gamma), 0.0, 1.0 - 1e-12))
+        rho_val = float(np.clip(self._scalar_param(rho), 0.0, 1.0 - 1e-12))
+        lam_val = float(np.mod(self._scalar_param(lam), 2.0 * np.pi))
+
         q_arr = np.asarray(q, dtype=float)
+        if q_arr.size == 0:
+            return q_arr.astype(float)
 
-        def invert_single(prob):
-            if prob <= 0.0:
-                return 0.0
-            if prob >= 1.0:
-                return 2.0 * np.pi
+        if gamma_val <= _KJ_GAMMA_TOL:
+            return (2.0 * np.pi * q_arr).astype(float)
 
-            def objective(theta):
-                return self._cdf_from_pdf(theta, mu, gamma, rho, lam) - prob
+        scalar_input = q_arr.ndim == 0
+        flat = q_arr.reshape(-1)
+        result = np.full_like(flat, np.nan, dtype=float)
 
-            return brentq(objective, 0.0, 2.0 * np.pi, xtol=1e-12, rtol=1e-12, maxiter=200)
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if not np.any(valid):
+            return float(result) if scalar_input else result.reshape(q_arr.shape)
 
-        result = np.vectorize(invert_single, otypes=[float])(q_arr)
-        if np.isscalar(q):
-            return float(result)
-        return result
+        series = self._get_series_terms(mu_val, gamma_val, rho_val, lam_val)
+        two_pi = 2.0 * np.pi
+
+        def cdf_single(theta):
+            value = self._evaluate_cdf_series(theta, mu_val, gamma_val, rho_val, lam_val, series=series)
+            value = np.mod(value, 1.0)
+            return float(np.clip(value, 0.0, 1.0))
+
+        for idx, q_val in enumerate(flat):
+            if not valid[idx]:
+                continue
+            if np.isclose(q_val, 0.0, atol=1e-12):
+                result[idx] = 0.0
+                continue
+            if np.isclose(q_val, 1.0, atol=1e-12):
+                result[idx] = two_pi
+                continue
+
+            lo, hi = 0.0, two_pi
+            theta = q_val * two_pi
+
+            for _ in range(_KJ_NEWTON_MAXITER):
+                cdf_theta = cdf_single(theta)
+                pdf_theta = float(self._pdf(theta, mu_val, gamma_val, rho_val, lam_val))
+                residual = cdf_theta - q_val
+
+                if abs(residual) <= _KJ_NEWTON_TOL and (hi - lo) <= _KJ_NEWTON_WIDTH_TOL:
+                    break
+
+                if residual > 0.0:
+                    hi = min(hi, theta)
+                else:
+                    lo = max(lo, theta)
+
+                if pdf_theta <= 0.0 or not np.isfinite(pdf_theta):
+                    theta = 0.5 * (lo + hi)
+                    continue
+
+                step = residual / pdf_theta
+                theta_candidate = theta - step
+                if not np.isfinite(theta_candidate) or theta_candidate <= lo or theta_candidate >= hi:
+                    theta = 0.5 * (lo + hi)
+                else:
+                    theta = theta_candidate
+
+                if (hi - lo) <= _KJ_NEWTON_WIDTH_TOL:
+                    break
+            else:
+                for _ in range(30):
+                    mid = 0.5 * (lo + hi)
+                    if cdf_single(mid) > q_val:
+                        hi = mid
+                    else:
+                        lo = mid
+                theta = 0.5 * (lo + hi)
+
+            result[idx] = theta % two_pi
+
+        if scalar_input:
+            return float(result[0])
+        return result.reshape(q_arr.shape)
+
+    def _rvs(self, mu, gamma, rho, lam, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        if size is None:
+            u = rng.random()
+            return float(self._ppf(u, mu, gamma, rho, lam))
+
+        if np.isscalar(size):
+            shape = (int(size),)
+        else:
+            shape = tuple(int(dim) for dim in np.atleast_1d(size))
+
+        total = int(np.prod(shape, dtype=int))
+        if total < 0:
+            raise ValueError("`size` must describe a non-negative number of samples.")
+        if total == 0:
+            return np.empty(shape, dtype=float)
+
+        u = rng.random(size=shape)
+        return self._ppf(u, mu, gamma, rho, lam)
+
+    def rvs(self, mu=None, gamma=None, rho=None, lam=None, size=None, random_state=None):
+        mu_val = self._scalar_param(mu)
+        gamma_val = self._scalar_param(gamma)
+        rho_val = self._scalar_param(rho)
+        lam_val = self._scalar_param(lam)
+        return super().rvs(mu_val, gamma_val, rho_val, lam_val, size=size, random_state=random_state)
 
     def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
         shape_args, non_shape_kwargs = self._separate_shape_parameters(
@@ -8329,6 +8473,77 @@ class katojones_gen(CircularContinuous):
         rho = float(np.clip(np.hypot(rho_cos, rho_sin), 0.0, 1.0 - 1e-9))
         lam = float(np.mod(np.arctan2(rho_sin, rho_cos), 2.0 * np.pi))
         return rho, lam
+
+    def _get_series_terms(self, mu, gamma, rho, lam):
+        mu_val = float(np.mod(self._scalar_param(mu), 2.0 * np.pi))
+        gamma_val = float(np.clip(self._scalar_param(gamma), 0.0, 1.0 - 1e-12))
+        rho_val = float(np.clip(self._scalar_param(rho), 0.0, 1.0 - 1e-12))
+        lam_val = float(np.mod(self._scalar_param(lam), 2.0 * np.pi))
+
+        key = self._normalization_cache_key(mu_val, gamma_val, rho_val, lam_val)
+        if key is None:
+            return self._compute_series_terms(mu_val, gamma_val, rho_val, lam_val)
+
+        cache = self._series_cache
+        if key not in cache:
+            cache[key] = self._compute_series_terms(mu_val, gamma_val, rho_val, lam_val)
+        return cache[key]
+
+    def _compute_series_terms(self, mu, gamma, rho, lam):
+        if gamma <= _KJ_GAMMA_TOL or rho <= _KJ_GAMMA_TOL:
+            return {
+                "coeffs": np.empty(0, dtype=float),
+                "phases": np.empty(0, dtype=float),
+                "p": np.empty(0, dtype=float),
+                "anchor": 0.0,
+            }
+
+        rho_val = float(np.clip(rho, 0.0, 1.0 - 1e-12))
+        gamma_val = float(np.clip(gamma, 0.0, 1.0 - 1e-12))
+
+        if rho_val == 0.0:
+            P = 1
+        else:
+            P = 1
+            for _ in range(_KJ_MAX_TERMS):
+                tail = (gamma_val / max(P, 1)) * (rho_val ** max(P - 1, 0)) / max(1e-12, 1.0 - rho_val)
+                if tail <= _KJ_CDF_TOL:
+                    break
+                P += 1
+            P = min(P, _KJ_MAX_TERMS)
+
+        p = np.arange(1, P + 1, dtype=float)
+        rho_pows = rho_val ** (p - 1.0)
+        coeffs = gamma_val * rho_pows / p
+        phases = np.mod(p * mu + (p - 1.0) * lam, 2.0 * np.pi)
+        anchor = -(1.0 / np.pi) * np.sum(coeffs * np.sin(phases))
+
+        return {
+            "coeffs": coeffs,
+            "phases": phases,
+            "p": p,
+            "anchor": float(anchor),
+        }
+
+    def _evaluate_cdf_series(self, theta, mu, gamma, rho, lam, *, series=None):
+        theta_arr = np.asarray(theta, dtype=float)
+        flat = theta_arr.reshape(-1)
+
+        if series is None:
+            series = self._get_series_terms(mu, gamma, rho, lam)
+
+        coeffs = series["coeffs"]
+        if coeffs.size == 0:
+            return (flat / (2.0 * np.pi)).reshape(theta_arr.shape)
+
+        phases = series["phases"]
+        p = series["p"][:, np.newaxis]
+        theta_col = flat[np.newaxis, :]
+        sin_terms = np.sin(p * theta_col - phases[:, np.newaxis])
+        series_sum = np.sum(coeffs[:, np.newaxis] * sin_terms, axis=0)
+        base = flat / (2.0 * np.pi)
+        values = base + (1.0 / np.pi) * series_sum - series["anchor"]
+        return values.reshape(theta_arr.shape)
 
     def _fit_mle(
         self,
