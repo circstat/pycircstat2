@@ -854,6 +854,28 @@ def test_inverse_batschelet_pdf_scalar_consistency():
     np.testing.assert_allclose(array_vals, scalar_vals, atol=5e-12, rtol=0.0)
 
 
+def test_inverse_batschelet_cdf_matches_numeric():
+    params = dict(xi=0.9, kappa=2.4, nu=-0.35, lmbd=0.6)
+    theta = np.linspace(0.0, 2.0 * np.pi, 25)
+    analytic = inverse_batschelet.cdf(theta, **params)
+    numeric = inverse_batschelet._cdf_from_pdf(
+        theta,
+        params["xi"],
+        params["kappa"],
+        params["nu"],
+        params["lmbd"],
+    )
+    np.testing.assert_allclose(analytic, numeric, atol=5e-5, rtol=1e-4)
+
+
+def test_inverse_batschelet_cdf_monotonic():
+    params = dict(xi=0.3, kappa=3.5, nu=0.4, lmbd=-0.5)
+    theta = np.linspace(0.0, 2.0 * np.pi, 257)
+    cdf_vals = inverse_batschelet.cdf(theta, **params)
+    diffs = np.diff(cdf_vals)
+    assert np.all(diffs >= -1e-11), "CDF must be non-decreasing"
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 

@@ -63,6 +63,8 @@ _INVBAT_KAPPA_UPPER = 700.0
 _INVBAT_NUMERIC_GRID = 4096
 _INVBAT_NU_TOL = 1e-12
 _INVBAT_LMBDA_TOL = 1e-12
+_INVBAT_MIN_GRID = 512
+_INVBAT_MAX_GRID = 8192
 
 OPTIMIZERS = [
     "Nelder-Mead",
@@ -6370,6 +6372,14 @@ class inverse_batschelet_gen(CircularContinuous):
     Implementation from 4.3.13 of Pewsey et al. (2014)
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._invbat_table_cache = {}
+
+    def _clear_normalization_cache(self):
+        super()._clear_normalization_cache()
+        self._invbat_table_cache = {}
+
     def _validate_params(self, xi, kappa, nu, lmbd):
         return (
             (0 <= xi <= np.pi * 2)
@@ -6479,7 +6489,175 @@ class inverse_batschelet_gen(CircularContinuous):
         return super().pdf(x, xi, kappa, nu, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
-        return self._cdf_from_pdf(x, xi, kappa, nu, lmbd)
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        flat = arr.reshape(-1)
+
+        if flat.size == 0:
+            return arr.astype(float)
+
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+
+        if not (
+            np.isfinite(xi_val)
+            and np.isfinite(kappa_val)
+            and np.isfinite(nu_val)
+            and np.isfinite(lmbd_val)
+        ):
+            return np.full_like(arr, np.nan, dtype=float)
+
+        two_pi = 2.0 * np.pi
+
+        if kappa_val <= _INVBAT_KAPPA_TOL:
+            cdf_flat = flat / two_pi
+        else:
+            table = self._get_invbat_table(kappa_val, nu_val, lmbd_val)
+            phi = ((flat - xi_val + np.pi) % two_pi) - np.pi
+            phi_start = ((-xi_val + np.pi) % two_pi) - np.pi
+            H = table["cdf_interp"](phi)
+            H_start = float(table["cdf_interp"](phi_start))
+            diff = H - H_start
+            cdf_flat = np.where(diff < 0.0, diff + 1.0, diff)
+            cdf_flat = np.clip(cdf_flat, 0.0, 1.0)
+
+        if arr.ndim == 0:
+            value = float(cdf_flat[0])
+            if np.isclose(float(wrapped), two_pi, rtol=0.0, atol=1e-12):
+                return 1.0
+        else:
+            value = cdf_flat.reshape(arr.shape)
+            mask_upper = np.isclose(arr, two_pi, rtol=0.0, atol=1e-12)
+            if np.any(mask_upper):
+                value = value.copy()
+                value[mask_upper] = 1.0
+        return value
+
+    def cdf(self, x, xi, kappa, nu, lmbd, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the inverse Batschelet distribution.
+
+        The implementation precomputes the normalised primitive on a periodic grid
+        in the centred angle $\varphi = (\theta - \xi) \bmod 2\pi - \pi$. For each
+        grid node, the inverse peakedness transform $t_\nu^{-1}$ and inverse
+        Batschelet skew $s_\lambda^{-1}$ are evaluated, and the resulting kernel is
+        accumulated via a trapezoidal rule. The cumulative table is cached per
+        parameter triple $(\kappa, \nu, \lambda)$, enabling $O(1)$ queries after the
+        initial $O(N)$ precomputation. The limit $\kappa \to 0$ reduces to the
+        circular uniform CDF $\theta / (2\pi)$.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the cumulative distribution function.
+        xi : float
+            Direction parameter, $0 \leq \xi \leq 2\pi$.
+        kappa : float
+            Concentration parameter, $\kappa \geq 0$.
+        nu : float
+            Shape parameter, $-1 \leq \nu \leq 1$.
+        lmbd : float
+            Skewness parameter, $-1 \leq \lambda \leq 1$.
+
+        Returns
+        -------
+        cdf_values : array_like
+            Cumulative probabilities corresponding to `x`.
+        """
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+        return super().cdf(x, xi_val, kappa_val, nu_val, lmbd_val, *args, **kwargs)
+
+    def _get_invbat_table(self, kappa, nu, lmbd, grid_size=None):
+        kappa_val = float(np.clip(kappa, 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = float(nu)
+        lmbd_val = float(lmbd)
+        if kappa_val <= _INVBAT_KAPPA_TOL:
+            return {
+                "phi": np.array([-np.pi, np.pi], dtype=float),
+                "cdf_interp": PchipInterpolator([-np.pi, np.pi], [0.0, 1.0], extrapolate=True),
+                "pdf": np.full(2, 1.0 / (2.0 * np.pi), dtype=float),
+                "log_normalizer": -np.log(2.0 * np.pi),
+            }
+
+        if grid_size is None:
+            grid_size = _invbat_grid_size(kappa_val, nu_val, lmbd_val)
+        grid_int = int(grid_size)
+        key = (kappa_val, nu_val, lmbd_val, grid_int)
+        table = self._invbat_table_cache.get(key)
+        if table is None:
+            table = self._build_invbat_table(kappa_val, nu_val, lmbd_val, grid_int)
+            self._invbat_table_cache[key] = table
+        return table
+
+    def _build_invbat_table(self, kappa, nu, lmbd, grid_size):
+        phi = np.linspace(-np.pi, np.pi, grid_size + 1, dtype=float)
+        phi_star = _tnu(phi, nu, 0.0)
+        skew = _slmbdinv(phi_star, lmbd)
+
+        if np.isclose(lmbd, -1.0, atol=_INVBAT_LMBDA_TOL):
+            log_kernel = kappa * np.cos(phi_star - np.sin(phi_star))
+        else:
+            con1 = (1.0 - lmbd) / (1.0 + lmbd)
+            con2 = (2.0 * lmbd) / (1.0 + lmbd)
+            log_kernel = kappa * np.cos(con1 * phi_star + con2 * skew)
+
+        normalizer = self._get_cached_normalizer(
+            lambda: _c_invbatschelet(kappa, lmbd),
+            kappa,
+            lmbd,
+        )
+        if not np.isfinite(normalizer) or normalizer <= 0.0:
+            normalizer = _c_invbatschelet_numeric(kappa, lmbd, grid_size=_INVBAT_NUMERIC_GRID)
+            cache = self._get_normalization_cache()
+            cache[(kappa, lmbd)] = normalizer
+
+        log_norm = np.log(normalizer)
+        log_pdf = log_norm + log_kernel
+        log_pdf = np.clip(log_pdf, -745.0, 700.0)
+        pdf = np.exp(log_pdf)
+
+        step = (2.0 * np.pi) / grid_size
+        avg = 0.5 * (pdf[:-1] + pdf[1:])
+        mass = float(np.sum(avg) * step)
+        if not np.isfinite(mass) or mass <= 0.0:
+            pdf = np.full_like(pdf, 1.0 / (2.0 * np.pi), dtype=float)
+            log_norm = -np.log(2.0 * np.pi)
+            mass = 1.0
+        elif abs(mass - 1.0) > 5e-10:
+            scale = 1.0 / mass
+            pdf *= scale
+            log_norm += np.log(scale)
+            mass = 1.0
+            cache = self._get_normalization_cache()
+            cache[(kappa, lmbd)] = np.exp(log_norm)
+
+        avg = 0.5 * (pdf[:-1] + pdf[1:])
+        cumulative = np.concatenate(([0.0], np.cumsum(avg))) * step
+        cumulative = np.maximum.accumulate(np.clip(cumulative, 0.0, 1.0))
+        cumulative[-1] = 1.0
+
+        cdf_interp = PchipInterpolator(phi, cumulative, extrapolate=True)
+
+        unique_vals, unique_idx = np.unique(cumulative, return_index=True)
+        inv_cdf_interp = (
+            PchipInterpolator(unique_vals, phi[unique_idx], extrapolate=True)
+            if unique_vals.size >= 2
+            else None
+        )
+
+        return {
+            "phi": phi,
+            "pdf": pdf,
+            "cdf": cumulative,
+            "cdf_interp": cdf_interp,
+            "inv_cdf_interp": inv_cdf_interp,
+            "log_normalizer": log_norm,
+        }
 
 
 inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
@@ -6624,6 +6802,18 @@ def _invbat_ensure_scalar(value, name):
     if unique.size == 1:
         return float(unique[0])
     raise ValueError(f"Inverse Batschelet parameter '{name}' must be a scalar.")
+
+
+def _invbat_grid_size(kappa, nu, lmbd):
+    sharpness = (1.0 + 0.75 * abs(lmbd)) * (1.0 + abs(nu)) * np.sqrt(kappa + 1.0)
+    target = 64.0 + 12.0 * sharpness
+    target = float(np.clip(target, _INVBAT_MIN_GRID, _INVBAT_MAX_GRID))
+    power = int(np.ceil(np.log2(target)))
+    size = 1 << power
+    size = int(np.clip(size, _INVBAT_MIN_GRID, _INVBAT_MAX_GRID))
+    if size % 2 != 0:
+        size += 1
+    return size
 
 
 class wrapstable_gen(CircularContinuous):
