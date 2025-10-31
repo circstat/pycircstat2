@@ -3,7 +3,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 import pytest
-from scipy import stats
+from scipy import stats, special
 
 from pycircstat2.distributions import (
     cardioid,
@@ -930,6 +930,166 @@ def test_distribution_rvs_pit(case):
     )
 
 
+def test_circularuniform_descriptive_stats():
+    dist = circularuniform()
+    stats_dict = dist.stats()
+
+    assert np.isnan(dist.mean())
+    assert np.isnan(stats_dict["mean"])
+    np.testing.assert_allclose(dist.r(), 0.0, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(stats_dict["r"], 0.0, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(dist.var(), 1.0, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(stats_dict["var"], 1.0, atol=1e-12, rtol=0.0)
+    assert np.isinf(dist.std())
+    assert np.isinf(stats_dict["std"])
+    assert np.isinf(stats_dict["dispersion"])
+    np.testing.assert_allclose(stats_dict["skewness"], 0.0, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(stats_dict["kurtosis"], 0.0, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(dist.median(), np.pi, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(stats_dict["median"], np.pi, atol=1e-12, rtol=0.0)
+
+
+def test_vonmises_descriptive_stats_consistency():
+    mu_true, kappa_true = 1.2, 3.4
+    frozen = vonmises(mu=mu_true, kappa=kappa_true)
+    generator_stats = vonmises.stats(mu=mu_true, kappa=kappa_true)
+    expected_r = special.i1(kappa_true) / special.i0(kappa_true)
+    expected_m2 = special.iv(2, kappa_true) / special.i0(kappa_true) * np.exp(2j * mu_true)
+
+    np.testing.assert_allclose(frozen.r(), expected_r, atol=5e-12, rtol=0.0)
+    np.testing.assert_allclose(frozen.mean(), mu_true, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(frozen.var(), 1.0 - expected_r, atol=1e-12, rtol=0.0)
+    frozen_stats = frozen.stats()
+    for key, value in generator_stats.items():
+        frozen_value = frozen_stats[key]
+        if np.isnan(value):
+            assert np.isnan(frozen_value)
+        else:
+            np.testing.assert_allclose(frozen_value, value, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(frozen.trig_moment(2), expected_m2, atol=5e-12, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "rho_true, seed",
+    [
+        (0.0, 101),
+        (0.15, 102),
+        (4.0 / np.pi**2 - 1e-4, 103),
+    ],
+)
+def test_triangular_fit_recovers_rho(rho_true, seed):
+    rng = np.random.default_rng(seed)
+    data = triangular.rvs(rho=rho_true, size=2000, random_state=rng)
+
+    rho_mle, info = triangular.fit(data, method="mle", return_info=True)
+    assert info["converged"]
+    np.testing.assert_allclose(rho_mle, rho_true, atol=7e-3, rtol=0.0)
+
+    rho_mom = triangular.fit(data, method="moments")
+    np.testing.assert_allclose(rho_mom, rho_true, atol=7e-3, rtol=0.0)
+
+
+def test_wrapcauchy_fit_weights_matches_replication():
+    rng = np.random.default_rng(321)
+    mu_true, rho_true = 0.9, 0.6
+    base = wrapcauchy.rvs(mu=mu_true, rho=rho_true, size=180, random_state=rng)
+    weights = np.full(base.shape, 5.0)
+    replicated = np.repeat(base, 5)
+
+    params_weighted = wrapcauchy.fit(base, method="mle", weights=weights)
+    params_replicated = wrapcauchy.fit(replicated, method="mle")
+
+    mu_weighted, rho_weighted = params_weighted
+    mu_replicated, rho_replicated = params_replicated
+
+    mu_diff = np.mod(mu_weighted - mu_replicated + np.pi, 2.0 * np.pi) - np.pi
+    np.testing.assert_allclose(mu_diff, 0.0, atol=5e-4, rtol=0.0)
+    np.testing.assert_allclose(rho_weighted, rho_replicated, atol=5e-4, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "dist, params",
+    [
+        (
+            cardioid,
+            {"mu": 0.7, "rho": 0.3},
+        ),
+        (
+            cartwright,
+            {"mu": 0.25 * np.pi, "zeta": 1.2},
+        ),
+        (
+            wrapnorm,
+            {"mu": 1.1, "rho": 0.5},
+        ),
+        (
+            jonespewsey,
+            {"mu": 0.6, "kappa": 1.3, "psi": -0.7},
+        ),
+        (
+            inverse_batschelet,
+            {"xi": 0.9, "kappa": 2.2, "nu": -0.35, "lmbd": 0.4},
+        ),
+    ],
+)
+def test_pdf_integrates_to_one(dist, params):
+    theta = np.linspace(0.0, 2.0 * np.pi, 4097)
+    pdf_vals = dist.pdf(theta, **params)
+    area = np.trapezoid(pdf_vals, theta)
+    np.testing.assert_allclose(area, 1.0, atol=5e-6, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "dist, params",
+    [
+        (vonmises, {"mu": 0.6, "kappa": 4.0}),
+        (wrapcauchy, {"mu": 1.1, "rho": 0.7}),
+        (cartwright, {"mu": 0.3, "zeta": 1.5}),
+    ],
+)
+def test_logpdf_matches_log_of_pdf(dist, params):
+    theta = np.linspace(0.0, 2.0 * np.pi, 129, endpoint=False) + 1e-6
+    pdf_vals = dist.pdf(theta, **params)
+    logpdf_vals = dist.logpdf(theta, **params)
+
+    assert np.all(np.isfinite(logpdf_vals))
+    mask = pdf_vals > 0.0
+    np.testing.assert_allclose(logpdf_vals[mask], np.log(pdf_vals[mask]), atol=5e-10, rtol=0.0)
+
+
+def test_vonmises_random_state_reproducibility():
+    params = {"mu": 1.05, "kappa": 2.5}
+
+    seq_a = vonmises.rvs(size=6, random_state=1234, **params)
+    seq_b = vonmises.rvs(size=6, random_state=1234, **params)
+    np.testing.assert_allclose(seq_a, seq_b)
+
+    seq_c = vonmises.rvs(size=6, random_state=np.random.default_rng(5678), **params)
+    seq_d = vonmises.rvs(size=6, random_state=np.random.default_rng(5678), **params)
+    np.testing.assert_allclose(seq_c, seq_d)
+
+    seq_e = vonmises.rvs(size=6, random_state=np.random.RandomState(5678), **params)
+    seq_f = vonmises.rvs(size=6, random_state=np.random.RandomState(5678), **params)
+    np.testing.assert_allclose(seq_e, seq_f)
+
+
+@pytest.mark.parametrize(
+    "dist, params",
+    [
+        (wrapnorm, {"mu": 0.8, "rho": 0.4}),
+        (cardioid, {"mu": 1.2, "rho": 0.25}),
+        (triangular, {"rho": 0.2}),
+    ],
+)
+def test_rvs_output_shapes(dist, params):
+    scalar = dist.rvs(random_state=42, **params)
+    assert np.isscalar(scalar)
+
+    array = dist.rvs(size=(3, 2), random_state=42, **params)
+    assert array.shape == (3, 2)
+
+    empty = dist.rvs(size=0, random_state=42, **params)
+    assert empty.shape == (0,)
 def test_triangular_ppf_vectorized():
     q = np.linspace(0.1, 0.9, num=5)
     out_zero = triangular.ppf(q, rho=0.0)
