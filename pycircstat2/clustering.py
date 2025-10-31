@@ -10,6 +10,14 @@ from .descriptive import circ_dist, circ_kappa, circ_mean_and_r
 from .distributions import CircularContinuous, vonmises
 from .utils import data2rad
 
+ALLOWED_MOCD_DISTRIBUTIONS = {
+    "cardioid",
+    "cartwright",
+    "wrapnorm",
+    "wrapcauchy",
+    "vonmises",
+}
+
 
 class MovM:
     """
@@ -432,7 +440,7 @@ class MoCD:
     """
     Mixture of Circular Distributions (MoCD).
 
-    This class generalises :class:`MovM` to any circular distribution that exposes
+    This class generalises `MovM` to any circular distribution that exposes
     ``logpdf`` and ``fit`` methods accepting weighted observations.  All mixture
     components share the same distribution family (e.g. von Mises, wrapped Cauchy,
     wrapped normal, inverse Batschelet).  Users choose the underlying family and
@@ -447,10 +455,13 @@ class MoCD:
       parameters and optimisation routines per component.  That design is left
       for future work.
     * The supplied distribution must expose ``logpdf`` and a ``fit`` method with
-      a ``weights`` keyword argument.  Most distributions in :mod:`pycircstat2`
+      a ``weights`` keyword argument.  Most distributions in `pycircstat2`
       follow that convention.
     * Parameter order is inferred from ``distribution.shapes`` where available;
       otherwise ``param_names`` must be provided.
+    * The current implementation restricts distributions to cardioid, Cartwright,
+      wrapped normal (``wrapnorm``), wrapped Cauchy (``wrapcauchy``), or von Mises
+      while other families are under investigation.
     """
 
     def __init__(
@@ -482,6 +493,17 @@ class MoCD:
             raise ValueError("`unit` must be either 'degree' or 'radian'.")
 
         self.distribution = distribution
+        distribution_name = getattr(self.distribution, "name", None)
+        if not distribution_name:
+            distribution_name = self.distribution.__class__.__name__
+        distribution_name_key = distribution_name.lower()
+        if distribution_name_key not in ALLOWED_MOCD_DISTRIBUTIONS:
+            allowed = ", ".join(sorted(ALLOWED_MOCD_DISTRIBUTIONS))
+            raise ValueError(
+                f"`distribution` '{distribution_name}' is not currently supported by MoCD. "
+                f"Allowed options: {allowed}."
+            )
+
         self.n_clusters = int(n_clusters)
         self.n_iters = int(n_iters)
         self.burnin = int(burnin)
@@ -518,7 +540,7 @@ class MoCD:
         else:
             self._method_candidates = self._normalise_fit_method(fit_method)
 
-        distribution_name = getattr(self.distribution, "name", None)
+        distribution_name = distribution_name_key
         if (
             (fit_method is None or (isinstance(fit_method, str) and fit_method.lower() == "auto"))
             and distribution_name in {"vonmises_flattopped", "inverse_batschelet"}
