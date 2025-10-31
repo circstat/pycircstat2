@@ -458,7 +458,7 @@ class MoCD:
         distribution: CircularContinuous = vonmises,
         *,
         param_names: Optional[List[str]] = None,
-        fit_method: Optional[str] = "mle",
+        fit_method: Optional[Union[str, List[str], Tuple[str, ...]]] = "auto",
         fit_kwargs: Optional[Dict[str, object]] = None,
         n_clusters: int = 3,
         n_iters: int = 100,
@@ -488,7 +488,6 @@ class MoCD:
         self.threshold = float(threshold)
         self.unit = unit
         self.full_cycle = full_cycle
-        self.fit_method = fit_method
         self.fit_kwargs = {} if fit_kwargs is None else dict(fit_kwargs)
         self._rng = np.random.default_rng(random_seed)
 
@@ -513,6 +512,18 @@ class MoCD:
             )
 
         self.param_names = inferred_names
+        if "method" in self.fit_kwargs:
+            method_value = self.fit_kwargs.pop("method")
+            self._method_candidates = [str(method_value).lower()]
+        else:
+            self._method_candidates = self._normalise_fit_method(fit_method)
+
+        distribution_name = getattr(self.distribution, "name", None)
+        if (
+            (fit_method is None or (isinstance(fit_method, str) and fit_method.lower() == "auto"))
+            and distribution_name in {"vonmises_flattopped", "inverse_batschelet"}
+        ):
+            self._method_candidates = ["mle"]
 
         # Model attributes populated after fitting
         self.converged: bool = False
@@ -526,6 +537,22 @@ class MoCD:
         self.alpha: Optional[np.ndarray] = None
         self.data: Optional[np.ndarray] = None
         self.n: Optional[int] = None
+
+    def _normalise_fit_method(
+        self, fit_method: Optional[Union[str, List[str], Tuple[str, ...]]]
+    ) -> List[Optional[str]]:
+        if fit_method is None:
+            return [None]
+
+        if isinstance(fit_method, (list, tuple)):
+            if not fit_method:
+                return [None]
+            return [None if m is None else str(m).lower() for m in fit_method]
+
+        method_str = str(fit_method).lower()
+        if method_str == "auto":
+            return ["moments", "mle"]
+        return [method_str]
 
     # ------------------------------------------------------------------ #
     # Helper utilities
@@ -550,24 +577,44 @@ class MoCD:
         weights: np.ndarray,
         current_params: Optional[Dict[str, float]] = None,
     ) -> Dict[str, float]:
+        weights = np.asarray(weights, dtype=float)
         total_weight = float(np.sum(weights))
-        if total_weight <= 0.0:
+        if not np.isfinite(total_weight) or total_weight <= 1e-12:
             if current_params is not None:
                 return current_params
-            raise RuntimeError("Encountered a component with zero effective weight during initialisation.")
+            weights = np.ones_like(weights, dtype=float)
+            total_weight = float(np.sum(weights))
 
-        fit_options = dict(self.fit_kwargs)
-        if self.fit_method is not None:
-            fit_options.setdefault("method", self.fit_method)
-        fit_options["weights"] = weights
+        last_error: Optional[Exception] = None
+        for method in self._method_candidates:
+            fit_options = dict(self.fit_kwargs)
+            if method is not None:
+                fit_options.setdefault("method", method)
+            fit_options["weights"] = weights
 
-        try:
-            params_est, _info = self.distribution.fit(alpha, return_info=True, **fit_options)
-        except TypeError:
-            fit_options.pop("return_info", None)
-            params_est = self.distribution.fit(alpha, **fit_options)
+            try:
+                params_est, _info = self.distribution.fit(alpha, return_info=True, **fit_options)
+            except TypeError:
+                fit_options.pop("return_info", None)
+                try:
+                    params_est = self.distribution.fit(alpha, **fit_options)
+                except Exception as exc:  # pragma: no cover
+                    last_error = exc
+                    continue
+            except Exception as exc:
+                last_error = exc
+                continue
 
-        return self._array_to_params(params_est)
+            try:
+                return self._array_to_params(params_est)
+            except Exception as exc:  # pragma: no cover - defensive
+                last_error = exc
+                continue
+
+        raise RuntimeError(
+            "Failed to fit mixture component; attempted methods "
+            f"{self._method_candidates} with last error: {last_error}"
+        )
 
     def _initialize(self, alpha: np.ndarray) -> Tuple[List[Dict[str, float]], np.ndarray]:
         n = alpha.size

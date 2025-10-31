@@ -7871,7 +7871,20 @@ class wrapstable_gen(CircularContinuous):
             log_term = -np.log(tol)
             if log_term <= 0.0:
                 return 1
-            return int(np.ceil((log_term ** (1.0 / alpha)) / gamma))
+            if not np.isfinite(alpha) or alpha <= 0.0:
+                return 1
+
+            exponent = (np.log(log_term) / alpha) - np.log(gamma)
+            if not np.isfinite(exponent):
+                return _WRAPSTABLE_MAX_TERMS
+            if exponent > np.log(_WRAPSTABLE_MAX_TERMS):
+                return _WRAPSTABLE_MAX_TERMS
+
+            value = np.exp(exponent)
+            if not np.isfinite(value):
+                return _WRAPSTABLE_MAX_TERMS
+            value = max(1.0, value)
+            return int(min(_WRAPSTABLE_MAX_TERMS, np.ceil(value)))
 
         p_pdf = _initial_order(_WRAPSTABLE_PDF_TOL)
         p_cdf = _initial_order(_WRAPSTABLE_CDF_TOL)
@@ -7882,8 +7895,8 @@ class wrapstable_gen(CircularContinuous):
             if rho_P <= _WRAPSTABLE_PDF_TOL and rho_P / P <= _WRAPSTABLE_CDF_TOL:
                 break
             P += 1
-        else:  # pragma: no cover - defensive guard
-            raise RuntimeError("wrapstable series truncation exceeded maximum terms.")
+            if P >= _WRAPSTABLE_MAX_TERMS:
+                break
 
         p = np.arange(1, P + 1, dtype=float)
         rho_vals = np.exp(-((gamma * p) ** alpha))
@@ -8297,17 +8310,37 @@ class katojones_gen(CircularContinuous):
             return np.conjugate(value)
         return complex(value)
 
-    def _fit_moments(self, data):
-        data = self._wrap_angles(np.asarray(data, dtype=float))
-        if data.size == 0:
+    def _prepare_data_weights(self, data, weights=None):
+        data_arr = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if data_arr.size == 0:
             raise ValueError("`data` must contain at least one observation.")
 
-        mu_hat, r1 = circ_mean_and_r(alpha=data)
-        centered = angmod(data - mu_hat)
+        if weights is None:
+            w = np.ones_like(data_arr, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            try:
+                w = np.broadcast_to(w, data_arr.shape).astype(float, copy=False).ravel()
+            except ValueError as exc:
+                raise ValueError("`weights` must be broadcastable to the data shape.") from exc
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0.0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = float(w_sum**2 / np.sum(w**2))
+        return data_arr, w, w_sum, n_eff
+
+    def _fit_moments(self, data, *, weights=None, return_info=False):
+        data_arr, w, w_sum, n_eff = self._prepare_data_weights(data, weights=weights)
+
+        mu_hat, r1 = circ_mean_and_r(alpha=data_arr, w=w)
+        centered = angmod(data_arr - mu_hat)
         cos2 = np.cos(2.0 * centered)
         sin2 = np.sin(2.0 * centered)
-        alpha2 = float(np.mean(cos2))
-        beta2 = float(np.mean(sin2))
+        alpha2 = float(np.sum(w * cos2) / w_sum)
+        beta2 = float(np.sum(w * sin2) / w_sum)
         mu_hat = self._wrap_direction(float(mu_hat))
         gamma_hat = float(np.clip(r1, 0.0, 1.0 - 1e-9))
 
@@ -8323,7 +8356,15 @@ class katojones_gen(CircularContinuous):
             if rho_hat < self._moment_tolerance:
                 lam_hat = 0.0
 
-        return mu_hat, gamma_hat, rho_hat, lam_hat
+        estimates = (mu_hat, gamma_hat, rho_hat, lam_hat)
+        if return_info:
+            info = {
+                "method": "moments",
+                "converged": True,
+                "n_effective": n_eff,
+            }
+            return estimates, info
+        return estimates
 
     @staticmethod
     def _project_second_order(gamma, alpha2, beta2):
@@ -8556,17 +8597,18 @@ class katojones_gen(CircularContinuous):
     def _fit_mle(
         self,
         data,
+        *,
+        weights=None,
         initial,
         optimizer,
         options,
+        return_info=False,
         **minimize_kwargs,
     ):
-        data = self._wrap_angles(np.asarray(data, dtype=float))
-        if data.size == 0:
-            raise ValueError("`data` must contain at least one observation.")
+        data_arr, w, w_sum, n_eff = self._prepare_data_weights(data, weights=weights)
 
         if initial is None:
-            initial = self._fit_moments(data)
+            initial = self._fit_moments(data_arr, weights=w)
 
         mu0, gamma0, rho0, lam0 = initial
         mu0 = self._wrap_direction(float(mu0))
@@ -8588,10 +8630,10 @@ class katojones_gen(CircularContinuous):
             rho, lam = self._rho_lam_from_aux(gamma, s, phi)
             if not self._argcheck(mu, gamma, rho, lam):
                 return 1e12
-            pdf_vals = self._pdf(data, mu, gamma, rho, lam)
+            pdf_vals = self._pdf(data_arr, mu, gamma, rho, lam)
             if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
                 return 1e12
-            return -np.sum(np.log(pdf_vals))
+            return -np.sum(w * np.log(pdf_vals))
 
         bounds = [
             (0.0, 2.0 * np.pi),
@@ -8632,16 +8674,31 @@ class katojones_gen(CircularContinuous):
         phi_hat = float(np.mod(phi_hat, 2.0 * np.pi))
         rho_hat, lam_hat = self._rho_lam_from_aux(gamma_hat, s_hat, phi_hat)
 
-        return mu_hat, gamma_hat, rho_hat, lam_hat
+        estimates = (mu_hat, gamma_hat, rho_hat, lam_hat)
+        if return_info:
+            final_nll = objective(result.x)
+            info = {
+                "method": "mle",
+                "converged": bool(result.success),
+                "loglik": float(-final_nll),
+                "n_effective": n_eff,
+                "nit": getattr(result, "nit", None),
+                "optimizer": optimizer,
+                "initial": initial,
+            }
+            return estimates, info
+        return estimates
 
     def fit(
         self,
         data,
         method="moments",
         *,
+        weights=None,
         initial=None,
         optimizer="L-BFGS-B",
         options=None,
+        return_info=False,
         **kwargs,
     ):
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
@@ -8651,19 +8708,27 @@ class katojones_gen(CircularContinuous):
         if method == "moments":
             if kwargs:
                 raise TypeError("Unexpected optimizer arguments for method='moments'.")
-            return self._fit_moments(data)
+            estimates, info = self._fit_moments(
+                data,
+                weights=weights,
+                return_info=True,
+            )
+            return (estimates, info) if return_info else estimates
 
         if method != "mle":
             raise ValueError("method must be either 'moments' or 'mle'.")
 
         options = {} if options is None else dict(options)
-        return self._fit_mle(
+        estimates, info = self._fit_mle(
             data,
+            weights=weights,
             initial=initial,
             optimizer=optimizer,
             options=options,
+            return_info=True,
             **kwargs,
         )
+        return (estimates, info) if return_info else estimates
 
 
 katojones = katojones_gen(name="katojones")
