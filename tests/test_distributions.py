@@ -839,6 +839,21 @@ def test_inverse_batschelet():
     )
 
 
+def test_inverse_batschelet_pdf_uniform_limit():
+    theta = np.linspace(0.0, 2.0 * np.pi, 9)
+    vals = inverse_batschelet.pdf(theta, xi=0.7, kappa=0.0, nu=0.3, lmbd=-0.6)
+    expected = np.full_like(theta, 1.0 / (2.0 * np.pi))
+    np.testing.assert_allclose(vals, expected, atol=5e-13, rtol=0.0)
+
+
+def test_inverse_batschelet_pdf_scalar_consistency():
+    params = dict(xi=0.5, kappa=1.8, nu=-0.2, lmbd=0.4)
+    angles = np.linspace(0.0, 2.0 * np.pi, 7)
+    array_vals = inverse_batschelet.pdf(angles, **params)
+    scalar_vals = np.array([inverse_batschelet.pdf(float(a), **params) for a in angles])
+    np.testing.assert_allclose(array_vals, scalar_vals, atol=5e-12, rtol=0.0)
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 

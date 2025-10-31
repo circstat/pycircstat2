@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.integrate import quad, quad_vec
 from scipy.interpolate import PchipInterpolator
-from scipy.optimize import minimize, minimize_scalar, root, brentq
+from scipy.optimize import minimize, minimize_scalar, brentq, root_scalar
 from scipy.special import beta as beta_fn
 from scipy.special import (
     gamma,
@@ -57,6 +57,12 @@ _VMFT_ACCEPT_EPS = 1e-12
 _VMFT_NEWTON_MAXITER = 50
 _VMFT_NEWTON_TOL = 1e-12
 _VMFT_NEWTON_WIDTH_TOL = 1e-10
+
+_INVBAT_KAPPA_TOL = 1e-9
+_INVBAT_KAPPA_UPPER = 700.0
+_INVBAT_NUMERIC_GRID = 4096
+_INVBAT_NU_TOL = 1e-12
+_INVBAT_LMBDA_TOL = 1e-12
 
 OPTIMIZERS = [
     "Nelder-Mead",
@@ -6352,10 +6358,10 @@ class inverse_batschelet_gen(CircularContinuous):
 
     Methods
     -------
-    pdf(x, xi, kappa, psi, nu, lmbd)
+    pdf(x, xi, kappa, nu, lmbd)
         Probability density function.
 
-    cdf(x, xi, kappa, psi, nu, lmbd)
+    cdf(x, xi, kappa, nu, lmbd)
         Cumulative distribution function.
 
 
@@ -6373,76 +6379,91 @@ class inverse_batschelet_gen(CircularContinuous):
         )
 
     def _argcheck(self, xi, kappa, nu, lmbd):
-        if not self._validate_params(xi, kappa, nu, lmbd):
-            return False
-        if np.isclose(lmbd, -1).all():
-            self.con1, self.con2 = 0, 0
-        else:
-            self.con1 = (1 - lmbd) / (1 + lmbd)
-            self.con2 = (2 * lmbd) / (1 + lmbd)
-        return True
+        return bool(self._validate_params(xi, kappa, nu, lmbd))
 
     def _pdf(self, x, xi, kappa, nu, lmbd):
-        norm = self._get_cached_normalizer(
-            lambda: _c_invbatschelet(kappa, lmbd), kappa, lmbd
-        )
-        self._c = norm
-        arg1 = _tnu(x, nu, xi)
-        arg2 = _slmbdinv(arg1, lmbd)
+        scalar_input = np.isscalar(x)
+        x_arr = np.asarray([x], dtype=float) if scalar_input else np.asarray(x, dtype=float)
+        if x_arr.size == 0:
+            return x_arr.astype(float)
 
-        if np.isclose(lmbd, -1).all():
-            return norm * np.exp(kappa * np.cos(arg1 - np.sin(arg1)))
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+
+        if not (
+            np.isfinite(xi_val)
+            and np.isfinite(kappa_val)
+            and np.isfinite(nu_val)
+            and np.isfinite(lmbd_val)
+        ):
+            result = np.full_like(x_arr, np.nan, dtype=float)
+            return float(result[0]) if scalar_input else result
+
+        if kappa_val <= _INVBAT_KAPPA_TOL:
+            self._c = 1.0 / (2.0 * np.pi)
+            result = np.full_like(x_arr, self._c, dtype=float)
+            return float(result[0]) if scalar_input else result
+
+        normalizer = self._get_cached_normalizer(
+            lambda: _c_invbatschelet(kappa_val, lmbd_val),
+            kappa_val,
+            lmbd_val,
+        )
+        if not np.isfinite(normalizer) or normalizer <= 0.0:
+            normalizer = _c_invbatschelet_numeric(kappa_val, lmbd_val, grid_size=_INVBAT_NUMERIC_GRID)
+        self._c = normalizer
+
+        phi = _tnu(x_arr, nu_val, xi_val)
+        skew = _slmbdinv(phi, lmbd_val)
+
+        if np.isclose(lmbd_val, -1.0):
+            log_kernel = kappa_val * np.cos(phi - np.sin(phi))
         else:
-            return norm * np.exp(kappa * np.cos(self.con1 * arg1 + self.con2 * arg2))
+            con1 = (1.0 - lmbd_val) / (1.0 + lmbd_val)
+            con2 = (2.0 * lmbd_val) / (1.0 + lmbd_val)
+            log_kernel = kappa_val * np.cos(con1 * phi + con2 * skew)
+
+        pdf_vals = normalizer * np.exp(log_kernel)
+        pdf_vals = np.clip(pdf_vals, 0.0, None).astype(float, copy=False)
+
+        if scalar_input:
+            return float(pdf_vals.reshape(-1)[0])
+        return pdf_vals
 
     def pdf(self, x, xi, kappa, nu, lmbd, *args, **kwargs):
         r"""
         Probability density function (PDF) of the inverse Batschelet distribution.
 
-        The PDF is defined as:
+        Let
+
+        - $\varphi = ((\theta - \xi + \pi) \bmod 2\pi) - \pi$,
+        - $t_\nu^{-1}(\varphi)$ solve $y - \nu (1 + \cos y) = \varphi$,
+        - $s_\lambda^{-1}(\cdot)$ solve $u - \tfrac{1 + \lambda}{2} \sin u = \cdot$,
+
+        and set
+        $\phi^\star = t_\nu^{-1}(\varphi)$,
+        $u^\star = s_\lambda^{-1}(\phi^\star)$,
+        $a = \tfrac{1 - \lambda}{1 + \lambda}$,
+        $b = \tfrac{2 \lambda}{1 + \lambda}$.
+        The inverse Batschelet density is
 
         $$
-        f(\theta) = c \exp\left(\kappa \cos\left(a \cdot g(\theta, \nu, \xi) + b \cdot s\left(g(\theta, \nu, \xi), \lambda\right)\right)\right)
+        f(\theta) = c(\kappa, \lambda)
+        \exp\bigl[\kappa \cos\bigl(a\,\phi^\star + b\,u^\star\bigr)\bigr],
         $$
 
-        where:
-
-        - $a$: Weight for the angular transformation, defined as:
-
-        $$
-        a = \frac{1 - \lambda}{1 + \lambda}
-        $$
-
-        - $b$: Weight for the skewness transformation, defined as:
-
-        $$
-        b = \frac{2 \lambda}{1 + \lambda}
-        $$
-
-        - $g(\theta, \nu, \xi)$: Angular transformation function, which incorporates $\nu$ and the location parameter $\xi$:
-
-        $$
-        g(\theta, \nu, \xi) = \theta - \xi - \nu \cdot (1 + \cos(\theta - \xi))
-        $$
-
-        - $s(z, \lambda)$: Skewness transformation function, defined as the root of the equation:
-
-        $$
-        s(z, \lambda) - 0.5 \cdot (1 + \lambda) \cdot \sin(s(z, \lambda)) = z
-        $$
-
-        - $c$: Normalization constant ensuring the PDF integrates to 1, computed as:
-
-        $$
-        c = \frac{1}{2\pi \cdot I_0(\kappa) \cdot \left(a - b \cdot \int_{-\pi}^{\pi} \exp(\kappa \cdot \cos(z - (1 - \lambda) \cdot \sin(z) / 2)) dz\right)}
-        $$
+        where $c(\kappa,\lambda)$ is the normalising constant (independent of
+        $\xi$ and $\nu$). For $\kappa \rightarrow 0$ the distribution reduces to
+        the circular uniform density $1/(2\pi)$.
 
         Parameters
         ----------
         x : array_like
             Points at which to evaluate the PDF, defined on the interval $[0, 2\pi)$.
         xi : float
-            Direction parameter, $0 \leq \xi \leq 2\pi$. This typically represents the mode.
+            Direction parameter, $0 \leq \xi \leq 2\pi$.
         kappa : float
             Concentration parameter, $\kappa \geq 0$. Higher values result in sharper peaks around $\xi$.
         nu : float
@@ -6470,34 +6491,62 @@ inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
 
 
 def _tnu(x, nu, xi):
-    phi = x - xi
+    x_arr = np.asarray(x, dtype=float)
+    scalar_input = x_arr.ndim == 0
+    phi = np.mod(x_arr - xi + np.pi, 2.0 * np.pi) - np.pi
+    phi_flat = np.atleast_1d(phi).astype(float, copy=False)
+    results = np.empty_like(phi_flat)
 
-    def _tnuinv(z, nu):
-        return z - nu * (1 + np.cos(z)) - phi
-
-    y = root(_tnuinv, x0=np.zeros_like(x), args=(nu)).x
-    y[y > np.pi] -= 2 * np.pi
-
-    if np.isscalar(x):  # Ensure scalar output for scalar input
-        return y.item()  # Extract the scalar value
+    if abs(nu) <= _INVBAT_NU_TOL:
+        results[:] = phi_flat
     else:
-        return y
+        for idx, phi_val in enumerate(phi_flat):
+            def _equation(y):
+                return y - nu * (1.0 + np.cos(y)) - phi_val
+
+            solution = root_scalar(
+                _equation,
+                bracket=(-np.pi, np.pi),
+                method="brentq",
+            )
+            if solution.converged:
+                y_val = solution.root
+            else:  # pragma: no cover - defensive fallback
+                y_val = phi_val
+            results[idx] = (y_val + np.pi) % (2.0 * np.pi) - np.pi
+
+    if scalar_input:
+        return float(results[0])
+    return results.reshape(phi.shape)
 
 
 def _slmbdinv(x, lmbd):
-    if np.isclose(lmbd, -1).all():
-        return x
+    x_arr = np.asarray(x, dtype=float)
+    scalar_input = x_arr.ndim == 0
+    x_flat = np.atleast_1d(x_arr).astype(float, copy=False)
+
+    if np.isclose(lmbd, -1.0, atol=_INVBAT_LMBDA_TOL):
+        result = x_flat.copy()
     else:
+        result = np.empty_like(x_flat)
+        for idx, val in enumerate(x_flat):
+            def _equation(u):
+                return u - 0.5 * (1.0 + lmbd) * np.sin(u) - val
 
-        def _slmbd(z, lmbd):
-            return z - 0.5 * (1 + lmbd) * np.sin(z) - x
+            solution = root_scalar(
+                _equation,
+                bracket=(-np.pi, np.pi),
+                method="brentq",
+            )
+            if solution.converged:
+                u_val = solution.root
+            else:  # pragma: no cover - defensive fallback
+                u_val = val
+            result[idx] = (u_val + np.pi) % (2.0 * np.pi) - np.pi
 
-        y = root(_slmbd, x0=np.zeros_like(x), args=(lmbd)).x
-
-        if np.isscalar(x):  # Ensure scalar output for scalar input
-            return y.item()  # Extract the scalar value
-        else:
-            return y
+    if scalar_input:
+        return float(result[0])
+    return result.reshape(x_arr.shape)
 
 
 def _A1(kappa):
@@ -6505,21 +6554,76 @@ def _A1(kappa):
 
 
 def _c_invbatschelet(kappa, lmbd):
-    mult = 2 * np.pi * i0(kappa)
-    if np.isclose(lmbd, 1).all():
-        K = 1 - _A1(kappa)
-        c = 1 / (mult * K)
+    kappa_val = float(np.clip(kappa, 0.0, _INVBAT_KAPPA_UPPER))
+    lmbd_val = float(lmbd)
+
+    if kappa_val <= _INVBAT_KAPPA_TOL:
+        return 1.0 / (2.0 * np.pi)
+
+    if np.isclose(lmbd_val, 1.0, atol=_INVBAT_LMBDA_TOL):
+        log_mult = np.log(2.0 * np.pi) + np.log(i0e(kappa_val)) + kappa_val
+        K = 1.0 - _A1(kappa_val)
+        if not np.isfinite(K) or K <= 0.0:
+            return _c_invbatschelet_numeric(kappa_val, lmbd_val, grid_size=_INVBAT_NUMERIC_GRID * 2)
+        log_c = -log_mult - np.log(K)
+        return float(np.exp(log_c))
+
+    c_val = _c_invbatschelet_numeric(kappa_val, lmbd_val, grid_size=_INVBAT_NUMERIC_GRID)
+    if not np.isfinite(c_val) or c_val <= 0.0:
+        c_val = _c_invbatschelet_numeric(kappa_val, lmbd_val, grid_size=_INVBAT_NUMERIC_GRID * 2)
+    return c_val
+
+
+def _log_invbatschelet_kernel_integral(kappa, lmbd, grid_size):
+    phi = np.linspace(-np.pi, np.pi, grid_size + 1, dtype=float)
+    log_kernel = kappa * np.cos(phi - 0.5 * (1.0 - lmbd) * np.sin(phi))
+    max_log = np.max(log_kernel)
+    weights = np.ones_like(phi)
+    weights[0] = weights[-1] = 0.5
+    log_sum = logsumexp(log_kernel - max_log, b=weights)
+    return np.log(2.0 * np.pi / grid_size) + max_log + log_sum
+
+
+def _c_invbatschelet_numeric(kappa, lmbd, *, grid_size):
+    log_mult = np.log(2.0 * np.pi) + np.log(i0e(kappa)) + kappa
+    log_int = _log_invbatschelet_kernel_integral(kappa, lmbd, grid_size)
+
+    if np.isclose(lmbd, -1.0, atol=_INVBAT_LMBDA_TOL):
+        return float(np.exp(-log_int))
+
+    log_term1 = np.log1p(lmbd) + log_mult
+    if abs(lmbd) <= _INVBAT_LMBDA_TOL:
+        log_term2 = -np.inf
     else:
-        con1 = (1 + lmbd) / (1 - lmbd)
-        con2 = (2 * lmbd) / ((1 - lmbd) * mult)
+        log_term2 = np.log(2.0 * abs(lmbd)) + log_int
 
-        def kernel(x):
-            return np.exp(kappa * np.cos(x - (1 - lmbd) * np.sin(x) / 2))
+    max_log = max(log_term1, log_term2)
+    term1 = np.exp(log_term1 - max_log)
+    term2 = np.exp(log_term2 - max_log) if log_term2 > -np.inf else 0.0
 
-        intval = quad_vec(kernel, a=-np.pi, b=np.pi)[0]
+    if lmbd >= 0.0:
+        denom_scaled = term1 - term2
+    else:
+        denom_scaled = term1 + term2
 
-        c = 1 / (mult * (con1 - con2 * intval))
-    return c
+    if denom_scaled <= 0.0 or not np.isfinite(denom_scaled):
+        return float("nan")
+
+    log_denom = max_log + np.log(denom_scaled)
+    log_num = np.log1p(-lmbd)
+    return float(np.exp(log_num - log_denom))
+
+
+def _invbat_ensure_scalar(value, name):
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        return float(arr)
+    if arr.size == 1:
+        return float(arr.reshape(()))
+    unique = np.unique(arr)
+    if unique.size == 1:
+        return float(unique[0])
+    raise ValueError(f"Inverse Batschelet parameter '{name}' must be a scalar.")
 
 
 class wrapstable_gen(CircularContinuous):
