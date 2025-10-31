@@ -7373,6 +7373,23 @@ class wrapstable_gen(CircularContinuous):
     Special cases include the wrapped normal (``α=2, β=0``), wrapped Cauchy
     (``α=1, β=0``), and wrapped Lévy (``α=1/2, β=1``).
 
+    Methods
+    -------
+    pdf(x, delta, alpha, beta, gamma)
+        Probability density function via adaptive Fourier series.
+
+    cdf(x, delta, alpha, beta, gamma)
+        Analytic cumulative distribution function using integrated series.
+
+    ppf(q, delta, alpha, beta, gamma)
+        Quantile function obtained by safeguarded Newton refinement.
+
+    rvs(delta, alpha, beta, gamma, size=None, random_state=None)
+        Random variates by Chambers–Mallows–Stuck sampling and wrapping.
+
+    fit(data, *, method='mle' | 'moments', ...)
+        Estimate parameters via moment starts with optional MLE refinement.
+
     References
     ----------
     - Pewsey (2008). *Computational Statistics & Data Analysis* 52(3), 1516-1523.
