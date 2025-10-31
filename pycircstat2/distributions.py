@@ -68,6 +68,7 @@ _INVBAT_MAX_GRID = 8192
 _INVBAT_NEWTON_MAXITER = 60
 _INVBAT_NEWTON_TOL = 1e-12
 _INVBAT_NEWTON_WIDTH_TOL = 1e-10
+_INVBAT_ENV_MIN_KAPPA = 1e-6
 
 OPTIMIZERS = [
     "Nelder-Mead",
@@ -6378,10 +6379,12 @@ class inverse_batschelet_gen(CircularContinuous):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._invbat_table_cache = {}
+        self._invbat_sampler_cache = {}
 
     def _clear_normalization_cache(self):
         super()._clear_normalization_cache()
         self._invbat_table_cache = {}
+        self._invbat_sampler_cache = {}
 
     def _validate_params(self, xi, kappa, nu, lmbd):
         return (
@@ -6699,6 +6702,162 @@ class inverse_batschelet_gen(CircularContinuous):
         nu_val = _invbat_ensure_scalar(nu, "nu")
         lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
         return super().ppf(q, xi_val, kappa_val, nu_val, lmbd_val, *args, **kwargs)
+
+    def _get_invbat_sampler_params(self, kappa, nu, lmbd):
+        key = (float(kappa), float(nu), float(lmbd))
+        params = self._invbat_sampler_cache.get(key)
+        if params is not None:
+            return params
+
+        table = self._get_invbat_table(kappa, nu, lmbd)
+        phi = table["phi"]
+        pdf = table["pdf"]
+        log_pdf = np.log(np.clip(pdf, np.finfo(float).tiny, None))
+
+        idx0 = int(np.argmin(np.abs(phi)))
+        if idx0 == 0:
+            idx0 = 1
+        elif idx0 == phi.size - 1:
+            idx0 = phi.size - 2
+
+        h1 = phi[idx0] - phi[idx0 - 1]
+        h2 = phi[idx0 + 1] - phi[idx0]
+        if not np.isfinite(h1) or not np.isfinite(h2) or h1 == 0.0 or h2 == 0.0:
+            curvature = max(kappa, 1.0)
+        else:
+            d2 = (
+                log_pdf[idx0 + 1]
+                - 2.0 * log_pdf[idx0]
+                + log_pdf[idx0 - 1]
+            ) / ((0.5 * (h1 + h2)) ** 2)
+            curvature = max(-d2, 1e-3)
+
+        kappa_env = float(np.clip(curvature, _INVBAT_ENV_MIN_KAPPA, _INVBAT_KAPPA_UPPER))
+        log_vm_norm = np.log(2.0 * np.pi) + np.log(i0e(kappa_env)) + kappa_env
+        log_ratio = log_pdf + log_vm_norm - kappa_env * np.cos(phi)
+        log_multiplier = float(np.max(log_ratio))
+        multiplier = float(np.exp(log_multiplier) * 1.02)
+
+        params = {
+            "kappa_env": kappa_env,
+            "log_vm_norm": log_vm_norm,
+            "log_multiplier": np.log(multiplier),
+            "multiplier": multiplier,
+        }
+        self._invbat_sampler_cache[key] = params
+        return params
+
+    def _rvs(self, xi, kappa, nu, lmbd, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        xi_val = float(np.mod(_invbat_ensure_scalar(xi, "xi"), 2.0 * np.pi))
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+
+        if not (
+            np.isfinite(xi_val)
+            and np.isfinite(kappa_val)
+            and np.isfinite(nu_val)
+            and np.isfinite(lmbd_val)
+        ):
+            raise ValueError("`xi`, `kappa`, `nu`, and `lmbd` must be finite scalars.")
+
+        if size is None:
+            shape = ()
+            total = 1
+        else:
+            if np.isscalar(size):
+                shape = (int(size),)
+            else:
+                shape = tuple(int(dim) for dim in np.atleast_1d(size))
+            total = int(np.prod(shape, dtype=int))
+            if total < 0:
+                raise ValueError("`size` must describe a non-negative number of samples.")
+
+        two_pi = 2.0 * np.pi
+
+        if total == 0:
+            empty = np.empty(shape, dtype=float)
+            return float(empty) if empty.ndim == 0 else empty
+
+        if kappa_val <= _INVBAT_KAPPA_TOL:
+            samples = rng.uniform(0.0, two_pi, size=shape)
+            return float(samples) if samples.ndim == 0 else samples
+
+        table = self._get_invbat_table(kappa_val, nu_val, lmbd_val)
+        sampler = self._get_invbat_sampler_params(kappa_val, nu_val, lmbd_val)
+        kappa_env = sampler["kappa_env"]
+        log_vm_norm = sampler["log_vm_norm"]
+        log_multiplier = sampler["log_multiplier"]
+        pdf_interp = table["pdf_interp"]
+
+        samples = np.empty(total, dtype=float)
+        filled = 0
+        batch_base = max(8, min(4 * total, 4096))
+
+        while filled < total:
+            batch = min(batch_base, total - filled) if filled > 0 else batch_base
+            proposals = rng.vonmises(xi_val, kappa_env, size=batch)
+            phi = ((proposals - xi_val + np.pi) % two_pi) - np.pi
+
+            pdf_vals = np.clip(pdf_interp(phi), np.finfo(float).tiny, None)
+            log_target = np.log(pdf_vals)
+            log_env = kappa_env * np.cos(phi) - log_vm_norm
+            log_accept = log_target - log_env - log_multiplier
+
+            accept_mask = np.log(rng.random(size=batch)) <= log_accept
+            if not np.any(accept_mask):
+                continue
+
+            accepted = proposals[accept_mask]
+            take = min(accepted.size, total - filled)
+            samples[filled : filled + take] = accepted[:take]
+            filled += take
+
+        samples = np.mod(samples, two_pi)
+        samples = samples.reshape(shape)
+        if samples.ndim == 0:
+            return float(samples)
+        return samples
+
+    def rvs(self, xi=None, kappa=None, nu=None, lmbd=None, size=None, random_state=None):
+        r"""
+        Draw random variates from the inverse Batschelet distribution.
+
+        Sampling proceeds by acceptance--rejection with a von Mises envelope whose
+        concentration is matched to the curvature of the inverse Batschelet kernel at
+        the mode. Envelope constants are calibrated on the cached spectral grid used
+        for :meth:`cdf`, so repeated sampling calls with the same parameters are fast
+        and stable across the entire parameter range.
+
+        Parameters
+        ----------
+        xi : float
+            Direction parameter, $0 \leq \xi \leq 2\pi$.
+        kappa : float
+            Concentration parameter, $\kappa \geq 0$.
+        nu : float
+            Shape parameter, $-1 \leq \nu \leq 1$.
+        lmbd : float
+            Skewness parameter, $-1 \leq \lambda \leq 1$.
+        size : int or tuple of ints, optional
+            Desired output shape.
+        random_state : {None, int, np.random.Generator}, optional
+            Random number generator specification.
+
+        Returns
+        -------
+        rvs : array_like
+            Random variates on $[0, 2\pi)$ sampled from the inverse Batschelet
+            distribution.
+        """
+
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = _invbat_ensure_scalar(kappa, "kappa")
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+        return super().rvs(xi_val, kappa_val, nu_val, lmbd_val, size=size, random_state=random_state)
 
     def _get_invbat_table(self, kappa, nu, lmbd, grid_size=None):
         kappa_val = float(np.clip(kappa, 0.0, _INVBAT_KAPPA_UPPER))

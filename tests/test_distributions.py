@@ -888,6 +888,11 @@ def test_inverse_batschelet_ppf_roundtrip():
     np.testing.assert_allclose(inverse_batschelet.ppf(1.0, **params), 2.0 * np.pi, atol=1e-12)
 
 
+def test_inverse_batschelet_rvs_reasonable():
+    dist = inverse_batschelet(xi=0.6, kappa=2.8, nu=-0.3, lmbd=0.45)
+    _assert_rvs_reasonable(dist, size=512, seed=987, uniform_tol=0.02)
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 
