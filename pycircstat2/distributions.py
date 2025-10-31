@@ -2781,7 +2781,7 @@ class wrapnorm_gen(CircularContinuous):
         return estimates
 
 
-wrapnorm = wrapnorm_gen(name="wrapped_normal")
+wrapnorm = wrapnorm_gen(name="wrapnorm")
 
 
 class wrapcauchy_gen(CircularContinuous):
