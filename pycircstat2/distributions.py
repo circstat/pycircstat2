@@ -74,6 +74,9 @@ _WRAPSTABLE_PDF_TOL = 1e-12
 _WRAPSTABLE_CDF_TOL = 1e-12
 _WRAPSTABLE_ALPHA_TOL = 1e-10
 _WRAPSTABLE_MAX_TERMS = 20000
+_WRAPSTABLE_NEWTON_MAXITER = 60
+_WRAPSTABLE_NEWTON_TOL = 1e-12
+_WRAPSTABLE_NEWTON_WIDTH_TOL = 1e-10
 
 OPTIMIZERS = [
     "Nelder-Mead",
@@ -7462,6 +7465,86 @@ class wrapstable_gen(CircularContinuous):
         if scalar_input:
             return float(cdf_vals.reshape(-1)[0])
         return cdf_vals.reshape(x_arr.shape)
+
+    def _ppf(self, q, delta, alpha, beta, gamma):
+        q_arr = np.asarray(q, dtype=float)
+        flat = q_arr.reshape(-1)
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        delta_val = self._scalar_param(delta)
+        alpha_val = self._scalar_param(alpha)
+        beta_val = self._scalar_param(beta)
+        gamma_val = self._scalar_param(gamma)
+
+        result = np.full_like(flat, np.nan, dtype=float)
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if not np.any(valid):
+            shaped = result.reshape(q_arr.shape)
+            return float(shaped) if q_arr.ndim == 0 else shaped
+
+        q_valid = flat[valid]
+        close_zero = np.isclose(q_valid, 0.0, atol=1e-12, rtol=0.0)
+        close_one = np.isclose(q_valid, 1.0, atol=1e-12, rtol=0.0)
+
+        two_pi = 2.0 * np.pi
+
+        theta_vals = np.empty_like(q_valid)
+        for idx, q_val in enumerate(q_valid):
+            if close_zero[idx]:
+                theta_vals[idx] = 0.0
+                continue
+            if close_one[idx]:
+                theta_vals[idx] = two_pi
+                continue
+
+            lo, hi = 0.0, two_pi
+            theta = q_val * two_pi
+
+            for _ in range(_WRAPSTABLE_NEWTON_MAXITER):
+                cdf_theta = float(self._cdf(theta, delta_val, alpha_val, beta_val, gamma_val))
+                pdf_theta = float(self._pdf(theta, delta_val, alpha_val, beta_val, gamma_val))
+                residual = cdf_theta - q_val
+
+                if abs(residual) <= _WRAPSTABLE_NEWTON_TOL and (hi - lo) <= _WRAPSTABLE_NEWTON_WIDTH_TOL:
+                    break
+
+                if residual > 0.0:
+                    hi = min(hi, theta)
+                else:
+                    lo = max(lo, theta)
+
+                if pdf_theta <= 0.0 or not np.isfinite(pdf_theta):
+                    theta = 0.5 * (lo + hi)
+                    continue
+
+                step = residual / pdf_theta
+                theta_new = theta - step
+                if not np.isfinite(theta_new) or theta_new <= lo or theta_new >= hi:
+                    theta = 0.5 * (lo + hi)
+                else:
+                    theta = theta_new
+
+                if (hi - lo) <= _WRAPSTABLE_NEWTON_WIDTH_TOL:
+                    break
+
+            else:  # pragma: no cover - fallback to bisection if Newton fails
+                for _ in range(30):
+                    theta_mid = 0.5 * (lo + hi)
+                    cdf_mid = float(self._cdf(theta_mid, delta_val, alpha_val, beta_val, gamma_val))
+                    if cdf_mid > q_val:
+                        hi = theta_mid
+                    else:
+                        lo = theta_mid
+                theta = 0.5 * (lo + hi)
+
+            theta_vals[idx] = (theta + two_pi) % two_pi
+
+        result[valid] = theta_vals
+        shaped = result.reshape(q_arr.shape)
+        if q_arr.ndim == 0:
+            return float(shaped)
+        return shaped
 
     def _get_series_terms(self, delta, alpha, beta, gamma):
         delta_s = self._scalar_param(delta)

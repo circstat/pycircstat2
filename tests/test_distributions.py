@@ -977,6 +977,17 @@ def test_wrapstable_cdf_monotonic():
     assert np.all(diffs >= -1e-11)
 
 
+def test_wrapstable_ppf_roundtrip():
+    params = dict(delta=0.5, alpha=1.6, beta=0.3, gamma=0.4)
+    q = np.linspace(1e-5, 1.0 - 1e-5, 61)
+    theta = wrapstable.ppf(q, **params)
+    q_back = wrapstable.cdf(theta, **params)
+    np.testing.assert_allclose(q_back, q, atol=2e-5, rtol=0.0)
+
+    np.testing.assert_allclose(wrapstable.ppf(0.0, **params), 0.0, atol=1e-12)
+    np.testing.assert_allclose(wrapstable.ppf(1.0, **params), 2.0 * np.pi, atol=1e-12)
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 
