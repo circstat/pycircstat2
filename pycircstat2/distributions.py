@@ -1383,13 +1383,21 @@ class cardioid_gen(CircularContinuous):
             d1 = (1.0 + 2.0 * rho_val * np.cos(theta - mu_val)) / two_pi
             d2 = (-2.0 * rho_val * np.sin(theta - mu_val)) / two_pi
 
-            step_newton = np.where(np.abs(d1) > tiny, delta / d1, 0.0)
+            step_newton = np.divide(
+                delta,
+                d1,
+                out=np.zeros_like(delta, dtype=float),
+                where=np.abs(d1) > tiny,
+            )
 
             if iteration == 0 and use_halley:
                 denom = 2.0 * d1**2 - delta * d2
                 halley_valid = np.abs(denom) > tiny
-                step_halley = np.where(
-                    halley_valid, (2.0 * delta * d1) / denom, 0.0
+                step_halley = np.divide(
+                    2.0 * delta * d1,
+                    denom,
+                    out=np.zeros_like(delta, dtype=float),
+                    where=halley_valid,
                 )
                 step = np.where(halley_valid, step_halley, step_newton)
             else:
