@@ -4074,7 +4074,7 @@ class vonmises_flattopped_gen(CircularContinuous):
         Percent-point function (quantile) of the flat-topped von Mises distribution.
 
         Quantiles are computed by reusing the cached cumulative table described in
-        :meth:`cdf`. Starting from the monotone inverse of the tabulated primitive
+        `cdf`. Starting from the monotone inverse of the tabulated primitive
         $H_{\kappa,\nu}$, the implementation applies up to
         :data:`_VMFT_NEWTON_MAXITER` safeguarded Newton steps with derivative
         $f(\theta) = \exp[\kappa \cos(\phi + \nu \sin \phi)]/Z$ to achieve
@@ -4178,7 +4178,7 @@ class vonmises_flattopped_gen(CircularContinuous):
         curvature at the mode yields a proposal concentration
         $\kappa_e = \kappa(1+\nu)^2$ (clipped to a small positive value). The
         envelope constant $M \ge \sup_\phi f(\phi)/g(\phi)$ is precomputed on
-        the same spectral grid used for :meth:`cdf`, so once calibrated the
+        the same spectral grid used for `cdf`, so once calibrated the
         sampler draws each variate with a single von Mises proposal followed by
         a scalar acceptance test.
 
@@ -6355,12 +6355,27 @@ def _c_jonespewsey_asym(xi, kappa, psi, nu):
 
 
 class inverse_batschelet_gen(CircularContinuous):
-    r"""Inverse Batschelet distribution.
-
-    The inverse Batschelet distribution is a flexible circular distribution that allows for
-    modeling asymmetric and peaked data. It is defined on the interval $[0, 2\pi)$.
+    r"""Inverse Batschelet Distribution
 
     ![inverse-batschelet](../images/circ-mod-inverse-batschelet.png)
+
+    The inverse Batschelet family (Pewsey, Neuhaüser & Ruxton, 2014, §4.3.13)
+    extends the von Mises distribution by applying two inverse angular warps:
+    a "peakedness" transform controlled by $\nu$, and an inverse
+    Batschelet skew transform governed by $\lambda$. The resulting density on
+    $[0, 2\pi)$ takes the form
+
+    $$
+    f(\theta) = c(\kappa, \lambda)
+    \exp\left[\kappa \cos\left(a\,t_\nu^{-1}(\varphi) + b\,s_\lambda^{-1}\bigl(t_\nu^{-1}(\varphi)\bigr)\right)\right],
+    $$
+
+    where $\varphi = (\theta - \xi) \bmod 2\pi - \pi$,
+    $a = \tfrac{1 - \lambda}{1 + \lambda}$,
+    $b = \tfrac{2\lambda}{1 + \lambda}$, and the normalising constant
+    $c(\kappa, \lambda)$ depends only on $\kappa$ and $\lambda$.
+    Setting $\nu = \lambda = 0$ recovers the von Mises distribution, while
+    $\kappa \to 0$ yields the circular uniform law.
 
     Methods
     -------
@@ -6370,10 +6385,14 @@ class inverse_batschelet_gen(CircularContinuous):
     cdf(x, xi, kappa, nu, lmbd)
         Cumulative distribution function.
 
+    ppf(q, xi, kappa, nu, lmbd)
+        Percent-point function (inverse CDF).
 
-    Note
-    ----
-    Implementation from 4.3.13 of Pewsey et al. (2014)
+    rvs(xi, kappa, nu, lmbd, size=None, random_state=None)
+        Random variates via von Mises acceptance–rejection.
+
+    fit(data, *, method='mle', ...)
+        Moments or maximum-likelihood parameter estimation.
     """
 
     def __init__(self, *args, **kwargs):
@@ -6674,7 +6693,7 @@ class inverse_batschelet_gen(CircularContinuous):
         Percent-point function (quantile) of the inverse Batschelet distribution.
 
         Quantiles are obtained by inverting the cached cumulative table described in
-        :meth:`cdf`. A monotone initial guess supplied by the table inverse is refined
+        `cdf`. A monotone initial guess supplied by the table inverse is refined
         with safeguarded Newton steps that leverage the tabulated density, while
         preserving a bracketing interval. For $\kappa \rightarrow 0$, the quantile
         reduces to the linear uniform mapping $2\pi q$.
@@ -6828,7 +6847,7 @@ class inverse_batschelet_gen(CircularContinuous):
         Sampling proceeds by acceptance--rejection with a von Mises envelope whose
         concentration is matched to the curvature of the inverse Batschelet kernel at
         the mode. Envelope constants are calibrated on the cached spectral grid used
-        for :meth:`cdf`, so repeated sampling calls with the same parameters are fast
+        for `cdf`, so repeated sampling calls with the same parameters are fast
         and stable across the entire parameter range.
 
         Parameters
@@ -6858,6 +6877,213 @@ class inverse_batschelet_gen(CircularContinuous):
         nu_val = _invbat_ensure_scalar(nu, "nu")
         lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
         return super().rvs(xi_val, kappa_val, nu_val, lmbd_val, size=size, random_state=random_state)
+
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        optimizer="L-BFGS-B",
+        options=None,
+        nu_grid=None,
+        lmbd_grid=None,
+        kappa_bounds=(1e-6, _INVBAT_KAPPA_UPPER),
+        nu_bounds=(-0.99, 0.99),
+        lmbd_bounds=(-0.99, 0.99),
+        return_info=False,
+        **minimize_kwargs,
+    ):
+        r"""
+        Estimate $(\xi, \kappa, \nu, \lambda)$ from circular data.
+
+        ``method='mle'`` maximises the weighted log-likelihood using the cached
+        spectral tables for the pdf and normalising constant. ``method='moments'``
+        returns the circular mean, ``circ_kappa`` estimate, and sets $(\nu, \lambda)
+        = (0, 0)$.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample of angles.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {'mle', 'moments'}, default 'mle'
+            Estimation method.
+        optimizer : str, optional
+            SciPy optimiser for maximum likelihood.
+        options : dict, optional
+            Optimiser options forwarded to :func:`scipy.optimize.minimize`.
+        nu_grid : array_like, optional
+            Candidate $
+            u$ values for profiling the starting point.
+        lmbd_grid : array_like, optional
+            Candidate $
+            u$ values for $
+            lambda$ profiling.
+        kappa_bounds, nu_bounds, lmbd_bounds : tuple, optional
+            Parameter bounds enforced during optimisation.
+        return_info : bool, optional
+            If True, also return a dictionary with optimisation diagnostics.
+        **minimize_kwargs :
+            Additional keyword arguments forwarded to
+            :func:`scipy.optimize.minimize`.
+
+        Returns
+        -------
+        params : tuple
+            Estimated parameters ``(xi, kappa, nu, lmbd)``.
+        info : dict, optional
+            Returned when ``return_info=True`` with optimisation diagnostics.
+        """
+
+        minimize_kwargs = self._sanitize_fit_kwargs(minimize_kwargs)
+        minimize_kwargs.pop("floc", None)
+        minimize_kwargs.pop("fscale", None)
+
+        data_arr = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if data_arr.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(data_arr, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, data_arr.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0.0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = float(w_sum**2 / np.sum(w**2))
+
+        xi_mom, r1 = circ_mean_and_r(alpha=data_arr, w=w)
+        if not np.isfinite(xi_mom):
+            xi_mom = 0.0
+        xi_mom = float(np.mod(xi_mom, 2.0 * np.pi))
+        r1 = float(np.clip(r1, 1e-12, 1.0 - 1e-12))
+        n_adjust = int(max(1, round(w_sum)))
+        kappa_mom = float(np.clip(circ_kappa(r=r1, n=n_adjust), kappa_bounds[0], kappa_bounds[1]))
+
+        if method == "moments":
+            estimates = (xi_mom, kappa_mom, 0.0, 0.0)
+            if return_info:
+                info = {
+                    "method": "moments",
+                    "converged": True,
+                    "loglik": float(-np.sum(w) * np.log(2.0 * np.pi)) if kappa_mom <= _INVBAT_KAPPA_TOL else float("nan"),
+                    "n_effective": n_eff,
+                }
+                return estimates, info
+            return estimates
+
+        method_key = str(method).lower()
+        if method_key != "mle":
+            raise ValueError("`method` must be one of {'mle', 'moments' }.")
+
+        two_pi = 2.0 * np.pi
+
+        if nu_grid is None:
+            nu_grid = np.linspace(nu_bounds[0], nu_bounds[1], 5)
+        else:
+            nu_grid = np.asarray(nu_grid, dtype=float)
+
+        if lmbd_grid is None:
+            lmbd_grid = np.linspace(lmbd_bounds[0], lmbd_bounds[1], 5)
+        else:
+            lmbd_grid = np.asarray(lmbd_grid, dtype=float)
+
+        def nll(params):
+            xi_param, kappa_param, nu_param, lmbd_param = params
+            if not (0.0 <= xi_param <= two_pi):
+                return np.inf
+            if not (kappa_bounds[0] <= kappa_param <= kappa_bounds[1]):
+                return np.inf
+            if not (nu_bounds[0] <= nu_param <= nu_bounds[1]):
+                return np.inf
+            if not (lmbd_bounds[0] <= lmbd_param <= lmbd_bounds[1]):
+                return np.inf
+
+            xi_wrapped = float(np.mod(xi_param, two_pi))
+            if kappa_param <= _INVBAT_KAPPA_TOL:
+                log_pdf = -np.log(two_pi)
+                return float(-np.sum(w * log_pdf))
+
+            table = self._get_invbat_table(float(kappa_param), float(nu_param), float(lmbd_param))
+            phi = ((data_arr - xi_wrapped + np.pi) % two_pi) - np.pi
+            pdf_vals = table["pdf_interp"](phi)
+            if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
+                return np.inf
+            return float(-np.sum(w * np.log(pdf_vals)))
+
+        best_nu = 0.0
+        best_lmbd = 0.0
+        best_score = nll((xi_mom, kappa_mom, best_nu, best_lmbd))
+        for nu_candidate in np.unique(np.concatenate(([0.0], nu_grid))):
+            for lmbd_candidate in np.unique(np.concatenate(([0.0], lmbd_grid))):
+                score = nll((xi_mom, kappa_mom, float(nu_candidate), float(lmbd_candidate)))
+                if score < best_score:
+                    best_score = score
+                    best_nu = float(nu_candidate)
+                    best_lmbd = float(lmbd_candidate)
+
+        init = np.array([xi_mom, kappa_mom, best_nu, best_lmbd], dtype=float)
+        bounds = [
+            (0.0, two_pi),
+            (kappa_bounds[0], kappa_bounds[1]),
+            (nu_bounds[0], nu_bounds[1]),
+            (lmbd_bounds[0], lmbd_bounds[1]),
+        ]
+
+        options = {} if options is None else dict(options)
+
+        result = minimize(
+            nll,
+            init,
+            method=optimizer,
+            bounds=bounds,
+            options=options,
+            **minimize_kwargs,
+        )
+
+        optimizer_used = optimizer
+        if not result.success and optimizer != "Powell":
+            fallback = minimize(
+                nll,
+                init,
+                method="Powell",
+                bounds=bounds,
+                options={},
+                **minimize_kwargs,
+            )
+            if fallback.success:
+                result = fallback
+                optimizer_used = "Powell"
+
+        if not result.success:
+            raise RuntimeError(f"Maximum likelihood fit failed: {result.message}")
+
+        xi_hat = self._wrap_direction(float(result.x[0]))
+        kappa_hat = float(np.clip(result.x[1], kappa_bounds[0], kappa_bounds[1]))
+        nu_hat = float(np.clip(result.x[2], nu_bounds[0], nu_bounds[1]))
+        lmbd_hat = float(np.clip(result.x[3], lmbd_bounds[0], lmbd_bounds[1]))
+
+        estimates = (xi_hat, kappa_hat, nu_hat, lmbd_hat)
+        if not return_info:
+            return estimates
+
+        info = {
+            "method": "mle",
+            "loglik": float(-result.fun),
+            "n_effective": n_eff,
+            "converged": bool(result.success),
+            "optimizer": optimizer_used,
+            "nit": getattr(result, "nit", np.nan),
+            "nfev": getattr(result, "nfev", np.nan),
+            "message": result.message,
+        }
+        return estimates, info
 
     def _get_invbat_table(self, kappa, nu, lmbd, grid_size=None):
         kappa_val = float(np.clip(kappa, 0.0, _INVBAT_KAPPA_UPPER))

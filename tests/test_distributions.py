@@ -893,6 +893,34 @@ def test_inverse_batschelet_rvs_reasonable():
     _assert_rvs_reasonable(dist, size=512, seed=987, uniform_tol=0.02)
 
 
+def test_inverse_batschelet_fit_moments():
+    samples = inverse_batschelet.rvs(xi=1.1, kappa=3.0, nu=0.2, lmbd=-0.3, size=600, random_state=123)
+    xi_hat, kappa_hat, nu_hat, lmbd_hat = inverse_batschelet.fit(samples, method="moments")
+    np.testing.assert_allclose(np.mod(xi_hat - 1.1 + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=0.3)
+    assert nu_hat == 0.0
+    assert lmbd_hat == 0.0
+    assert kappa_hat >= 0.0
+
+
+def test_inverse_batschelet_fit_mle():
+    rng = np.random.default_rng(246)
+    xi_true, kappa_true, nu_true, lmbd_true = 0.8, 2.5, -0.25, 0.4
+    data = inverse_batschelet.rvs(xi=xi_true, kappa=kappa_true, nu=nu_true, lmbd=lmbd_true, size=800, random_state=rng)
+
+    (xi_hat, kappa_hat, nu_hat, lmbd_hat), info = inverse_batschelet.fit(
+        data,
+        method="mle",
+        return_info=True,
+        options={"maxiter": 200},
+    )
+
+    assert info["converged"]
+    np.testing.assert_allclose(np.mod(xi_hat - xi_true + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=0.2)
+    np.testing.assert_allclose(kappa_hat, kappa_true, atol=0.7)
+    np.testing.assert_allclose(nu_hat, nu_true, atol=0.12)
+    np.testing.assert_allclose(lmbd_hat, lmbd_true, atol=0.12)
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 
