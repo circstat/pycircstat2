@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Optional, Tuple
+
 import numpy as np
 import pytest
 from scipy import stats
@@ -45,148 +48,892 @@ def _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_to
     assert np.all((ppf_vals >= -ppf_tol) & (ppf_vals <= two_pi + ppf_tol)), "PPF outside [0, 2π]"
 
 
-def test_circularuniform():
-    np.testing.assert_approx_equal(circularuniform.cdf(2), 0.3183, significant=5)
-    np.testing.assert_approx_equal(circularuniform.ppf(1 / np.pi), 2)
+@dataclass(frozen=True)
+class DistributionCase:
+    id: str
+    factory: Callable[..., Any]
+    params: Dict[str, Any]
+    theta_points: int = 129
+    q_points: int = 129
+    q_min: float = 0.0
+    cdf_tol: float = 1e-11
+    ppf_tol: float = 1e-11
+    ppf_slope_threshold: float = 0.0
+    ppf_high_slope_tol: Optional[float] = None
+    ppf_low_slope_tol: Optional[float] = None
+
+    def dist(self):
+        return self.factory(**self.params)
 
 
-def test_circularuniform_cdf_ppf_roundtrip():
-    cu = circularuniform()
-    q = np.linspace(0.0, 1.0, num=9)
-    theta = cu.ppf(q)
-    np.testing.assert_array_less(-1e-12, theta)
-    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
-    np.testing.assert_allclose(cu.cdf(theta), q, atol=1e-12)
-
-    grid = np.linspace(0.0, 2.0 * np.pi, num=11)
-    q_grid = cu.cdf(grid)
-    theta_back = cu.ppf(q_grid)
-    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
-    np.testing.assert_allclose(wrapped, 0.0, atol=1e-12)
+@dataclass(frozen=True)
+class ReferenceValue:
+    id: str
+    factory: Callable[..., Any]
+    params: Dict[str, Any]
+    method: str
+    arg: float
+    expected: float
+    atol: float = 1e-9
 
 
-def test_cardioid():
-    cd = cardioid(rho=0.3, mu=np.pi / 2)
-    np.testing.assert_approx_equal(cd.cdf(np.pi), 0.6909859, significant=5)
-    np.testing.assert_approx_equal(cd.ppf(0.6909859), np.pi)
+@dataclass(frozen=True)
+class CdfFromPdfCase:
+    id: str
+    cdf: Callable[..., Any]
+    numeric_cdf: Callable[..., Any]
+    args: Tuple[Any, ...]
+    theta_points: int
+    atol: float
 
 
-@pytest.mark.parametrize("rho", [0.0, 0.2, 0.49])
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
-def test_cardioid_cdf_ppf_roundtrip(mu, rho):
-    cd = cardioid(rho=rho, mu=mu)
-    q = np.linspace(0.0, 1.0, num=9)
-    x = cd.ppf(q)
-    np.testing.assert_array_less(-1e-12, x)
-    np.testing.assert_array_less(x, 2.0 * np.pi + 1e-10)
+@dataclass(frozen=True)
+class RvsCase:
+    id: str
+    factory: Callable[..., Any]
+    params: Dict[str, Any]
+    size: int = 1024
+    seed: int = 123
+    uniform_tol: float = 0.01
 
-    q_back = cd.cdf(x)
-    np.testing.assert_allclose(q_back, q, atol=5e-11)
-
-    theta = np.linspace(0.0, 2.0 * np.pi, num=7)
-    q_theta = cd.cdf(theta)
-    theta_back = cd.ppf(q_theta)
-    wrapped_diff = np.mod(theta_back - theta + np.pi, 2.0 * np.pi) - np.pi
-    np.testing.assert_allclose(wrapped_diff, 0.0, atol=1e-9)
-
-@pytest.mark.parametrize("rho", [0.0, 0.3])
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
-def test_cardioid_rvs_matches_ppf(mu, rho):
-    rng_samples = np.random.default_rng(321)
-    rng_replay = np.random.default_rng(321)
-    cd = cardioid(mu=mu, rho=rho)
-    samples = cd.rvs(size=512, random_state=rng_samples)
-    if np.isscalar(samples):
-        samples = np.array([samples])
-    u = rng_replay.random(samples.size)
-    expected = cd.ppf(u)
-    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=5e-3, rtol=0.0)
+    def dist(self):
+        return self.factory(**self.params)
 
 
-def test_cartwright():
+def _evaluate_array(func: Callable[..., Any], grid: Any, **kwargs: Any) -> np.ndarray:
+    try:
+        return np.asarray(func(grid, **kwargs), dtype=float)
+    except (TypeError, ValueError):
+        flat = np.asarray(grid, dtype=float).reshape(-1)
+        evaluated = np.array([func(float(val), **kwargs) for val in flat], dtype=float)
+        return evaluated.reshape(np.shape(grid))
 
-    cw = cartwright(zeta=0.1, mu=np.pi / 2)
-    np.testing.assert_approx_equal(
-        cw.cdf(3 * np.pi / 4),
-        0.9641666531258773,
-        significant=5,
+
+REFERENCE_VALUES = [
+    ReferenceValue(
+        id="circularuniform-cdf",
+        factory=circularuniform,
+        params={},
+        method="cdf",
+        arg=2.0,
+        expected=0.3183098861837907,
+        atol=1e-12,
+    ),
+    ReferenceValue(
+        id="circularuniform-ppf",
+        factory=circularuniform,
+        params={},
+        method="ppf",
+        arg=1.0 / np.pi,
+        expected=2.0,
+        atol=1e-12,
+    ),
+    ReferenceValue(
+        id="cardioid-cdf",
+        factory=cardioid,
+        params={"rho": 0.3, "mu": np.pi / 2},
+        method="cdf",
+        arg=np.pi,
+        expected=0.6909859317102744,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="cardioid-ppf",
+        factory=cardioid,
+        params={"rho": 0.3, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.6909859317102744,
+        expected=np.pi,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="cartwright-cdf",
+        factory=cartwright,
+        params={"zeta": 0.1, "mu": np.pi / 2},
+        method="cdf",
+        arg=3.0 * np.pi / 4.0,
+        expected=0.9641666531258773,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="cartwright-ppf",
+        factory=cartwright,
+        params={"zeta": 0.1, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.9641666531258773,
+        expected=3.0 * np.pi / 4.0,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="wrapcauchy-cdf",
+        factory=wrapcauchy,
+        params={"rho": 0.75, "mu": np.pi / 2},
+        method="cdf",
+        arg=np.pi / 6.0,
+        expected=0.0320432438547667,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="wrapcauchy-ppf",
+        factory=wrapcauchy,
+        params={"rho": 0.75, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.0320432438547667,
+        expected=np.pi / 6.0,
+        atol=5e-6,
+    ),
+    ReferenceValue(
+        id="wrapnorm-cdf",
+        factory=wrapnorm,
+        params={"rho": 0.75, "mu": np.pi / 2},
+        method="cdf",
+        arg=np.pi / 6.0,
+        expected=0.06451975467423943,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="wrapnorm-ppf",
+        factory=wrapnorm,
+        params={"rho": 0.75, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.5,
+        expected=1.6072904842634406,
+        atol=1e-9,
+    ),
+    ReferenceValue(
+        id="vonmises-cdf",
+        factory=vonmises,
+        params={"kappa": 2.37, "mu": np.pi / 2},
+        method="cdf",
+        arg=np.pi / 6.0,
+        expected=0.05432533537843656,
+        atol=5e-11,
+    ),
+    ReferenceValue(
+        id="vonmises-ppf",
+        factory=vonmises,
+        params={"kappa": 2.37, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.5,
+        expected=1.6138877997996237,
+        atol=5e-11,
+    ),
+    ReferenceValue(
+        id="vonmises-flattopped-cdf",
+        factory=vonmises_flattopped,
+        params={"kappa": 2.0, "nu": -0.5, "mu": np.pi / 2},
+        method="cdf",
+        arg=3.0 * np.pi / 4.0,
+        expected=0.7119746660317867,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="vonmises-flattopped-ppf",
+        factory=vonmises_flattopped,
+        params={"kappa": 2.0, "nu": -0.5, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.5,
+        expected=1.7301046248783023,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="jonespewsey-cdf",
+        factory=jonespewsey,
+        params={"kappa": 2.0, "psi": -1.5, "mu": np.pi / 2},
+        method="cdf",
+        arg=np.pi / 2.0,
+        expected=0.4401444958105559,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="jonespewsey-ppf",
+        factory=jonespewsey,
+        params={"kappa": 2.0, "psi": -1.5, "mu": np.pi / 2},
+        method="ppf",
+        arg=0.4401444958105559,
+        expected=1.5707963291458178,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="jonespewsey-sineskewed-cdf",
+        factory=jonespewsey_sineskewed,
+        params={"kappa": 2.0, "psi": 1.0, "lmbd": 0.5, "xi": np.pi / 2},
+        method="cdf",
+        arg=3.0 * np.pi / 2.0,
+        expected=0.9446497875304358,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="jonespewsey-sineskewed-ppf",
+        factory=jonespewsey_sineskewed,
+        params={"kappa": 2.0, "psi": 1.0, "lmbd": 0.5, "xi": np.pi / 2},
+        method="ppf",
+        arg=0.5,
+        expected=2.1878509192906153,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="jonespewsey-asym-cdf",
+        factory=jonespewsey_asym,
+        params={"kappa": 2.0, "psi": -1.0, "nu": 0.75, "xi": np.pi / 2},
+        method="cdf",
+        arg=np.pi / 2.0,
+        expected=0.7535176456215893,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="jonespewsey-asym-ppf",
+        factory=jonespewsey_asym,
+        params={"kappa": 2.0, "psi": -1.0, "nu": 0.75, "xi": np.pi / 2},
+        method="ppf",
+        arg=0.5,
+        expected=1.0498801800527269,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="inverse-batschelet-cdf",
+        factory=inverse_batschelet,
+        params={"kappa": 2.0, "nu": -0.5, "lmbd": 0.7, "xi": np.pi / 2},
+        method="cdf",
+        arg=np.pi / 2.0,
+        expected=0.11796336892075589,
+        atol=5e-9,
+    ),
+    ReferenceValue(
+        id="inverse-batschelet-ppf",
+        factory=inverse_batschelet,
+        params={"kappa": 2.0, "nu": -0.5, "lmbd": 0.7, "xi": np.pi / 2},
+        method="ppf",
+        arg=0.5,
+        expected=2.5137729476810207,
+        atol=5e-9,
+    ),
+]
+
+_REFERENCE_LOOKUP = {case.id: case for case in REFERENCE_VALUES}
+
+
+CDF_PPF_CASES = [
+    DistributionCase(
+        id="circularuniform",
+        factory=circularuniform,
+        params={},
+        theta_points=256,
+        q_points=256,
+        cdf_tol=1e-12,
+        ppf_tol=1e-12,
+    ),
+    DistributionCase(
+        id="triangular-rho0.0",
+        factory=triangular,
+        params={"rho": 0.0},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="triangular-rho0.3",
+        factory=triangular,
+        params={"rho": 0.3},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="triangular-rho4/pi^2",
+        factory=triangular,
+        params={"rho": 4.0 / np.pi ** 2},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="cardioid-rho0.0",
+        factory=cardioid,
+        params={"rho": 0.0, "mu": 0.0},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="cardioid-rho0.2",
+        factory=cardioid,
+        params={"rho": 0.2, "mu": 0.3},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="cardioid-rho0.49",
+        factory=cardioid,
+        params={"rho": 0.49, "mu": np.pi / 2},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="cardioid-rho0.3-muPi/3",
+        factory=cardioid,
+        params={"rho": 0.3, "mu": np.pi / 3},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="cartwright-zeta0.2",
+        factory=cartwright,
+        params={"zeta": 0.2, "mu": 0.1},
+        theta_points=256,
+        q_points=256,
+        ppf_slope_threshold=1e-6,
+        ppf_low_slope_tol=0.1,
+    ),
+    DistributionCase(
+        id="cartwright-zeta1.0",
+        factory=cartwright,
+        params={"zeta": 1.0, "mu": np.pi},
+        theta_points=256,
+        q_points=256,
+        ppf_slope_threshold=1e-6,
+        ppf_low_slope_tol=0.1,
+    ),
+    DistributionCase(
+        id="cartwright-zeta1.5",
+        factory=cartwright,
+        params={"zeta": 1.5, "mu": 0.4},
+        theta_points=192,
+        q_points=192,
+        ppf_slope_threshold=1e-6,
+        ppf_low_slope_tol=0.1,
+    ),
+    DistributionCase(
+        id="cartwright-zeta5.0",
+        factory=cartwright,
+        params={"zeta": 5.0, "mu": 2.0},
+        theta_points=256,
+        q_points=256,
+        ppf_slope_threshold=1e-6,
+        ppf_low_slope_tol=0.1,
+    ),
+    DistributionCase(
+        id="wrapnorm-rho0.1",
+        factory=wrapnorm,
+        params={"rho": 0.1, "mu": 0.0},
+        theta_points=256,
+        q_points=512,
+        ppf_slope_threshold=1e-4,
+        ppf_high_slope_tol=5e-6,
+        ppf_low_slope_tol=1e-2,
+    ),
+    DistributionCase(
+        id="wrapnorm-rho0.5",
+        factory=wrapnorm,
+        params={"rho": 0.5, "mu": np.pi / 4},
+        theta_points=256,
+        q_points=512,
+        ppf_slope_threshold=1e-4,
+        ppf_high_slope_tol=5e-6,
+        ppf_low_slope_tol=1e-2,
+    ),
+    DistributionCase(
+        id="wrapnorm-rho0.9",
+        factory=wrapnorm,
+        params={"rho": 0.9, "mu": np.pi / 4},
+        theta_points=256,
+        q_points=512,
+        q_min=1e-8,
+        cdf_tol=5e-10,
+        ppf_tol=5e-10,
+        ppf_slope_threshold=1e-4,
+        ppf_high_slope_tol=5e-6,
+        ppf_low_slope_tol=1e-2,
+    ),
+    DistributionCase(
+        id="wrapcauchy-rho0.0",
+        factory=wrapcauchy,
+        params={"rho": 0.0, "mu": 0.0},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="wrapcauchy-rho0.4",
+        factory=wrapcauchy,
+        params={"rho": 0.4, "mu": np.pi / 3},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="wrapcauchy-rho0.95",
+        factory=wrapcauchy,
+        params={"rho": 0.95, "mu": np.pi},
+        theta_points=256,
+        q_points=256,
+        q_min=1e-6,
+        cdf_tol=5e-11,
+        ppf_tol=5e-11,
+    ),
+    DistributionCase(
+        id="vonmises-kappa0.05",
+        factory=vonmises,
+        params={"kappa": 0.05, "mu": 0.0},
+        theta_points=256,
+        q_points=256,
+    ),
+    DistributionCase(
+        id="vonmises-kappa5.0",
+        factory=vonmises,
+        params={"kappa": 5.0, "mu": np.pi / 4},
+        theta_points=256,
+        q_points=256,
+        cdf_tol=5e-10,
+        ppf_tol=5e-10,
+    ),
+    DistributionCase(
+        id="vonmises-kappa25.0",
+        factory=vonmises,
+        params={"kappa": 25.0, "mu": np.pi},
+        theta_points=256,
+        q_points=256,
+        cdf_tol=1e-10,
+        ppf_tol=1e-10,
+        ppf_slope_threshold=1e-6,
+        ppf_high_slope_tol=5e-7,
+        ppf_low_slope_tol=np.pi,
+    ),
+    DistributionCase(
+        id="vonmises-flattopped",
+        factory=vonmises_flattopped,
+        params={"mu": 0.6, "kappa": 2.0, "nu": 0.3},
+        theta_points=192,
+        q_points=192,
+        q_min=1e-6,
+        cdf_tol=1e-9,
+        ppf_tol=1e-9,
+    ),
+    DistributionCase(
+        id="vonmises-flattopped-uniform",
+        factory=vonmises_flattopped,
+        params={"mu": 1.5, "kappa": 0.0, "nu": 0.3},
+        theta_points=160,
+        q_points=160,
+        q_min=1e-6,
+        cdf_tol=1e-9,
+        ppf_tol=1e-9,
+    ),
+    DistributionCase(
+        id="jonespewsey",
+        factory=jonespewsey,
+        params={"mu": 0.6, "kappa": 1.0, "psi": 0.4},
+        theta_points=192,
+        q_points=192,
+        q_min=1e-6,
+        cdf_tol=1e-9,
+        ppf_tol=1e-9,
+    ),
+    DistributionCase(
+        id="jonespewsey-sineskewed",
+        factory=jonespewsey_sineskewed,
+        params={"xi": 1.0, "kappa": 1.5, "psi": 0.3, "lmbd": 0.4},
+        theta_points=160,
+        q_points=160,
+        q_min=1e-5,
+        cdf_tol=5e-9,
+        ppf_tol=5e-9,
+    ),
+    DistributionCase(
+        id="jonespewsey-asym",
+        factory=jonespewsey_asym,
+        params={"xi": 0.7, "kappa": 1.1, "psi": 0.2, "nu": 0.4},
+        theta_points=160,
+        q_points=160,
+        q_min=1e-5,
+        cdf_tol=5e-9,
+        ppf_tol=5e-9,
+    ),
+    DistributionCase(
+        id="inverse-batschelet",
+        factory=inverse_batschelet,
+        params={"xi": 0.8, "kappa": 1.3, "nu": 0.3, "lmbd": 0.2},
+        theta_points=160,
+        q_points=160,
+        q_min=1e-5,
+        cdf_tol=1e-8,
+        ppf_tol=1e-8,
+    ),
+    DistributionCase(
+        id="katojones",
+        factory=katojones,
+        params={"mu": 0.8, "gamma": 0.3, "rho": 0.2, "lam": 0.4},
+        theta_points=96,
+        q_points=96,
+        q_min=1e-5,
+        cdf_tol=5e-6,
+        ppf_tol=5e-6,
+    ),
+    DistributionCase(
+        id="wrapstable",
+        factory=wrapstable,
+        params={"delta": 0.9, "alpha": 1.5, "beta": 0.2, "gamma": 0.4},
+        theta_points=96,
+        q_points=96,
+        q_min=1e-5,
+        cdf_tol=1e-8,
+        ppf_tol=1e-8,
+    ),
+]
+
+
+CDF_FROM_PDF_CASES = [
+    CdfFromPdfCase(
+        id="cartwright",
+        cdf=cartwright.cdf,
+        numeric_cdf=cartwright._cdf_from_pdf,
+        args=(1.2, 0.8),
+        theta_points=9,
+        atol=1e-7,
+    ),
+    CdfFromPdfCase(
+        id="wrapcauchy",
+        cdf=wrapcauchy.cdf,
+        numeric_cdf=wrapcauchy._cdf_from_pdf,
+        args=(0.9, 0.65),
+        theta_points=9,
+        atol=1e-7,
+    ),
+    CdfFromPdfCase(
+        id="wrapnorm",
+        cdf=wrapnorm.cdf,
+        numeric_cdf=wrapnorm._cdf_from_pdf,
+        args=(0.7, 0.45),
+        theta_points=7,
+        atol=1e-7,
+    ),
+    CdfFromPdfCase(
+        id="vonmises",
+        cdf=vonmises.cdf,
+        numeric_cdf=vonmises._cdf_from_pdf,
+        args=(0.6, 3.2),
+        theta_points=11,
+        atol=5e-7,
+    ),
+    CdfFromPdfCase(
+        id="inverse-batschelet",
+        cdf=inverse_batschelet.cdf,
+        numeric_cdf=inverse_batschelet._cdf_from_pdf,
+        args=(0.9, 2.4, -0.35, 0.6),
+        theta_points=25,
+        atol=5e-5,
+    ),
+    CdfFromPdfCase(
+        id="katojones",
+        cdf=katojones.cdf,
+        numeric_cdf=katojones._cdf_from_pdf,
+        args=(0.8, 0.4, 0.35, 1.1),
+        theta_points=49,
+        atol=5e-7,
+    ),
+    CdfFromPdfCase(
+        id="wrapstable",
+        cdf=wrapstable.cdf,
+        numeric_cdf=wrapstable._cdf_from_pdf,
+        args=(0.9, 1.4, 0.25, 0.5),
+        theta_points=33,
+        atol=5e-7,
+    ),
+]
+
+
+RVS_CASES = [
+    RvsCase(
+        id="circularuniform",
+        factory=circularuniform,
+        params={},
+        size=512,
+        seed=1001,
+        uniform_tol=0.01,
+    ),
+    RvsCase(
+        id="triangular-rho0.0",
+        factory=triangular,
+        params={"rho": 0.0},
+        size=512,
+        seed=123,
+        uniform_tol=0.01,
+    ),
+    RvsCase(
+        id="triangular-rho0.3",
+        factory=triangular,
+        params={"rho": 0.3},
+        size=512,
+        seed=321,
+        uniform_tol=0.01,
+    ),
+    RvsCase(
+        id="cardioid",
+        factory=cardioid,
+        params={"rho": 0.3, "mu": np.pi / 3},
+        size=512,
+        seed=321,
+        uniform_tol=0.02,
+    ),
+    RvsCase(
+        id="cartwright",
+        factory=cartwright,
+        params={"zeta": 0.8, "mu": np.pi / 4},
+        size=512,
+        seed=456,
+        uniform_tol=0.02,
+    ),
+    RvsCase(
+        id="wrapcauchy",
+        factory=wrapcauchy,
+        params={"rho": 0.8, "mu": np.pi / 3},
+        size=512,
+        seed=654,
+        uniform_tol=0.015,
+    ),
+    RvsCase(
+        id="wrapnorm",
+        factory=wrapnorm,
+        params={"rho": 0.5, "mu": np.pi / 4},
+        size=512,
+        seed=789,
+        uniform_tol=0.015,
+    ),
+    RvsCase(
+        id="vonmises",
+        factory=vonmises,
+        params={"kappa": 2.0, "mu": np.pi / 4},
+        size=1024,
+        seed=987,
+        uniform_tol=0.015,
+    ),
+    RvsCase(
+        id="vonmises-flattopped",
+        factory=vonmises_flattopped,
+        params={"mu": 0.8, "kappa": 7.5, "nu": -0.35},
+        size=4096,
+        seed=1234,
+        uniform_tol=0.035,
+    ),
+    RvsCase(
+        id="jonespewsey",
+        factory=jonespewsey,
+        params={"mu": 1.0, "kappa": 1.4, "psi": -0.6},
+        size=256,
+        seed=42,
+        uniform_tol=0.02,
+    ),
+    RvsCase(
+        id="jonespewsey-sineskewed",
+        factory=jonespewsey_sineskewed,
+        params={"xi": 1.0, "kappa": 1.1, "psi": 0.4, "lmbd": 0.3},
+        size=256,
+        seed=123,
+        uniform_tol=0.02,
+    ),
+    RvsCase(
+        id="jonespewsey-asym",
+        factory=jonespewsey_asym,
+        params={"xi": 0.7, "kappa": 1.8, "psi": -0.9, "nu": 0.4},
+        size=256,
+        seed=321,
+        uniform_tol=0.02,
+    ),
+    RvsCase(
+        id="inverse-batschelet",
+        factory=inverse_batschelet,
+        params={"xi": 0.6, "kappa": 2.8, "nu": -0.3, "lmbd": 0.45},
+        size=512,
+        seed=987,
+        uniform_tol=0.02,
+    ),
+    RvsCase(
+        id="wrapstable",
+        factory=wrapstable,
+        params={"delta": 0.9, "alpha": 1.5, "beta": 0.2, "gamma": 0.4},
+        size=512,
+        seed=2024,
+        uniform_tol=0.015,
+    ),
+    RvsCase(
+        id="katojones",
+        factory=katojones,
+        params={"mu": 0.7, "gamma": 0.5, "rho": 0.25, "lam": 1.2},
+        size=512,
+        seed=2025,
+        uniform_tol=0.01,
+    ),
+]
+
+
+@pytest.mark.parametrize("case", REFERENCE_VALUES, ids=lambda case: case.id)
+def test_distribution_reference_values(case):
+    dist = case.factory(**case.params)
+    method = getattr(dist, case.method)
+    result = float(np.asarray(method(case.arg)))
+    np.testing.assert_allclose(result, case.expected, atol=case.atol, rtol=0.0)
+
+
+@pytest.mark.parametrize("case", CDF_PPF_CASES, ids=lambda case: case.id)
+def test_distribution_cdf_ppf_consistency(case):
+    dist = case.dist()
+    theta = np.linspace(0.0, 2.0 * np.pi, case.theta_points)
+    q = np.linspace(case.q_min, 1.0 - case.q_min, case.q_points)
+    _assert_monotonic_cdf_ppf(
+        dist,
+        theta,
+        q,
+        cdf_tol=case.cdf_tol,
+        ppf_tol=case.ppf_tol,
     )
-    np.testing.assert_approx_equal(
-        cw.ppf(0.9641666531258773).round(5),
-        3 * np.pi / 4,
-        significant=5,
+
+    theta_roundtrip = dist.ppf(q)
+    q_back = _evaluate_array(case.factory.cdf, theta_roundtrip, **case.params)
+    np.testing.assert_allclose(
+        q_back,
+        q,
+        atol=max(case.cdf_tol * 50, 1e-12),
+        rtol=0.0,
+    )
+
+    q_from_theta = _evaluate_array(case.factory.cdf, theta, **case.params)
+    theta_back = dist.ppf(q_from_theta)
+    wrapped = np.mod(theta_back - theta + np.pi, 2.0 * np.pi) - np.pi
+    pdf_vals = _evaluate_array(case.factory.pdf, theta, **case.params)
+
+    default_high_tol = case.ppf_high_slope_tol if case.ppf_high_slope_tol is not None else max(case.ppf_tol * 50, 5e-8)
+    default_low_tol = case.ppf_low_slope_tol if case.ppf_low_slope_tol is not None else default_high_tol
+
+    if case.ppf_slope_threshold > 0.0:
+        high_slope = pdf_vals > case.ppf_slope_threshold
+        if np.any(high_slope):
+            np.testing.assert_allclose(
+                wrapped[high_slope],
+                0.0,
+                atol=default_high_tol,
+                rtol=0.0,
+            )
+        if np.any(~high_slope):
+            np.testing.assert_allclose(
+                wrapped[~high_slope],
+                0.0,
+                atol=default_low_tol,
+                rtol=0.0,
+            )
+    else:
+        np.testing.assert_allclose(
+            wrapped,
+            0.0,
+            atol=default_high_tol,
+            rtol=0.0,
+        )
+
+    for endpoint, expected in ((0.0, 0.0), (1.0, 2.0 * np.pi)):
+        try:
+            value = float(dist.ppf(endpoint))
+        except Exception:
+            continue
+        if np.isfinite(value):
+            np.testing.assert_allclose(
+                value,
+                expected,
+                atol=max(case.ppf_tol * 50, 1e-8),
+                rtol=0.0,
     )
 
 
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
-@pytest.mark.parametrize("zeta", [0.2, 1.5])
-def test_cartwright_cdf_ppf_roundtrip(mu, zeta):
-    cw = cartwright(zeta=zeta, mu=mu)
-    q = np.linspace(0.0, 1.0, num=9)
-    theta = cw.ppf(q)
-    np.testing.assert_array_less(-1e-12, theta)
-    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
-    np.testing.assert_allclose(cw.cdf(theta), q, atol=5e-12)
-
-    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
-    q_grid = cw.cdf(grid)
-    theta_back = cw.ppf(q_grid)
-    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
-    np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
+def _check_textbook_reference(case_id: str, *, rounding: Optional[int] = None, significant: Optional[int] = None):
+    case = _REFERENCE_LOOKUP[case_id]
+    dist = case.factory(**case.params)
+    method = getattr(dist, case.method)
+    value = float(np.asarray(method(case.arg)))
+    expected = float(case.expected)
+    if rounding is not None:
+        value = np.round(value, rounding)
+        expected = np.round(expected, rounding)
+    if significant is not None:
+        np.testing.assert_approx_equal(value, expected, significant=significant)
+    else:
+        np.testing.assert_allclose(value, expected, atol=case.atol, rtol=0.0)
 
 
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
-@pytest.mark.parametrize("zeta", [0.2, 1.0])
-def test_cartwright_rvs_matches_ppf(mu, zeta):
-    rng_samples = np.random.default_rng(456)
-    rng_replay = np.random.default_rng(456)
-    cw = cartwright(mu=mu, zeta=zeta)
-    samples = cw.rvs(size=512, random_state=rng_samples)
-    if np.isscalar(samples):
-        samples = np.array([samples])
-    beta_b = 1.0 / zeta + 0.5
-    t = rng_replay.beta(0.5, beta_b, size=samples.size)
-    sqrt_t = np.sqrt(t)
-    angles = 2.0 * np.arcsin(np.clip(sqrt_t, 0.0, 1.0))
-    signs = np.where(rng_replay.random(size=samples.size) < 0.5, -1.0, 1.0)
-    expected = np.mod(mu + signs * angles, 2.0 * np.pi)
-    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
+# Textbook value checks retained for readability and regression safety. These reference
+# published tables, so we mirror the original significant-digit comparisons.
+def test_circularuniform_textbook_values():
+    _check_textbook_reference("circularuniform-cdf", significant=5)
+    _check_textbook_reference("circularuniform-ppf", significant=12)
+
+
+def test_cardioid_textbook_values():
+    _check_textbook_reference("cardioid-cdf", significant=5)
+    _check_textbook_reference("cardioid-ppf", significant=5)
+
+
+def test_cartwright_textbook_values():
+    _check_textbook_reference("cartwright-cdf", rounding=4, significant=5)
+    _check_textbook_reference("cartwright-ppf", rounding=5, significant=5)
+
+
+def test_wrapcauchy_textbook_values():
+    _check_textbook_reference("wrapcauchy-cdf", rounding=3, significant=3)
+    _check_textbook_reference("wrapcauchy-ppf", rounding=3, significant=3)
+
+
+def test_wrapnorm_textbook_values():
+    _check_textbook_reference("wrapnorm-cdf", rounding=4, significant=3)
+    _check_textbook_reference("wrapnorm-ppf", rounding=4, significant=4)
+
+
+def test_vonmises_textbook_values():
+    _check_textbook_reference("vonmises-cdf", rounding=4, significant=3)
+    _check_textbook_reference("vonmises-ppf", rounding=4, significant=4)
+
+
+def test_vonmises_flattopped_textbook_values():
+    _check_textbook_reference("vonmises-flattopped-cdf", rounding=4, significant=4)
+    _check_textbook_reference("vonmises-flattopped-ppf", rounding=4, significant=4)
+
+
+def test_jonespewsey_textbook_values():
+    _check_textbook_reference("jonespewsey-cdf", rounding=7, significant=7)
+    _check_textbook_reference("jonespewsey-ppf", significant=7)
+
+
+def test_jonespewsey_sineskewed_textbook_values():
+    _check_textbook_reference("jonespewsey-sineskewed-cdf", rounding=4, significant=4)
+    _check_textbook_reference("jonespewsey-sineskewed-ppf", rounding=4, significant=4)
+
+
+def test_jonespewsey_asym_textbook_values():
+    _check_textbook_reference("jonespewsey-asym-cdf", rounding=4, significant=4)
+    _check_textbook_reference("jonespewsey-asym-ppf", rounding=4, significant=4)
+
+
+def test_inverse_batschelet_textbook_values():
+    _check_textbook_reference("inverse-batschelet-cdf", rounding=4, significant=4)
+    _check_textbook_reference("inverse-batschelet-ppf", rounding=4, significant=4)
+
+
+@pytest.mark.parametrize("case", CDF_FROM_PDF_CASES, ids=lambda case: case.id)
+def test_distribution_cdf_matches_numeric(case):
+    theta = np.linspace(0.0, 2.0 * np.pi, case.theta_points)
+    analytic = case.cdf(theta, *case.args)
+    numeric = case.numeric_cdf(theta, *case.args)
+    np.testing.assert_allclose(analytic, numeric, atol=case.atol, rtol=1e-6)
+    diffs = np.diff(analytic)
+    assert np.all(diffs >= -1e-10)
+
+
+@pytest.mark.parametrize("case", RVS_CASES, ids=lambda case: case.id)
+def test_distribution_rvs_pit(case):
+    cdf_callable = lambda values: _evaluate_array(case.factory.cdf, values, **case.params)
+    _assert_rvs_reasonable(
+        case.dist(),
+        size=case.size,
+        seed=case.seed,
+        uniform_tol=case.uniform_tol,
+        cdf_callable=cdf_callable,
+    )
 
 
 def test_triangular_ppf_vectorized():
     q = np.linspace(0.1, 0.9, num=5)
     out_zero = triangular.ppf(q, rho=0.0)
     np.testing.assert_allclose(out_zero, q * (2 * np.pi))
-
-@pytest.mark.parametrize("rho", [0.0, 0.3])
-def test_triangular_rvs_matches_ppf(rho):
-    rng_samples = np.random.default_rng(123)
-    rng_replay = np.random.default_rng(123)
-    samples = triangular.rvs(rho=rho, size=512, random_state=rng_samples)
-    if np.isscalar(samples):
-        samples = np.array([samples])
-    u = rng_replay.random(samples.size)
-    expected = triangular.ppf(u, rho)
-    expected = np.mod(expected, 2.0 * np.pi)
-    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-12, rtol=0.0)
-
-
-@pytest.mark.parametrize("rho", [0.0, 0.25, 4.0 / np.pi**2])
-def test_triangular_cdf_ppf_roundtrip(rho):
-    tri = triangular(rho=rho)
-
-    q = np.linspace(0.0, 1.0, num=11)
-    theta = tri.ppf(q)
-    np.testing.assert_array_less(-1e-12, theta)
-    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
-    np.testing.assert_allclose(tri.cdf(theta), q, rtol=0.0, atol=2e-12)
-
-    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
-    q_grid = tri.cdf(grid)
-    theta_back = tri.ppf(q_grid)
-    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
-    np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
-
 
 def test_triangular_pdf_periodic():
     rho = 0.3
@@ -244,18 +991,6 @@ def test_vonmises_flattopped_uniform_limit():
     np.testing.assert_allclose(dist.cdf(theta), expected, atol=5e-12)
 
 
-def test_vonmises_flattopped_rvs_pit():
-    mu = 0.8
-    kappa = 7.5
-    nu = -0.35
-    rng = np.random.default_rng(1234)
-
-    samples = vonmises_flattopped.rvs(mu=mu, kappa=kappa, nu=nu, size=4096, random_state=rng)
-    u = vonmises_flattopped.cdf(samples, mu=mu, kappa=kappa, nu=nu)
-    ks_stat, _ = stats.kstest(u, stats.uniform.cdf)
-    assert ks_stat < 0.035, f"PIT KS statistic too large ({ks_stat})"
-
-
 def test_vonmises_flattopped_fit_recovers_parameters():
     mu_true, kappa_true, nu_true = 1.1, 4.0, -0.25
     rng = np.random.default_rng(2024)
@@ -288,418 +1023,6 @@ def test_vonmises_fit_wraps_data():
     np.testing.assert_allclose(kappa_actual, kappa_expected, atol=1e-8)
 
 
-def test_wrapcauchy():
-
-    wc = wrapcauchy(rho=0.75, mu=np.pi / 2)
-    # P54, Pewsey, et al. (2014)
-    np.testing.assert_approx_equal(
-        wc.cdf(np.pi / 6).round(3),
-        0.0320,
-        significant=3,
-    )
-
-    # P54, Pewsey, et al. (2014)
-    np.testing.assert_approx_equal(
-        wc.ppf(0.0320),
-        np.pi / 6,
-        significant=3,
-    )
-
-
-def test_wrapcauchy_cdf_matches_numeric():
-    mu, rho = 0.9, 0.65
-    theta = np.linspace(0.0, 2.0 * np.pi, 9)
-    analytic = wrapcauchy.cdf(theta, mu, rho)
-    numeric = wrapcauchy._cdf_from_pdf(theta, mu, rho)
-    np.testing.assert_allclose(analytic, numeric, atol=1e-7)
-    diffs = np.diff(analytic)
-    assert np.all(diffs >= -1e-10)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
-@pytest.mark.parametrize("rho", [0.0, 0.4, 0.95])
-def test_wrapcauchy_cdf_ppf_roundtrip(mu, rho):
-    wc = wrapcauchy(mu=mu, rho=rho)
-    q = np.linspace(0.0, 1.0, num=9)
-    theta = wc.ppf(q)
-    np.testing.assert_array_less(-1e-12, theta)
-    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-12)
-    np.testing.assert_allclose(wc.cdf(theta), q, atol=5e-12)
-
-    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
-    q_grid = wc.cdf(grid)
-    theta_back = wc.ppf(q_grid)
-    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
-    np.testing.assert_allclose(wrapped, 0.0, atol=5e-8)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3])
-@pytest.mark.parametrize("rho", [0.2, 0.8])
-def test_wrapcauchy_rvs_matches_constructor(mu, rho):
-    rng_samples = np.random.default_rng(654)
-    rng_replay = np.random.default_rng(654)
-
-    wc = wrapcauchy(mu=mu, rho=rho)
-    samples = wc.rvs(size=512, random_state=rng_samples)
-    if np.isscalar(samples):
-        samples = np.array([samples])
-
-    expected = wc.dist._rvs(mu, rho, size=512, random_state=rng_replay)
-    if np.isscalar(expected):
-        expected = np.array([expected])
-
-    np.testing.assert_allclose(
-        np.sort(samples),
-        np.sort(expected),
-        atol=1e-12,
-        rtol=0.0,
-    )
-
-
-def test_cartwright_cdf_matches_numeric():
-    mu, zeta = 1.2, 0.8
-    theta = np.linspace(0.0, 2.0 * np.pi, 9)
-    analytic = cartwright.cdf(theta, mu, zeta)
-    numeric = cartwright._cdf_from_pdf(theta, mu, zeta)
-    np.testing.assert_allclose(analytic, numeric, atol=1e-7)
-    diffs = np.diff(analytic)
-    assert np.all(diffs >= -1e-10)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 3, np.pi])
-@pytest.mark.parametrize("zeta", [0.1, 1.0, 10.0])
-def test_cartwright_cdf_monotonic(mu, zeta):
-    theta = np.linspace(0.0, 2.0 * np.pi, 512)
-    cdf_vals = cartwright.cdf(theta, mu, zeta)
-    diffs = np.diff(cdf_vals)
-    assert np.all(diffs >= -1e-12), "Cartwright CDF must be non-decreasing"
-
-
-def test_wrapnorm():
-
-    wn = wrapnorm(rho=0.75, mu=np.pi / 2)
-    np.testing.assert_approx_equal(
-        wn.cdf(np.pi / 6).round(4),
-        0.0645,
-        significant=3,
-    )
-    np.testing.assert_approx_equal(
-        wn.ppf(0.5),
-        1.6073,
-        significant=4,
-    )
-
-
-def test_wrapnorm_cdf_matches_numeric():
-    mu, rho = 0.7, 0.45
-    theta = np.linspace(0.0, 2.0 * np.pi, 7)
-    analytic = wrapnorm.cdf(theta, mu, rho)
-    numeric = wrapnorm._cdf_from_pdf(theta, mu, rho)
-    np.testing.assert_allclose(analytic, numeric, atol=1e-7)
-    diffs = np.diff(analytic)
-    assert np.all(diffs >= -1e-10)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
-@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
-def test_wrapnorm_cdf_ppf_roundtrip(mu, rho):
-    wn = wrapnorm(rho=rho, mu=mu)
-    q = np.linspace(0.0, 1.0, num=9)
-    theta = wn.ppf(q)
-    np.testing.assert_array_less(-1e-12, theta)
-    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-10)
-    np.testing.assert_allclose(wn.cdf(theta), q, atol=5e-10)
-
-    grid = np.linspace(0.0, 2.0 * np.pi, num=9)
-    q_grid = wn.cdf(grid)
-    theta_back = wn.ppf(q_grid)
-    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
-    pdf_grid = wrapnorm.pdf(grid, mu=mu, rho=rho)
-    high_slope = pdf_grid > 1e-4
-    if np.any(high_slope):
-        np.testing.assert_allclose(wrapped[high_slope], 0.0, atol=5e-6)
-    if np.any(~high_slope):
-        np.testing.assert_allclose(wrapped[~high_slope], 0.0, atol=1e-2)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
-@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
-def test_wrapnorm_rvs_matches_constructor(mu, rho):
-    rng_samples = np.random.default_rng(789)
-    rng_replay = np.random.default_rng(789)
-
-    wn = wrapnorm(mu=mu, rho=rho)
-    samples = wn.rvs(size=512, random_state=rng_samples)
-    if np.isscalar(samples):
-        samples = np.array([samples])
-
-    rho_clipped = np.clip(rho, np.finfo(float).tiny, 1.0 - 1e-15)
-    two_pi = 2.0 * np.pi
-
-    if rho_clipped <= 1e-12:
-        expected = rng_replay.uniform(0.0, two_pi, size=samples.size)
-    else:
-        sigma = float(np.sqrt(-2.0 * np.log(rho_clipped)))
-        mu_mod = float(np.mod(mu, two_pi))
-        if sigma < 1e-12:
-            expected = np.full(samples.size, mu_mod, dtype=float)
-        else:
-            expected = rng_replay.normal(loc=mu_mod, scale=sigma, size=samples.size)
-            expected = np.mod(expected, two_pi)
-
-    np.testing.assert_allclose(np.sort(samples), np.sort(expected), atol=1e-10, rtol=0.0)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 4, np.pi])
-@pytest.mark.parametrize("rho", [0.1, 0.25, 0.5, 0.9])
-def test_wrapnorm_ppf_monotonic(mu, rho):
-    q = np.linspace(1e-12, 1.0 - 1e-12, 512)
-    theta = wrapnorm.ppf(q, mu=mu, rho=rho)
-    diffs = np.diff(theta)
-    assert np.all(diffs >= -1e-10), "Wrapped normal PPF must be non-decreasing"
-    assert np.all(theta >= -1e-12)
-    assert np.all(theta <= 2.0 * np.pi)
-
-
-_MONOTONIC_CASES = [
-    {
-        "id": "circularuniform",
-        "dist": circularuniform(),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "triangular-rho0",
-        "dist": triangular(rho=0.0),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "triangular-rho0.3",
-        "dist": triangular(rho=0.3),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "cardioid-rho0.2",
-        "dist": cardioid(rho=0.2, mu=0.3),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "cardioid-rho0.49",
-        "dist": cardioid(rho=0.49, mu=np.pi / 2),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "cartwright-zeta0.2",
-        "dist": cartwright(zeta=0.2, mu=0.1),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "cartwright-zeta1",
-        "dist": cartwright(zeta=1.0, mu=np.pi),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "cartwright-zeta5",
-        "dist": cartwright(zeta=5.0, mu=2.0),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "wrapnorm-rho0.1",
-        "dist": wrapnorm(rho=0.1, mu=0.0),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "wrapnorm-rho0.25",
-        "dist": wrapnorm(rho=0.25, mu=np.pi),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "wrapnorm-rho0.9",
-        "dist": wrapnorm(rho=0.9, mu=np.pi / 4),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "wrapcauchy-rho0.2",
-        "dist": wrapcauchy(rho=0.2, mu=0.5),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "wrapcauchy-rho0.95",
-        "dist": wrapcauchy(rho=0.95, mu=np.pi),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "vonmises-kappa0.05",
-        "dist": vonmises(kappa=0.05, mu=0.0),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "vonmises-kappa5",
-        "dist": vonmises(kappa=5.0, mu=np.pi / 4),
-        "theta_points": 256,
-        "q_points": 256,
-    },
-    {
-        "id": "vonmises-kappa25",
-        "dist": vonmises(kappa=25.0, mu=np.pi),
-        "theta_points": 256,
-        "q_points": 256,
-        "cdf_tol": 1e-10,
-    },
-    {
-        "id": "vonmises-flattopped",
-        "dist": vonmises_flattopped(mu=0.6, kappa=2.0, nu=0.3),
-        "theta_points": 192,
-        "q_points": 192,
-        "cdf_tol": 1e-10,
-        "ppf_tol": 1e-10,
-        "q_min": 1e-6,
-    },
-    {
-        "id": "jonespewsey",
-        "dist": jonespewsey(mu=0.6, kappa=1.0, psi=0.4),
-        "theta_points": 192,
-        "q_points": 192,
-        "cdf_tol": 1e-9,
-        "ppf_tol": 1e-9,
-        "q_min": 1e-6,
-    },
-    {
-        "id": "jonespewsey-sineskewed",
-        "dist": jonespewsey_sineskewed(xi=1.0, kappa=1.5, psi=0.3, lmbd=0.4),
-        "theta_points": 160,
-        "q_points": 160,
-        "cdf_tol": 5e-9,
-        "ppf_tol": 5e-9,
-        "q_min": 1e-5,
-    },
-    {
-        "id": "jonespewsey-asym",
-        "dist": jonespewsey_asym(xi=0.7, kappa=1.1, psi=0.2, nu=0.4),
-        "theta_points": 160,
-        "q_points": 160,
-        "cdf_tol": 5e-9,
-        "ppf_tol": 5e-9,
-        "q_min": 1e-5,
-    },
-    {
-        "id": "inverse-batschelet",
-        "dist": inverse_batschelet(xi=0.8, kappa=1.3, nu=0.3, lmbd=0.2),
-        "theta_points": 160,
-        "q_points": 160,
-        "cdf_tol": 1e-8,
-        "ppf_tol": 1e-8,
-        "q_min": 1e-5,
-    },
-    {
-        "id": "katojones",
-        "dist": katojones(mu=0.8, gamma=0.3, rho=0.2, lam=0.4),
-        "theta_points": 96,
-        "q_points": 96,
-        "cdf_tol": 1e-8,
-        "ppf_tol": 1e-8,
-        "q_min": 1e-5,
-    },
-    {
-        "id": "wrapstable",
-        "dist": wrapstable(delta=0.9, alpha=1.5, beta=0.2, gamma=0.4),
-        "theta_points": 96,
-        "q_points": 96,
-        "cdf_tol": 1e-8,
-        "ppf_tol": 1e-8,
-        "q_min": 1e-5,
-    },
-]
-
-
-@pytest.mark.parametrize(
-    "case",
-    [pytest.param(case, id=case["id"]) for case in _MONOTONIC_CASES],
-)
-def test_continuous_circular_monotonic(case):
-    theta_points = int(case.get("theta_points", 256))
-    q_points = int(case.get("q_points", 256))
-    q_min = float(case.get("q_min", 1e-12))
-
-    theta = np.linspace(0.0, 2.0 * np.pi, theta_points)
-    q = np.linspace(q_min, 1.0 - q_min, q_points)
-
-    _assert_monotonic_cdf_ppf(
-        case["dist"],
-        theta,
-        q,
-        cdf_tol=case.get("cdf_tol", 1e-11),
-        ppf_tol=case.get("ppf_tol", 1e-11),
-    )
-
-
-def test_vonmises_cdf_matches_numeric():
-    mu, kappa = 0.6, 3.2
-    theta = np.linspace(0.0, 2.0 * np.pi, 11)
-    analytic = vonmises.cdf(theta, mu, kappa)
-    numeric = vonmises._cdf_from_pdf(theta, mu, kappa)
-    np.testing.assert_allclose(analytic, numeric, atol=5e-7)
-    diffs = np.diff(analytic)
-    assert np.all(diffs >= -1e-10)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
-@pytest.mark.parametrize("kappa", [0.05, 1.0, 10.0, 50.0])
-def test_vonmises_cdf_ppf_roundtrip(mu, kappa):
-    vm = vonmises(mu=mu, kappa=kappa)
-    q = np.linspace(0.0, 1.0, num=11)
-    theta = vm.ppf(q)
-    np.testing.assert_array_less(-1e-12, theta)
-    np.testing.assert_array_less(theta, 2.0 * np.pi + 1e-10)
-    cdf_theta = vm.cdf(theta)
-    np.testing.assert_allclose(cdf_theta, q, atol=5e-12)
-
-    grid = np.linspace(0.0, 2.0 * np.pi, num=15)
-    q_grid = vm.cdf(grid)
-    theta_back = vm.ppf(q_grid)
-    wrapped = np.mod(theta_back - grid + np.pi, 2.0 * np.pi) - np.pi
-    pdf_grid = vonmises.pdf(grid, mu=mu, kappa=kappa)
-    high_slope = pdf_grid > 1e-4
-    if np.any(high_slope):
-        np.testing.assert_allclose(wrapped[high_slope], 0.0, atol=5e-6)
-
-
-@pytest.mark.parametrize("mu", [0.0, np.pi / 4])
-@pytest.mark.parametrize("kappa", [0.2, 2.0, 15.0])
-def test_vonmises_rvs_matches_constructor(mu, kappa):
-    rng_samples = np.random.default_rng(987)
-    rng_replay = np.random.default_rng(987)
-
-    vm = vonmises(mu=mu, kappa=kappa)
-    samples = vm.rvs(size=1024, random_state=rng_samples)
-    if np.isscalar(samples):
-        samples = np.array([samples])
-
-    expected = vm.dist._rvs(mu, kappa, size=1024, random_state=rng_replay)
-    if np.isscalar(expected):
-        expected = np.array([expected])
-
-    np.testing.assert_allclose(
-        np.sort(samples),
-        np.sort(expected),
-        atol=1e-10,
-        rtol=0.0,
-    )
-
-
 def test_circular_loc_scale_rejected():
     rng = np.random.default_rng(1234)
     sample = vonmises.rvs(kappa=1.0, mu=0.0, size=8, random_state=rng)
@@ -723,122 +1046,6 @@ def test_circular_loc_scale_rejected():
         vonmises.fit(sample, fscale=0.9)
 
 
-def test_vonmises():
-
-    vm = vonmises(kappa=2.37, mu=np.pi / 2)
-    np.testing.assert_approx_equal(
-        vm.cdf(np.pi / 6).round(4),
-        0.0543,
-        significant=3,
-    )
-    np.testing.assert_approx_equal(
-        vm.ppf(0.5),
-        1.6139,
-        significant=4,
-    )
-
-
-def test_jonespewsey():
-
-    jp = jonespewsey(kappa=2, psi=-1.5, mu=np.pi / 2)
-
-    np.testing.assert_approx_equal(
-        jp.cdf(np.pi / 2).round(7),
-        0.4401445,
-        significant=7,
-    )
-    # take a long time to run jonespewsey.ppf()
-    # might need to implement the method explicitly
-    np.testing.assert_approx_equal(
-        jp.ppf(q=0.4401445),
-        np.pi / 2,
-        significant=7,
-    )
-
-
-def test_jonespewsey_cdf_ppf_roundtrip():
-    dist = jonespewsey(kappa=1.2, psi=0.8, mu=1.1)
-    q = np.linspace(0.05, 0.95, 9)
-    theta = dist.ppf(q)
-    np.testing.assert_allclose(dist.cdf(theta), q, atol=5e-6)
-
-
-def test_jonespewsey_rvs_reasonable():
-    dist = jonespewsey(kappa=1.4, psi=-0.6, mu=1.0)
-    _assert_rvs_reasonable(dist, size=256, seed=42)
-
-
-def test_vonmises_flattopped():
-
-    vme = vonmises_flattopped(kappa=2, nu=-0.5, mu=np.pi / 2)
-    np.testing.assert_approx_equal(
-        vme.cdf(x=3 * np.pi / 4).round(4),
-        0.7120,
-        significant=4,
-    )
-    np.testing.assert_approx_equal(
-        vme.ppf(q=0.5).round(4),
-        1.7301,
-        significant=4,
-    )
-
-
-def test_jonespewsey_sineskewed():
-
-    jps = jonespewsey_sineskewed(kappa=2, psi=1, lmbd=0.5, xi=np.pi / 2)
-
-    np.testing.assert_approx_equal(
-        jps.cdf(x=3 * np.pi / 2).round(4),
-        0.9446,
-        significant=4,
-    )
-    np.testing.assert_approx_equal(
-        jps.ppf(q=0.5).round(4),
-        2.1879,
-        significant=4,
-    )
-
-
-def test_jonespewsey_sineskewed_rvs_reasonable():
-    dist = jonespewsey_sineskewed(kappa=1.1, psi=0.4, lmbd=0.3, xi=1.0)
-    _assert_rvs_reasonable(dist, size=256, seed=123)
-
-
-def test_jonespewsey_asym():
-
-    jpa = jonespewsey_asym(kappa=2, psi=-1, nu=0.75, xi=np.pi / 2)
-    np.testing.assert_approx_equal(
-        jpa.cdf(x=np.pi / 2).round(4),
-        0.7535,
-        significant=4,
-    )
-    np.testing.assert_approx_equal(
-        jpa.ppf(q=0.5).round(4),
-        1.0499,
-        significant=4,
-    )
-
-
-def test_jonespewsey_asym_rvs_reasonable():
-    dist = jonespewsey_asym(kappa=1.8, psi=-0.9, nu=0.4, xi=0.7)
-    _assert_rvs_reasonable(dist, size=256, seed=321)
-
-
-def test_inverse_batschelet():
-
-    ib = inverse_batschelet(kappa=2, nu=-0.5, lmbd=0.7, xi=np.pi / 2)
-    np.testing.assert_approx_equal(
-        ib.cdf(x=np.pi / 2).round(4),
-        0.1180,
-        significant=4,
-    )
-    np.testing.assert_approx_equal(
-        ib.ppf(q=0.5).round(4),
-        2.5138,
-        significant=4,
-    )
-
-
 def test_inverse_batschelet_pdf_uniform_limit():
     theta = np.linspace(0.0, 2.0 * np.pi, 9)
     vals = inverse_batschelet.pdf(theta, xi=0.7, kappa=0.0, nu=0.3, lmbd=-0.6)
@@ -852,45 +1059,6 @@ def test_inverse_batschelet_pdf_scalar_consistency():
     array_vals = inverse_batschelet.pdf(angles, **params)
     scalar_vals = np.array([inverse_batschelet.pdf(float(a), **params) for a in angles])
     np.testing.assert_allclose(array_vals, scalar_vals, atol=5e-12, rtol=0.0)
-
-
-def test_inverse_batschelet_cdf_matches_numeric():
-    params = dict(xi=0.9, kappa=2.4, nu=-0.35, lmbd=0.6)
-    theta = np.linspace(0.0, 2.0 * np.pi, 25)
-    analytic = inverse_batschelet.cdf(theta, **params)
-    numeric = inverse_batschelet._cdf_from_pdf(
-        theta,
-        params["xi"],
-        params["kappa"],
-        params["nu"],
-        params["lmbd"],
-    )
-    np.testing.assert_allclose(analytic, numeric, atol=5e-5, rtol=1e-4)
-
-
-def test_inverse_batschelet_cdf_monotonic():
-    params = dict(xi=0.3, kappa=3.5, nu=0.4, lmbd=-0.5)
-    theta = np.linspace(0.0, 2.0 * np.pi, 257)
-    cdf_vals = inverse_batschelet.cdf(theta, **params)
-    diffs = np.diff(cdf_vals)
-    assert np.all(diffs >= -1e-11), "CDF must be non-decreasing"
-
-
-def test_inverse_batschelet_ppf_roundtrip():
-    params = dict(xi=0.4, kappa=2.2, nu=-0.25, lmbd=0.55)
-    q = np.linspace(1e-5, 1.0 - 1e-5, 61)
-    theta = inverse_batschelet.ppf(q, **params)
-    q_back = inverse_batschelet.cdf(theta, **params)
-    np.testing.assert_allclose(q_back, q, atol=5e-10, rtol=0.0)
-
-    # Endpoints
-    np.testing.assert_allclose(inverse_batschelet.ppf(0.0, **params), 0.0, atol=1e-12)
-    np.testing.assert_allclose(inverse_batschelet.ppf(1.0, **params), 2.0 * np.pi, atol=1e-12)
-
-
-def test_inverse_batschelet_rvs_reasonable():
-    dist = inverse_batschelet(xi=0.6, kappa=2.8, nu=-0.3, lmbd=0.45)
-    _assert_rvs_reasonable(dist, size=512, seed=987, uniform_tol=0.02)
 
 
 def test_inverse_batschelet_fit_moments():
@@ -1111,13 +1279,16 @@ def test_katojones_rvs_reasonable():
     dist = katojones(mu=0.7, gamma=0.5, rho=0.25, lam=1.2)
     _assert_rvs_reasonable(dist, size=512, seed=2025, uniform_tol=0.01)
     
-def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05):
+def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05, cdf_callable=None):
     rng = np.random.default_rng(seed)
     samples = dist.rvs(size=size, random_state=rng)
     samples = np.asarray(samples, dtype=float)
     assert samples.size == size
 
-    u = dist.cdf(samples)
+    if cdf_callable is None:
+        u = dist.cdf(samples)
+    else:
+        u = cdf_callable(samples)
     u = np.mod(u, 1.0)
     stat, pvalue = stats.kstest(u, "uniform")
     assert pvalue > uniform_tol, f"kstest failed: statistic={stat}, p={pvalue}"
