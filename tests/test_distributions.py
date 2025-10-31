@@ -990,7 +990,7 @@ def test_wrapstable_ppf_roundtrip():
 
 def test_wrapstable_rvs_reasonable():
     dist = wrapstable(delta=0.6, alpha=1.3, beta=-0.2, gamma=0.7)
-    _assert_rvs_reasonable(dist, size=512, seed=2024, uniform_tol=0.02)
+    _assert_rvs_reasonable(dist, size=512, seed=2024, uniform_tol=0.005)
 
 
 def test_wrapstable_rvs_reduces_to_wrapped_normal():
@@ -1004,6 +1004,37 @@ def test_wrapstable_rvs_reduces_to_wrapped_normal():
     m1_ws = np.mean(np.exp(1j * samples))
     m1_wn = np.mean(np.exp(1j * wn_samples))
     np.testing.assert_allclose(m1_ws, m1_wn, atol=0.05)
+
+
+def test_wrapstable_fit_moments():
+    rng = np.random.default_rng(12)
+    params = dict(delta=0.9, alpha=1.4, beta=-0.25, gamma=0.6)
+    data = wrapstable.rvs(size=800, random_state=rng, **params)
+    delta_hat, alpha_hat, beta_hat, gamma_hat = wrapstable.fit(data, method="moments")
+
+    np.testing.assert_allclose(_angle_diff(delta_hat, params["delta"]), 0.0, atol=0.3)
+    np.testing.assert_allclose(alpha_hat, params["alpha"], atol=0.35)
+    np.testing.assert_allclose(beta_hat, params["beta"], atol=0.35)
+    np.testing.assert_allclose(gamma_hat, params["gamma"], atol=0.3)
+
+
+def test_wrapstable_fit_mle():
+    rng = np.random.default_rng(34)
+    params = dict(delta=0.7, alpha=1.6, beta=0.3, gamma=0.5)
+    data = wrapstable.rvs(size=1200, random_state=rng, **params)
+
+    (delta_hat, alpha_hat, beta_hat, gamma_hat), info = wrapstable.fit(
+        data,
+        method="mle",
+        return_info=True,
+        options={"maxiter": 200},
+    )
+
+    assert info["converged"]
+    np.testing.assert_allclose(_angle_diff(delta_hat, params["delta"]), 0.0, atol=0.2)
+    np.testing.assert_allclose(alpha_hat, params["alpha"], atol=0.2)
+    np.testing.assert_allclose(beta_hat, params["beta"], atol=0.25)
+    np.testing.assert_allclose(gamma_hat, params["gamma"], atol=0.2)
 
 
 def _angle_diff(a, b):

@@ -7348,20 +7348,34 @@ def _invbat_grid_size(kappa, nu, lmbd):
 
 
 class wrapstable_gen(CircularContinuous):
-    r"""
-    Wrapped Stable Distribution
-
-    - is symmetric around $\delta$ when $\beta = 0$, and to be skewed to the right (left) if $\beta > 0$ ($\beta < 0$).
-    - can be reduced to
-        - the wrapped normal distribution when $\alpha = 2, \beta = 0$.
-        - the wrapped Cauchy distribution when $\alpha = 1, \beta = 0$.
-        - the wrappd Lévy distribution when $\alpha = 1/2, \beta = 1$
+    r"""Wrapped Stable Distribution
 
     ![wrapstable](../images/circ-mod-wrapstable.png)
 
+    The wrapped stable family results from wrapping a linear stable law onto
+    ``[0, 2π)``. Its trigonometric moments satisfy
+
+    $$
+    \mathbb{E}\big[e^{ip\Theta}\big] = \rho_p e^{i\mu_p}, \qquad
+    \rho_p = \exp\left[-(\gamma p)^\alpha\right],
+    $$
+
+    with
+
+    $$
+    \mu_p =
+    \begin{cases}
+        \delta p + \beta \tan\left(\tfrac{\pi\alpha}{2}\right)\bigl((\gamma p)^\alpha - \gamma p\bigr), & \alpha \ne 1, \\[6pt]
+        \delta p + \tfrac{2}{\pi}\beta\gamma p \log(\gamma p), & \alpha = 1.
+    \end{cases}
+    $$
+
+    Special cases include the wrapped normal (``α=2, β=0``), wrapped Cauchy
+    (``α=1, β=0``), and wrapped Lévy (``α=1/2, β=1``).
+
     References
     ----------
-    - Pewsey, A. (2008). The wrapped stable family of distributions as a flexible model for circular data. Computational Statistics & Data Analysis, 52(3), 1516-1523.
+    - Pewsey (2008). *Computational Statistics & Data Analysis* 52(3), 1516-1523.
     """
 
     def __init__(self, *args, **kwargs):
@@ -7600,6 +7614,208 @@ class wrapstable_gen(CircularContinuous):
         gamma_val = self._scalar_param(gamma)
         return super().rvs(delta_val, alpha_val, beta_val, gamma_val, size=size, random_state=random_state)
 
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        optimizer="L-BFGS-B",
+        options=None,
+        alpha_bounds=(1e-3, 2.0),
+        beta_bounds=(-0.99, 0.99),
+        gamma_bounds=(1e-6, 10.0),
+        return_info=False,
+        **minimize_kwargs,
+    ):
+        r"""Estimate ``(delta, alpha, beta, gamma)`` from circular data."""
+
+        minimize_kwargs = self._sanitize_fit_kwargs(minimize_kwargs)
+        minimize_kwargs.pop("floc", None)
+        minimize_kwargs.pop("fscale", None)
+
+        data_arr = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
+        if data_arr.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(data_arr, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, data_arr.shape).astype(float, copy=False).ravel()
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0.0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = float(w_sum**2 / np.sum(w**2))
+
+        def weighted_moment(p):
+            return np.sum(w * np.exp(1j * p * data_arr)) / w_sum
+
+        m1 = weighted_moment(1)
+        m2 = weighted_moment(2)
+
+        r1 = float(np.clip(abs(m1), 1e-9, 1 - 1e-9))
+        r2 = float(np.clip(abs(m2), 1e-9, 1 - 1e-9))
+
+        if r1 >= 1 - 1e-6 or r2 >= 1 - 1e-6:
+            alpha_mom = 1.0
+            gamma_mom = 1e-3
+        else:
+            y1 = float(np.log(-np.log(r1)))
+            y2 = float(np.log(-np.log(r2)))
+            slope = (y2 - y1) / np.log(2.0)
+            alpha_mom = float(np.clip(slope, alpha_bounds[0], alpha_bounds[1]))
+            gamma_mom = float(np.exp(y1 / alpha_mom))
+            gamma_mom = float(np.clip(gamma_mom, gamma_bounds[0], gamma_bounds[1]))
+
+        phi1 = float(np.angle(m1))
+        phi2_raw = float(np.angle(m2))
+        phi2 = phi2_raw + 2.0 * np.pi * round((2.0 * phi1 - phi2_raw) / (2.0 * np.pi))
+
+        if abs(alpha_mom - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
+            B1 = (2.0 / np.pi) * gamma_mom * np.log(gamma_mom)
+            B2 = (2.0 / np.pi) * (gamma_mom * 2.0) * np.log(gamma_mom * 2.0)
+            denom = B2 - 2.0 * B1
+            if abs(denom) < 1e-8:
+                beta_mom = 0.0
+                delta_mom = phi1
+            else:
+                beta_mom = (phi2 - 2.0 * phi1) / denom
+                beta_mom = float(np.clip(beta_mom, beta_bounds[0], beta_bounds[1]))
+                delta_mom = phi1 - beta_mom * B1
+        else:
+            A = np.tan(0.5 * np.pi * alpha_mom)
+            B1 = (gamma_mom) ** alpha_mom - gamma_mom
+            B2 = (gamma_mom * 2.0) ** alpha_mom - gamma_mom * 2.0
+            denom = A * (B2 - 2.0 * B1)
+            if abs(denom) < 1e-8:
+                beta_mom = 0.0
+                delta_mom = phi1
+            else:
+                beta_mom = (phi2 - 2.0 * phi1) / denom
+                beta_mom = float(np.clip(beta_mom, beta_bounds[0], beta_bounds[1]))
+                delta_mom = phi1 - beta_mom * A * B1
+
+        delta_mom = float(np.mod(delta_mom, 2.0 * np.pi))
+
+        if method == "moments":
+            estimates = (delta_mom, alpha_mom, beta_mom, gamma_mom)
+            if return_info:
+                info = {
+                    "method": "moments",
+                    "converged": True,
+                    "n_effective": n_eff,
+                }
+                return estimates, info
+            return estimates
+
+        method_key = str(method).lower()
+        if method_key != "mle":
+            raise ValueError("`method` must be one of {'mle', 'moments' }.")
+
+        def nll(params):
+            delta_param, alpha_param, beta_param, gamma_param = params
+            if not (0.0 <= delta_param <= 2.0 * np.pi):
+                return np.inf
+            if not (alpha_bounds[0] <= alpha_param <= alpha_bounds[1]):
+                return np.inf
+            if not (beta_bounds[0] <= beta_param <= beta_bounds[1]):
+                return np.inf
+            if not (gamma_bounds[0] <= gamma_param <= gamma_bounds[1]):
+                return np.inf
+
+            pdf_vals = self._pdf(data_arr, delta_param, alpha_param, beta_param, gamma_param)
+            if np.any(pdf_vals <= 0.0) or not np.all(np.isfinite(pdf_vals)):
+                return np.inf
+            return float(-np.sum(w * np.log(pdf_vals)))
+
+        delta_candidates = np.mod(
+            np.array([delta_mom, phi1, phi2 / 2.0]), 2.0 * np.pi
+        )
+        alpha_candidates = np.clip(
+            np.array([alpha_mom, 1.0, min(1.9, alpha_mom * 1.2)]), alpha_bounds[0], alpha_bounds[1]
+        )
+        beta_candidates = np.clip(
+            np.array([beta_mom, 0.0, np.sign(beta_mom) * 0.5]), beta_bounds[0], beta_bounds[1]
+        )
+        gamma_candidates = np.clip(
+            np.array([gamma_mom, max(gamma_bounds[0], gamma_mom * 0.8), min(gamma_bounds[1], gamma_mom * 1.2)]),
+            gamma_bounds[0],
+            gamma_bounds[1],
+        )
+
+        best_params = (delta_mom, alpha_mom, beta_mom, gamma_mom)
+        best_score = nll(best_params)
+        for d0 in delta_candidates:
+            for a0 in alpha_candidates:
+                for b0 in beta_candidates:
+                    for g0 in gamma_candidates:
+                        cand = (float(d0), float(a0), float(b0), float(g0))
+                        score = nll(cand)
+                        if score < best_score:
+                            best_score = score
+                            best_params = cand
+
+        bounds = [
+            (0.0, 2.0 * np.pi),
+            tuple(alpha_bounds),
+            tuple(beta_bounds),
+            tuple(gamma_bounds),
+        ]
+
+        init = np.array(best_params, dtype=float)
+        options = {} if options is None else dict(options)
+
+        optimizer_used = optimizer
+        result = minimize(
+            nll,
+            init,
+            method=optimizer,
+            bounds=bounds,
+            options=options,
+            **minimize_kwargs,
+        )
+
+        if not result.success and optimizer != "Powell":
+            fallback = minimize(
+                nll,
+                init,
+                method="Powell",
+                bounds=bounds,
+                options={},
+                **minimize_kwargs,
+            )
+            if fallback.success:
+                result = fallback
+                optimizer_used = "Powell"
+
+        if not result.success:
+            raise RuntimeError(f"Maximum likelihood fit failed: {result.message}")
+
+        delta_hat = float(np.mod(result.x[0], 2.0 * np.pi))
+        alpha_hat = float(np.clip(result.x[1], alpha_bounds[0], alpha_bounds[1]))
+        beta_hat = float(np.clip(result.x[2], beta_bounds[0], beta_bounds[1]))
+        gamma_hat = float(np.clip(result.x[3], gamma_bounds[0], gamma_bounds[1]))
+
+        estimates = (delta_hat, alpha_hat, beta_hat, gamma_hat)
+        if not return_info:
+            return estimates
+
+        info = {
+            "method": "mle",
+            "loglik": float(-result.fun),
+            "n_effective": n_eff,
+            "converged": bool(result.success),
+            "optimizer": optimizer_used,
+            "nit": getattr(result, "nit", np.nan),
+            "nfev": getattr(result, "nfev", np.nan),
+            "message": result.message,
+        }
+        return estimates, info
+
     def _get_series_terms(self, delta, alpha, beta, gamma):
         delta_s = self._scalar_param(delta)
         alpha_s = self._scalar_param(alpha)
@@ -7643,7 +7859,9 @@ class wrapstable_gen(CircularContinuous):
         if abs(alpha - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
             mu_vals = delta * p + (2.0 / np.pi) * beta * gamma * p * np.log(gamma * p)
         else:
-            mu_vals = delta * p + beta * np.tan(0.5 * np.pi * alpha) * ((gamma * p) ** alpha)
+            mu_vals = delta * p + beta * np.tan(0.5 * np.pi * alpha) * (
+                (gamma * p) ** alpha - gamma * p
+            )
 
         return rho_vals, mu_vals, p
 
