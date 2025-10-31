@@ -62,6 +62,8 @@ class MovM:
         Responsibility matrix (posterior probabilities of clusters for each data point).
     labels : np.ndarray
         The most probable cluster assignment for each data point.
+    params_ : list of dict or None
+        Per-component parameter dictionaries ({"mu", "kappa"}) populated after :meth:`fit`.
 
     Examples
     --------
@@ -119,6 +121,7 @@ class MovM:
         self.data: Optional[np.ndarray] = None
         self.alpha: Optional[np.ndarray] = None
         self.n: Optional[int] = None
+        self.params_: Optional[List[Dict[str, float]]] = None
 
     def _initialize(
         self,
@@ -261,6 +264,9 @@ class MovM:
         self.r_ = resultants
         self.p_ = p
         self.kappa_ = kappa
+        self.params_ = [
+            {"mu": float(self.m_[i]), "kappa": float(self.kappa_[i])} for i in range(self.n_clusters)
+        ]
         log_gamma_final = self._log_gamma(alpha, p, means, kappa)
         log_norm_final = np.logaddexp.reduce(log_gamma_final, axis=0, keepdims=True)
         gamma_final = np.exp(log_gamma_final - log_norm_final)
@@ -497,6 +503,8 @@ class MoKJ:
     alpha : np.ndarray
         Data in radians.
     n : int
+    params_ : list of dict or None
+        Per-component parameter dictionaries ({"mu", "gamma", "rho", "lam"}) after fit.
     """
 
     def __init__(
@@ -554,6 +562,7 @@ class MoKJ:
         self.data: Optional[np.ndarray] = None
         self.alpha: Optional[np.ndarray] = None
         self.n: Optional[int] = None
+        self.params_: Optional[List[Dict[str, float]]] = None
 
     # ---------- initialization ----------
 
@@ -790,6 +799,15 @@ class MoKJ:
         self.nLL = nLL_hist[~np.isnan(nLL_hist)]
         self.mu_, self.gamma_, self.rho_, self.lam_ = mu, gamma, rho, lam
         self.p_ = p
+        self.params_ = [
+            {
+                "mu": float(mu[i]),
+                "gamma": float(gamma[i]),
+                "rho": float(rho[i]),
+                "lam": float(lam[i]),
+            }
+            for i in range(self.n_clusters)
+        ]
         # final responsibilities & labels
         log_resp = self._log_gamma(alpha, p, mu, gamma, rho, lam)
         log_norm = logsumexp(log_resp, axis=0, keepdims=True)
