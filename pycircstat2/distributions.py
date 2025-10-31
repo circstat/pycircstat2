@@ -65,6 +65,9 @@ _INVBAT_NU_TOL = 1e-12
 _INVBAT_LMBDA_TOL = 1e-12
 _INVBAT_MIN_GRID = 512
 _INVBAT_MAX_GRID = 8192
+_INVBAT_NEWTON_MAXITER = 60
+_INVBAT_NEWTON_TOL = 1e-12
+_INVBAT_NEWTON_WIDTH_TOL = 1e-10
 
 OPTIMIZERS = [
     "Nelder-Mead",
@@ -6572,15 +6575,147 @@ class inverse_batschelet_gen(CircularContinuous):
         lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
         return super().cdf(x, xi_val, kappa_val, nu_val, lmbd_val, *args, **kwargs)
 
+    def _ppf(self, q, xi, kappa, nu, lmbd):
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+
+        q_arr = np.asarray(q, dtype=float)
+        flat = q_arr.reshape(-1)
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        two_pi = 2.0 * np.pi
+        result = np.full_like(flat, np.nan, dtype=float)
+
+        valid = np.isfinite(flat) & (flat >= 0.0) & (flat <= 1.0)
+        if not np.any(valid):
+            shaped = result.reshape(q_arr.shape)
+            return float(shaped) if q_arr.ndim == 0 else shaped
+
+        q_valid = flat[valid]
+        close_zero = np.isclose(q_valid, 0.0, rtol=0.0, atol=1e-12)
+        close_one = np.isclose(q_valid, 1.0, rtol=0.0, atol=1e-12)
+
+        if kappa_val <= _INVBAT_KAPPA_TOL:
+            theta = (two_pi * q_valid) % two_pi
+            if np.any(close_zero):
+                theta[close_zero] = 0.0
+            if np.any(close_one):
+                theta[close_one] = two_pi
+            result[valid] = theta
+        else:
+            table = self._get_invbat_table(kappa_val, nu_val, lmbd_val)
+            phi_grid = table["phi"]
+            cdf_grid = table["cdf"]
+            cdf_interp = table["cdf_interp"]
+            inv_interp = table["inv_cdf_interp"]
+            pdf_interp = table["pdf_interp"]
+
+            phi_start = ((-xi_val + np.pi) % two_pi) - np.pi
+            H_start = float(cdf_interp(phi_start))
+            targets = (H_start + q_valid) % 1.0
+
+            phi_candidates = (
+                inv_interp(targets)
+                if inv_interp is not None
+                else np.interp(targets, cdf_grid, phi_grid, left=phi_grid[0], right=phi_grid[-1])
+            )
+
+            theta_vals = np.empty_like(q_valid)
+            for idx, (target, phi0) in enumerate(zip(targets, phi_candidates)):
+                if close_zero[idx]:
+                    theta_vals[idx] = 0.0
+                    continue
+                if close_one[idx]:
+                    theta_vals[idx] = two_pi
+                    continue
+
+                i_hi = int(np.clip(np.searchsorted(cdf_grid, target, side="right"), 1, len(phi_grid) - 1))
+                phi_lo = float(phi_grid[i_hi - 1])
+                phi_hi = float(phi_grid[i_hi])
+                phi = float(np.clip(phi0, phi_lo, phi_hi))
+
+                for _ in range(_INVBAT_NEWTON_MAXITER):
+                    H_phi = float(cdf_interp(phi))
+                    residual = H_phi - target
+                    pdf_val = float(pdf_interp(phi))
+                    pdf_val = max(pdf_val, np.finfo(float).tiny)
+
+                    if abs(residual) <= _INVBAT_NEWTON_TOL and (phi_hi - phi_lo) <= _INVBAT_NEWTON_WIDTH_TOL:
+                        break
+
+                    if residual > 0.0:
+                        phi_hi = min(phi_hi, phi)
+                    else:
+                        phi_lo = max(phi_lo, phi)
+
+                    step = residual / pdf_val
+                    phi_candidate = phi - step
+                    if not np.isfinite(phi_candidate) or phi_candidate <= phi_lo or phi_candidate >= phi_hi:
+                        phi_candidate = 0.5 * (phi_lo + phi_hi)
+                    phi = float(np.clip(phi_candidate, phi_lo, phi_hi))
+
+                theta_vals[idx] = (xi_val + phi) % two_pi
+
+            result[valid] = theta_vals
+
+        shaped = result.reshape(q_arr.shape)
+        if q_arr.ndim == 0:
+            return float(shaped)
+        return shaped
+
+    def ppf(self, q, xi, kappa, nu, lmbd, *args, **kwargs):
+        r"""
+        Percent-point function (quantile) of the inverse Batschelet distribution.
+
+        Quantiles are obtained by inverting the cached cumulative table described in
+        :meth:`cdf`. A monotone initial guess supplied by the table inverse is refined
+        with safeguarded Newton steps that leverage the tabulated density, while
+        preserving a bracketing interval. For $\kappa \rightarrow 0$, the quantile
+        reduces to the linear uniform mapping $2\pi q$.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (0 <= q <= 1).
+        xi : float
+            Direction parameter, $0 \leq \xi \leq 2\pi$.
+        kappa : float
+            Concentration parameter, $\kappa \geq 0$.
+        nu : float
+            Shape parameter, $-1 \leq \nu \leq 1$.
+        lmbd : float
+            Skewness parameter, $-1 \leq \lambda \leq 1$.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles corresponding to the probabilities in `q`.
+        """
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+        return super().ppf(q, xi_val, kappa_val, nu_val, lmbd_val, *args, **kwargs)
+
     def _get_invbat_table(self, kappa, nu, lmbd, grid_size=None):
         kappa_val = float(np.clip(kappa, 0.0, _INVBAT_KAPPA_UPPER))
         nu_val = float(nu)
         lmbd_val = float(lmbd)
         if kappa_val <= _INVBAT_KAPPA_TOL:
+            phi = np.array([-np.pi, np.pi], dtype=float)
+            pdf_vals = np.full(2, 1.0 / (2.0 * np.pi), dtype=float)
+            cdf_interp = PchipInterpolator(phi, [0.0, 1.0], extrapolate=True)
+            pdf_interp = PchipInterpolator(phi, pdf_vals, extrapolate=True)
             return {
-                "phi": np.array([-np.pi, np.pi], dtype=float),
-                "cdf_interp": PchipInterpolator([-np.pi, np.pi], [0.0, 1.0], extrapolate=True),
-                "pdf": np.full(2, 1.0 / (2.0 * np.pi), dtype=float),
+                "phi": phi,
+                "pdf": pdf_vals,
+                "cdf": np.array([0.0, 1.0], dtype=float),
+                "cdf_interp": cdf_interp,
+                "pdf_interp": pdf_interp,
+                "inv_cdf_interp": PchipInterpolator([0.0, 1.0], phi, extrapolate=True),
                 "log_normalizer": -np.log(2.0 * np.pi),
             }
 
@@ -6650,11 +6785,14 @@ class inverse_batschelet_gen(CircularContinuous):
             else None
         )
 
+        pdf_interp = PchipInterpolator(phi, pdf, extrapolate=True)
+
         return {
             "phi": phi,
             "pdf": pdf,
             "cdf": cumulative,
             "cdf_interp": cdf_interp,
+            "pdf_interp": pdf_interp,
             "inv_cdf_interp": inv_cdf_interp,
             "log_normalizer": log_norm,
         }

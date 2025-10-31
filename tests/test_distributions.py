@@ -876,6 +876,18 @@ def test_inverse_batschelet_cdf_monotonic():
     assert np.all(diffs >= -1e-11), "CDF must be non-decreasing"
 
 
+def test_inverse_batschelet_ppf_roundtrip():
+    params = dict(xi=0.4, kappa=2.2, nu=-0.25, lmbd=0.55)
+    q = np.linspace(1e-5, 1.0 - 1e-5, 61)
+    theta = inverse_batschelet.ppf(q, **params)
+    q_back = inverse_batschelet.cdf(theta, **params)
+    np.testing.assert_allclose(q_back, q, atol=5e-10, rtol=0.0)
+
+    # Endpoints
+    np.testing.assert_allclose(inverse_batschelet.ppf(0.0, **params), 0.0, atol=1e-12)
+    np.testing.assert_allclose(inverse_batschelet.ppf(1.0, **params), 2.0 * np.pi, atol=1e-12)
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 
