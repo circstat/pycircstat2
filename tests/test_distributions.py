@@ -921,6 +921,40 @@ def test_inverse_batschelet_fit_mle():
     np.testing.assert_allclose(lmbd_hat, lmbd_true, atol=0.12)
 
 
+def test_wrapstable_pdf_scalar_consistency():
+    params = dict(delta=0.4, alpha=1.4, beta=-0.3, gamma=0.6)
+    theta = np.linspace(0.0, 2.0 * np.pi, 9)
+    array_vals = wrapstable.pdf(theta, **params)
+    scalar_vals = np.array([wrapstable.pdf(float(t), **params) for t in theta])
+    np.testing.assert_allclose(array_vals, scalar_vals, atol=5e-13, rtol=0.0)
+
+
+def test_wrapstable_pdf_matches_wrapped_normal():
+    delta = 0.7
+    gamma = 0.5
+    theta = np.linspace(0.0, 2.0 * np.pi, 13)
+    ws_vals = wrapstable.pdf(theta, delta=delta, alpha=2.0, beta=0.0, gamma=gamma)
+    rho = np.exp(-(gamma ** 2))
+    wn_vals = wrapnorm.pdf(theta, mu=delta, rho=rho)
+    np.testing.assert_allclose(ws_vals, wn_vals, atol=1e-6, rtol=5e-6)
+
+
+def test_wrapstable_pdf_matches_wrapcauchy():
+    delta = 1.2
+    gamma = 0.8
+    theta = np.linspace(0.0, 2.0 * np.pi, 17)
+    ws_vals = wrapstable.pdf(theta, delta=delta, alpha=1.0, beta=0.0, gamma=gamma)
+    rho = np.exp(-gamma)
+    wc_vals = wrapcauchy.pdf(theta, mu=delta, rho=rho)
+    np.testing.assert_allclose(ws_vals, wc_vals, atol=1e-7, rtol=1e-6)
+
+
+def test_wrapstable_series_adaptive_truncation():
+    rho_vals, mu_vals, p = wrapstable._get_series_terms(delta=0.0, alpha=1.6, beta=0.1, gamma=0.02)
+    assert len(p) > 150
+    assert rho_vals.shape == mu_vals.shape == p.shape
+
+
 def _angle_diff(a, b):
     return np.mod(a - b + np.pi, 2 * np.pi) - np.pi
 

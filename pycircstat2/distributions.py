@@ -70,6 +70,11 @@ _INVBAT_NEWTON_TOL = 1e-12
 _INVBAT_NEWTON_WIDTH_TOL = 1e-10
 _INVBAT_ENV_MIN_KAPPA = 1e-6
 
+_WRAPSTABLE_PDF_TOL = 1e-12
+_WRAPSTABLE_CDF_TOL = 1e-12
+_WRAPSTABLE_ALPHA_TOL = 1e-10
+_WRAPSTABLE_MAX_TERMS = 20000
+
 OPTIMIZERS = [
     "Nelder-Mead",
     "Powell",
@@ -7356,12 +7361,13 @@ class wrapstable_gen(CircularContinuous):
     - Pewsey, A. (2008). The wrapped stable family of distributions as a flexible model for circular data. Computational Statistics & Data Analysis, 52(3), 1516-1523.
     """
 
-    _series_term_limit = 150
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._series_cache = {}
-        self._series_indices = np.arange(1, self._series_term_limit, dtype=float)
+
+    def _clear_normalization_cache(self):
+        super()._clear_normalization_cache()
+        self._series_cache = {}
 
     def _validate_params(self, delta, alpha, beta, gamma):
         return (
@@ -7379,8 +7385,7 @@ class wrapstable_gen(CircularContinuous):
 
     def _pdf(self, x, delta, alpha, beta, gamma):
         x_arr = np.asarray(x, dtype=float)
-        rho_vals, mu_vals = self._get_series_terms(delta, alpha, beta, gamma)
-        p = self._series_indices
+        rho_vals, mu_vals, p = self._get_series_terms(delta, alpha, beta, gamma)
         cos_args = p[:, np.newaxis] * x_arr[np.newaxis, ...] - mu_vals[:, np.newaxis]
         series_sum = np.sum(rho_vals[:, np.newaxis] * np.cos(cos_args), axis=0)
         pdf_values = 1 / (2 * np.pi) * (1 + 2 * series_sum)
@@ -7447,15 +7452,40 @@ class wrapstable_gen(CircularContinuous):
         return cache[key]
 
     def _compute_series_terms(self, delta, alpha, beta, gamma):
-        p = self._series_indices
+        if gamma <= 0.0:
+            raise ValueError("`gamma` must be positive for wrapstable.")
+
+        def _initial_order(tol):
+            if tol <= 0.0:
+                return 1
+            log_term = -np.log(tol)
+            if log_term <= 0.0:
+                return 1
+            return int(np.ceil((log_term ** (1.0 / alpha)) / gamma))
+
+        p_pdf = _initial_order(_WRAPSTABLE_PDF_TOL)
+        p_cdf = _initial_order(_WRAPSTABLE_CDF_TOL)
+        P = max(1, p_pdf, p_cdf)
+
+        for _ in range(_WRAPSTABLE_MAX_TERMS):
+            rho_P = np.exp(-((gamma * P) ** alpha))
+            if rho_P <= _WRAPSTABLE_PDF_TOL and rho_P / P <= _WRAPSTABLE_CDF_TOL:
+                break
+            P += 1
+        else:  # pragma: no cover - defensive guard
+            raise RuntimeError("wrapstable series truncation exceeded maximum terms.")
+
+        p = np.arange(1, P + 1, dtype=float)
         rho_vals = np.exp(-((gamma * p) ** alpha))
-        if np.all(alpha == 1):
-            mu_vals = delta * p - 2 * beta * gamma * p * np.log(gamma * p) / np.pi
+
+        if abs(alpha - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
+            mu_vals = delta * p - (2.0 / np.pi) * beta * gamma * p * np.log(gamma * p)
         else:
-            mu_vals = delta * p + beta * np.tan(np.pi * alpha / 2) * (
+            mu_vals = delta * p + beta * np.tan(0.5 * np.pi * alpha) * (
                 (gamma * p) ** alpha - gamma * p
             )
-        return rho_vals, mu_vals
+
+        return rho_vals, mu_vals, p
 
     @staticmethod
     def _scalar_param(value):
