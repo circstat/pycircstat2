@@ -14,3 +14,5 @@ dev/
 dist/
 docs/site/
 build/
+
+*copy*
