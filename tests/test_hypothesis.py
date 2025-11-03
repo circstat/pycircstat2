@@ -108,8 +108,10 @@ def test_omnibus_test():
     # (factorial division overflow while computing p-val)
     # fixed in PR 12
     from pycircstat2.distributions import circularuniform, vonmises
-    d0 = vonmises.rvs(mu=0, kappa=1, size=10_000)
-    d1 = circularuniform.rvs(size=10_000)
+
+    rng = np.random.default_rng(42)
+    d0 = vonmises.rvs(mu=0, kappa=1, size=10_000, random_state=rng)
+    d1 = circularuniform.rvs(size=10_000, random_state=rng)
 
     result = omnibus_test(alpha=d0)
     assert result.pval < 0.05, "Expected significant p-value for von Mises distribution"
@@ -360,9 +362,9 @@ def test_binomial_test_extreme_case():
 
 def test_concentration_identical():
     """Test concentration_test with identical von Mises distributions (should fail to reject H0)."""
-    np.random.seed(42)
-    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50)
-    alpha2 = vonmises.rvs(mu=0, kappa=3, size=50)
+    rng = np.random.default_rng(42)
+    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50, random_state=rng)
+    alpha2 = vonmises.rvs(mu=0, kappa=3, size=50, random_state=rng)
 
     result = concentration_test(alpha1, alpha2)
 
@@ -371,9 +373,9 @@ def test_concentration_identical():
 
 def test_concentration_different():
     """Test concentration_test with different kappa values (should reject H0)."""
-    np.random.seed(42)
-    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50)  # Higher concentration
-    alpha2 = vonmises.rvs(mu=0, kappa=1, size=50)  # Lower concentration
+    rng = np.random.default_rng(123)
+    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50, random_state=rng)  # Higher concentration
+    alpha2 = vonmises.rvs(mu=0, kappa=1, size=50, random_state=rng)  # Lower concentration
 
     result = concentration_test(alpha1, alpha2)
 
@@ -393,9 +395,9 @@ def test_concentration_high_dispersion():
 
 def test_concentration_extreme_case():
     """Test concentration_test when both samples have extremely high concentration (should fail to reject H0)."""
-    np.random.seed(42)
-    alpha1 = vonmises.rvs(mu=0, kappa=100, size=50)
-    alpha2 = vonmises.rvs(mu=0, kappa=100, size=50)
+    rng = np.random.default_rng(42)
+    alpha1 = vonmises.rvs(mu=0, kappa=100, size=50, random_state=rng)
+    alpha2 = vonmises.rvs(mu=0, kappa=100, size=50, random_state=rng)
 
     result = concentration_test(alpha1, alpha2)
 
@@ -404,8 +406,11 @@ def test_concentration_extreme_case():
 
 def test_rao_homogeneity_identical():
     """Test with identical von Mises distributions (should fail to reject H0)."""
-    np.random.seed(42)
-    samples = [vonmises.rvs(mu=0, kappa=2, size=50) for _ in range(3)]
+    seeds = [101, 102, 103]
+    samples = [
+        vonmises.rvs(mu=0, kappa=2, size=50, random_state=np.random.default_rng(seed))
+        for seed in seeds
+    ]
 
     results = rao_homogeneity_test(samples)
 
@@ -419,11 +424,11 @@ def test_rao_homogeneity_identical():
 
 def test_rao_homogeneity_different_means():
     """Test with different mean directions (should reject H0 for mean equality)."""
-    np.random.seed(42)
+    seeds = [201, 202, 203]
+    mus = (0.0, np.pi / 4, np.pi / 2)
     samples = [
-        vonmises.rvs(kappa=2, mu=0, size=50),
-        vonmises.rvs(kappa=2, mu=np.pi / 4, size=50),
-        vonmises.rvs(kappa=2, mu=np.pi / 2, size=50),
+        vonmises.rvs(kappa=2, mu=mu, size=50, random_state=np.random.default_rng(seed))
+        for seed, mu in zip(seeds, mus)
     ]
     results = rao_homogeneity_test(samples)
 
@@ -434,11 +439,11 @@ def test_rao_homogeneity_different_means():
 
 def test_rao_homogeneity_different_dispersion():
     """Test with different kappa values (should reject H0 for dispersion equality)."""
-    np.random.seed(42)
+    seeds = [301, 302, 303]
+    kappas = (5, 2, 1)
     samples = [
-        vonmises.rvs(mu=0, kappa=5, size=50),
-        vonmises.rvs(mu=0, kappa=2, size=50),
-        vonmises.rvs(mu=0, kappa=1, size=50),
+        vonmises.rvs(mu=0, kappa=kappa, size=50, random_state=np.random.default_rng(seed))
+        for seed, kappa in zip(seeds, kappas)
     ]
 
     results = rao_homogeneity_test(samples)
@@ -450,8 +455,11 @@ def test_rao_homogeneity_different_dispersion():
 
 def test_rao_homogeneity_small_samples():
     """Test with very small sample sizes (should handle without error)."""
-    np.random.seed(42)
-    samples = [vonmises.rvs(mu=0, kappa=3, size=5) for _ in range(3)]
+    seeds = [401, 402, 403]
+    samples = [
+        vonmises.rvs(mu=0, kappa=3, size=5, random_state=np.random.default_rng(seed))
+        for seed in seeds
+    ]
 
     results = rao_homogeneity_test(samples)
 

@@ -126,8 +126,8 @@ class CircularAnovaResult(TestResult):
     mu_all: float
     kappa: Union[float, np.ndarray]
     kappa_all: float
-    rho: np.ndarray
-    rho_all: float
+    R: np.ndarray
+    R_all: float
     df: Union[int, tuple[int, int, int]]
     statistic: float
     pval: float
@@ -946,11 +946,35 @@ def watson_williams_test(
     N = sum(sample.n for sample in normalized)
     if N <= k:
         raise ValueError("Combined sample size must exceed the number of groups.")
-    rw = float(np.mean([sample.r for sample in normalized]))
-
-    K = 1 + 3 / 8 / circ_kappa(rw)
 
     Rs = np.array([sample.R for sample in normalized], dtype=float)
+    rw = float(np.sum(Rs) / N)
+
+    kappa_hat = float(circ_kappa(rw))
+    if not np.isfinite(kappa_hat):
+        kappa_hat = 0.0
+    if kappa_hat <= 0.0:
+        K = 1.0
+        warnings.warn(
+            (
+                "Watson-Williams test assumes common, high concentration; "
+                "estimated κ≈0. Results may be unreliable."
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    else:
+        K = 1.0 + 3.0 / (8.0 * kappa_hat)
+        if kappa_hat < 1.0:
+            warnings.warn(
+                (
+                    "Watson-Williams test assumes common, high concentration; "
+                    f"estimated κ≈{kappa_hat:.3f}. Results may be unreliable."
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     all_alpha = np.hstack([sample.alpha for sample in normalized])
     all_weights = np.hstack([sample.w for sample in normalized])
     R = N * circ_r(alpha=all_alpha, w=all_weights)
@@ -1020,6 +1044,8 @@ def watson_u2_test(
     from scipy.stats import rankdata
 
     normalized = _coerce_circular_samples(samples)
+    if len(normalized) != 2:
+        raise ValueError("`watson_u2_test` requires exactly two samples.")
 
     def cumfreq(alpha_unique: np.ndarray, sample: _CircularSample) -> np.ndarray:
         expanded = sample.expand()
@@ -1303,8 +1329,8 @@ def circ_anova(
             mu_all=float(mu_all),
             kappa=kappa_value,
             kappa_all=kappa_value,
-            rho=Rs,
-            rho_all=float(R_all),
+            R=Rs,
+            R_all=float(R_all),
             df=(df_between, df_within, df_total),
             statistic=float(F_stat),
             pval=float(p_value),
@@ -1328,8 +1354,8 @@ def circ_anova(
             mu_all=float(mu_all),
             kappa=kappa_value,
             kappa_all=kappa_value,
-            rho=Rs,
-            rho_all=float(R_all),
+            R=Rs,
+            R_all=float(R_all),
             df=int(df),
             statistic=float(chi_square_stat),
             pval=float(p_value),
