@@ -1,7 +1,7 @@
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Any, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -33,11 +33,281 @@ from .utils import (
 
 
 @dataclass(frozen=True)
-class RayleighTestResult:
+class TestResult:
+    """Base class for hypothesis test results."""
+
+    def asdict(self) -> dict[str, Any]:
+        """Return result data as a dictionary."""
+        from dataclasses import asdict
+
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RayleighTestResult(TestResult):
     r: float  # Resultant vector length
     z: float  # Test Statistic (Rayleigh's Z)
     pval: float  # Classical P-value
     bootstrap_pval: Optional[float] = None  # Bootstrap P-value, if computed
+
+
+@dataclass(frozen=True)
+class ChiSquareTestResult(TestResult):
+    chi2: float
+    pval: float
+
+
+@dataclass(frozen=True)
+class VTestResult(TestResult):
+    V: float
+    u: float
+    pval: float
+
+
+@dataclass(frozen=True)
+class OneSampleTestResult(TestResult):
+    reject: bool
+    angle: float
+    ci: tuple[float, float]
+
+
+@dataclass(frozen=True)
+class OmnibusTestResult(TestResult):
+    A: float
+    pval: float
+    m: int
+
+
+@dataclass(frozen=True)
+class BatscheletTestResult(TestResult):
+    C: int
+    pval: float
+
+
+@dataclass(frozen=True)
+class SymmetryTestResult(TestResult):
+    statistic: float
+    pval: float
+
+
+@dataclass(frozen=True)
+class WatsonWilliamsTestResult(TestResult):
+    F: float
+    pval: float
+    df_between: int
+    df_within: int
+    k: int
+    N: int
+
+
+@dataclass(frozen=True)
+class WatsonU2TestResult(TestResult):
+    U2: float
+    pval: float
+
+
+@dataclass(frozen=True)
+class WheelerWatsonTestResult(TestResult):
+    W: float
+    pval: float
+    df: int
+
+
+@dataclass(frozen=True)
+class WallraffTestResult(TestResult):
+    U: float
+    pval: float
+
+
+@dataclass(frozen=True)
+class CircularAnovaResult(TestResult):
+    method: str
+    mu: np.ndarray
+    mu_all: float
+    kappa: Union[float, np.ndarray]
+    kappa_all: float
+    rho: np.ndarray
+    rho_all: float
+    df: Union[int, tuple[int, int, int]]
+    statistic: float
+    pval: float
+    SS: Optional[tuple[float, float, float]] = None
+    MS: Optional[tuple[float, float]] = None
+
+
+@dataclass(frozen=True)
+class AngularRandomisationTestResult(TestResult):
+    statistic: float
+    pval: float
+    n_simulation: int
+
+
+@dataclass(frozen=True)
+class KuiperTestResult(TestResult):
+    V: float
+    pval: float
+    mode: str
+    n_simulation: int
+
+
+@dataclass(frozen=True)
+class WatsonTestResult(TestResult):
+    U2: float
+    pval: float
+    mode: str
+    n_simulation: int
+
+
+@dataclass(frozen=True)
+class RaoSpacingTestResult(TestResult):
+    statistic: float
+    pval: float
+    mode: str
+    n_simulation: int
+
+
+@dataclass(frozen=True)
+class CircularRangeTestResult(TestResult):
+    range_stat: float
+    pval: float
+
+
+@dataclass(frozen=True)
+class BinomialTestResult(TestResult):
+    pval: float
+    n_eff: int
+    n1: int
+    n2: int
+
+
+@dataclass(frozen=True)
+class ConcentrationTestResult(TestResult):
+    f_stat: float
+    pval: float
+    df1: int
+    df2: int
+
+
+@dataclass(frozen=True)
+class RaoHomogeneityTestResult(TestResult):
+    H_polar: float
+    pval_polar: float
+    reject_polar: bool
+    H_disp: float
+    pval_disp: float
+    reject_disp: bool
+
+
+@dataclass(frozen=True)
+class ChangePointTestResult(TestResult):
+    n: int
+    rho: float
+    rmax: float
+    k_r: int
+    rave: float
+    tmax: float
+    k_t: int
+    tave: float
+
+
+@dataclass(frozen=True)
+class HarrisonKanjiTestResult(TestResult):
+    p_values: tuple[Optional[float], Optional[float], Optional[float]]
+    anova_table: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class EqualKappaTestResult(TestResult):
+    kappa: np.ndarray
+    kappa_all: float
+    rho: np.ndarray
+    rho_all: float
+    df: int
+    statistic: float
+    pval: float
+    regime: str
+
+
+@dataclass(frozen=True)
+class CommonMedianTestResult(TestResult):
+    common_median: float
+    statistic: float
+    pval: float
+    reject: bool
+
+
+@dataclass(frozen=True)
+class _CircularSample:
+    alpha: np.ndarray
+    w: np.ndarray
+    n: int
+    r: float
+    R: float
+
+    def expand(self) -> np.ndarray:
+        """Return expanded sample with weights applied."""
+        if self.w.size == 0:
+            return np.array([], dtype=float)
+        return np.repeat(self.alpha, self.w)
+
+
+def _coerce_circular_samples(samples: Sequence[Any]) -> list[_CircularSample]:
+    """Coerce a sequence of Circular objects or arrays into unified samples."""
+    if not isinstance(samples, Sequence) or len(samples) == 0:
+        raise ValueError("`samples` must be a non-empty sequence.")
+
+    try:
+        from .base import Circular
+    except Exception:  # pragma: no cover - defensive import guard
+        Circular = None  # type: ignore
+
+    normalized: list[_CircularSample] = []
+
+    for sample in samples:
+        if Circular is not None and isinstance(sample, Circular):  # type: ignore[arg-type]
+            alpha_arr = np.asarray(sample.alpha, dtype=float)
+            weights = getattr(sample, "w", None)
+            if weights is None:
+                weights_arr = np.ones_like(alpha_arr, dtype=int)
+            else:
+                weights_arr = np.asarray(weights, dtype=float)
+        else:
+            alpha_arr = np.asarray(sample, dtype=float)
+            if alpha_arr.ndim != 1:
+                raise ValueError("Each sample must be a one-dimensional array of angles.")
+            weights_arr = np.ones_like(alpha_arr, dtype=float)
+
+        if alpha_arr.size == 0:
+            raise ValueError("Each sample must contain at least one observation.")
+        if weights_arr.shape != alpha_arr.shape:
+            raise ValueError("Weights must match the shape of the angle data.")
+        if np.any(weights_arr < 0):
+            raise ValueError("Weights must be non-negative.")
+        if not np.all(np.isfinite(alpha_arr)):
+            raise ValueError("Angles must be finite.")
+        if not np.all(np.isfinite(weights_arr)):
+            raise ValueError("Weights must be finite.")
+
+        rounded_weights = np.round(weights_arr).astype(int)
+        if not np.allclose(weights_arr, rounded_weights):
+            raise ValueError("All weights must be integers to support grouped data.")
+
+        n_i = int(np.sum(rounded_weights))
+        if n_i <= 0:
+            raise ValueError("Each sample must have a positive total weight.")
+
+        r_i = float(circ_r(alpha_arr, rounded_weights))
+        normalized.append(
+            _CircularSample(
+                alpha=alpha_arr,
+                w=rounded_weights,
+                n=n_i,
+                r=r_i,
+                R=n_i * r_i,
+            )
+        )
+
+    return normalized
 
 
 def rayleigh_test(
@@ -83,6 +353,21 @@ def rayleigh_test(
 
     verbose: bool
         Print formatted results.
+
+    Returns
+    -------
+    SymmetryTestResult
+        Dataclass containing the Wilcoxon statistic and p-value.
+
+    Returns
+    -------
+    BatscheletTestResult
+        Dataclass containing the count statistic `C` and the associated p-value.
+
+    Returns
+    -------
+    OneSampleTestResult
+        Dataclass with the rejection decision, tested angle, and confidence interval.
 
     Returns
     -------
@@ -238,7 +523,7 @@ def V_test(
     r: Optional[float] = None,
     n: Optional[int] = None,
     verbose: bool = False,
-) -> tuple[float, float, float]:
+) -> VTestResult:
     """
     Modified Rayleigh Test for Uniformity versus a Specified Angle.
 
@@ -271,13 +556,9 @@ def V_test(
 
     Returns
     -------
-
-    V: float
-        Test Statistics.
-    u: float
-        circular mean.
-    p: float
-        P-value.
+    VTestResult
+        Dataclass containing the test statistic `V`, the normalized statistic `u`,
+        and the p-value.
 
     Reference
     ---------
@@ -325,7 +606,7 @@ def V_test(
         print(f"Test Statistics: {V:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return V, u, pval
+    return VTestResult(V=V, u=u, pval=pval)
 
 
 def one_sample_test(
@@ -335,7 +616,7 @@ def one_sample_test(
     lb: Optional[float] = None,
     ub: Optional[float] = None,
     verbose: bool = False,
-) -> bool:
+) -> OneSampleTestResult:
     """
     To test whether the population mean angle is equal to a specified value,
     which is achieved by observing whether the angle lies within the 95% CI.
@@ -364,15 +645,12 @@ def one_sample_test(
     verbose: bool
         Print formatted results.
 
-    Returns
-    -------
-    reject: bool
-        Reject or not reject the null hypothesis.
-
     Reference
     ---------
     P628, Section 27.1, Example 27.3 of Zar, 2010
     """
+
+    angle = float(angle)
 
     if lb is None or ub is None:
         if alpha is None:
@@ -408,14 +686,14 @@ def one_sample_test(
                 f"Failed to reject H0:\nμ0 = {angle:.5f} lies within the 95% CI of μ ({np.array([lb, ub]).round(5)})"
             )
 
-    return reject
+    return OneSampleTestResult(reject=reject, angle=angle, ci=(lb, ub))
 
 
 def omnibus_test(
     alpha: np.ndarray,
     scale: int = 1,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> OmnibusTestResult:
     """
     Hodges–Ajne omnibus test for circular uniformity.
 
@@ -440,11 +718,9 @@ def omnibus_test(
 
     Returns
     -------
-    A: float
-        Test statistics
-
-    pval: float
-        p-value.
+    OmnibusTestResult
+        Dataclass containing the test statistic `A`, the corresponding p-value,
+        and the minimum count `m`.
 
     Reference
     ---------
@@ -518,14 +794,14 @@ def omnibus_test(
         print("")
         print(f"Test Statistics: {A:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
-    return A, pval
+    return OmnibusTestResult(A=float(A), pval=float(pval), m=int(m))
 
 
 def batschelet_test(
     angle: Union[int, float],
     alpha: np.ndarray,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> BatscheletTestResult:
     """Modified Hodges-Ajne Test for Uniformity versus a specified Angle
     (for ungrouped data).
 
@@ -543,11 +819,6 @@ def batschelet_test(
 
     verbose: bool
         Print formatted results.
-
-    Returns
-    -------
-    pval: float
-        p-value
 
     Reference
     ---------
@@ -577,14 +848,14 @@ def batschelet_test(
         print(f"Test Statistics: {C}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return C, pval
+    return BatscheletTestResult(C=C, pval=pval)
 
 
 def symmetry_test(
     alpha: np.ndarray,
     median: Optional[float] = None,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> SymmetryTestResult:
     """Non-parametric test for symmetry around the median. Works by performing a
     Wilcoxon sign rank test on the differences to the median. Also known as
     Wilcoxon paired-sample test.
@@ -602,13 +873,6 @@ def symmetry_test(
 
     verbose: bool
         Print formatted results.
-
-    Returns
-    -------
-    test_statistic: float
-        Test statistic
-    pval: float
-        p-value
 
     Reference
     ---------
@@ -639,7 +903,7 @@ def symmetry_test(
         print(f"Test Statistics: {test_statistic:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return test_statistic, pval
+    return SymmetryTestResult(statistic=test_statistic, pval=pval)
 
 
 ###########################
@@ -647,7 +911,10 @@ def symmetry_test(
 ###########################
 
 
-def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, float]:
+def watson_williams_test(
+    samples: Sequence[Any],
+    verbose: bool = False,
+) -> WatsonWilliamsTestResult:
     """The Watson-Williams Test for multiple samples.
 
     - H0: All samples are from populations with the same mean angle
@@ -655,43 +922,51 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, flo
 
     Parameters
     ----------
-    circs: list (k, )
-        A list of Circular objects.
+    samples: sequence
+        A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
     verbose: bool
         Print formatted results.
 
     Returns
     -------
-    F: float
-        F value
-
-    pval: float
-        p-value
+    WatsonWilliamsTestResult
+        Dataclass containing the F statistic, p-value, and associated degrees of freedom.
 
     Reference
     ---------
     P632-636, Section 27.4, Example 27.7/8 of Zar, 2010
     """
 
-    if len(circs) < 2:
+    normalized = _coerce_circular_samples(samples)
+    if len(normalized) < 2:
         raise ValueError("At least two samples are required for the Watson-Williams test.")
 
-    k = len(circs)
-    N = np.sum([circ.n for circ in circs])
+    k = len(normalized)
+    N = sum(sample.n for sample in normalized)
     if N <= k:
         raise ValueError("Combined sample size must exceed the number of groups.")
-    rw = float(np.mean([circ.r for circ in circs]))
+    rw = float(np.mean([sample.r for sample in normalized]))
 
     K = 1 + 3 / 8 / circ_kappa(rw)
 
-    Rs = [circ.R for circ in circs]
-    R = N * circ_r(
-        alpha=np.hstack([circ.alpha for circ in circs]),
-        w=np.hstack([circ.w for circ in circs]),
-    )
+    Rs = np.array([sample.R for sample in normalized], dtype=float)
+    all_alpha = np.hstack([sample.alpha for sample in normalized])
+    all_weights = np.hstack([sample.w for sample in normalized])
+    R = N * circ_r(alpha=all_alpha, w=all_weights)
     F = K * (N - k) * (np.sum(Rs) - R) / (N - np.sum(Rs)) / (k - 1)
-    pval = float(f.sf(F, k - 1, N - k))
+    df_between = k - 1
+    df_within = N - k
+    pval = float(f.sf(F, df_between, df_within))
+
+    result = WatsonWilliamsTestResult(
+        F=float(F),
+        pval=pval,
+        df_between=df_between,
+        df_within=df_within,
+        k=k,
+        N=N,
+    )
 
     if verbose:
         print("The Watson-Williams Test for multiple samples")
@@ -699,13 +974,16 @@ def watson_williams_test(circs: list, verbose: bool = False) -> tuple[float, flo
         print("H0: all samples are from populations with the same angle.")
         print("HA: all samples are not from populations with the same angle.")
         print("")
-        print(f"Test Statistics: {F:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"Test Statistics: {result.F:.5f}")
+        print(f"P-value: {result.pval:.5f} {significance_code(result.pval)}")
 
-    return F, pval
+    return result
 
 
-def watson_u2_test(circs: list, verbose: bool = False) -> tuple[float, float]:
+def watson_u2_test(
+    samples: Sequence[Any],
+    verbose: bool = False,
+) -> WatsonU2TestResult:
     """Watson's U2 Test for nonparametric two-sample testing
     (with or without ties).
 
@@ -722,18 +1000,16 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple[float, float]:
 
     Parameters
     ----------
-    circs: list
-        A list of Circular objects.
+    samples: sequence
+        A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
     verbose: bool
         Print formatted results.
 
     Returns
     -------
-    U2: float
-        U2 value
-    pval: float
-        p value
+    WatsonU2TestResult
+        Dataclass containing the U² statistic and the associated p-value.
 
     Reference
     ---------
@@ -743,39 +1019,31 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple[float, float]:
 
     from scipy.stats import rankdata
 
-    def cumfreq(alpha_unique, circ):
-        weights = getattr(circ, "w", None)
-        if weights is None:
-            weights = np.ones_like(circ.alpha, dtype=int)
-        else:
-            weights = np.asarray(weights, dtype=float)
-            if not np.all(np.isclose(weights, np.round(weights))):
-                raise ValueError("Watson's U2 test requires integer bin frequencies.")
-            weights = weights.astype(int)
-        sample = np.repeat(circ.alpha, weights)
-        if sample.size == 0:
+    normalized = _coerce_circular_samples(samples)
+
+    def cumfreq(alpha_unique: np.ndarray, sample: _CircularSample) -> np.ndarray:
+        expanded = sample.expand()
+        if expanded.size == 0:
             raise ValueError("Each sample must contain at least one observation.")
 
-        # Map sample values to indices in the combined unique array using tolerance
-        idx = [np.where(np.isclose(alpha_unique, val, atol=1e-10))[0] for val in sample]
+        idx = [np.where(np.isclose(alpha_unique, val, atol=1e-10))[0] for val in expanded]
         idx = np.concatenate(idx)
         idx = np.hstack([0, idx, alpha_unique.size])
 
-        freq_cumsum = rankdata(sample, method="max") / circ.n
+        freq_cumsum = rankdata(expanded, method="max") / sample.n
         freq_cumsum = np.hstack([0, freq_cumsum])
 
         tiles = np.diff(idx)
         return np.repeat(freq_cumsum, tiles)
 
-    a, t = np.unique(
-        np.hstack([np.repeat(c.alpha, c.w) for c in circs]), return_counts=True
-    )
-    cfs = [cumfreq(a, c) for c in circs]
+    expanded_samples = [sample.expand() for sample in normalized]
+    a, t = np.unique(np.hstack(expanded_samples), return_counts=True)
+    cfs = [cumfreq(a, sample) for sample in normalized]
     d = np.diff(cfs, axis=0)
 
-    N = np.sum([c.n for c in circs])
+    N = sum(sample.n for sample in normalized)
     U2 = (
-        np.prod([c.n for c in circs])
+        np.prod([sample.n for sample in normalized])
         / N**2
         * (np.sum(t * d**2) - np.sum(t * d) ** 2 / N)
     )
@@ -792,10 +1060,13 @@ def watson_u2_test(circs: list, verbose: bool = False) -> tuple[float, float]:
         print(f"Test Statistics: {U2:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return U2, pval
+    return WatsonU2TestResult(U2=float(U2), pval=float(pval))
 
 
-def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, float]:
+def wheeler_watson_test(
+    samples: Sequence[Any],
+    verbose: bool = False,
+) -> WheelerWatsonTestResult:
     """The Wheeler and Watson Two/Multi-Sample Test.
 
     - H0: The two samples came from the same population,
@@ -805,18 +1076,16 @@ def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, floa
 
     Parameters
     ----------
-    circs: list
-        A list of Circular objects.
+    samples: sequence
+        A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
     verbose: bool
         Print formatted results.
 
     Returns
     -------
-    W: float
-        W value
-    pval: float
-        p value
+    WheelerWatsonTestResult
+        Dataclass containing the W statistic, degrees of freedom, and p-value.
 
     Reference
     ---------
@@ -829,38 +1098,40 @@ def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, floa
     """
     from scipy.stats import chi2
 
-    def get_circrank(alpha, circ, N):
+    normalized = _coerce_circular_samples(samples)
+
+    def get_circrank(alpha: np.ndarray, sample: _CircularSample, N: int) -> np.ndarray:
+        expanded = sample.expand()
         rank_of_direction = (
-            np.squeeze([np.where(alpha == a)[0] for a in np.repeat(circ.alpha, circ.w)])
-            + 1
+            np.squeeze([np.where(np.isclose(alpha, value))[0] for value in expanded]) + 1
         )
-        circ_rank = 2 * np.pi / N * rank_of_direction
-        return circ_rank
+        return 2 * np.pi / N * rank_of_direction
 
-    N = np.sum([c.n for c in circs])
-    a, _ = np.unique(
-        np.hstack([np.repeat(c.alpha, c.w) for c in circs]), return_counts=True
-    )
+    N = sum(sample.n for sample in normalized)
+    expanded_samples = [sample.expand() for sample in normalized]
+    a, _ = np.unique(np.hstack(expanded_samples), return_counts=True)
 
-    circ_ranks = [get_circrank(a, c, N) for c in circs]
+    circ_ranks = [get_circrank(a, sample, N) for sample in normalized]
 
     k = len(circ_ranks)
 
     if k == 2:
         C = np.sum(np.cos(circ_ranks[0]))
         S = np.sum(np.sin(circ_ranks[0]))
-        W = 2 * (N - 1) * (C**2 + S**2) / np.prod([c.n for c in circs])
-
+        W = 2 * (N - 1) * (C**2 + S**2) / np.prod([sample.n for sample in normalized])
     elif k >= 3:
-        W = 0
+        W = 0.0
         for i in range(k):
             circ_rank = circ_ranks[i]
             C = np.sum(np.cos(circ_rank))
             S = np.sum(np.sin(circ_rank))
-            W += (C**2 + S**2) / circs[i].n
-        W *= 2
+            W += (C**2 + S**2) / normalized[i].n
+        W *= 2.0
+    else:
+        raise ValueError("At least two samples are required for the Wheeler-Watson test.")
 
-    pval = float(chi2.sf(W, df=2 * (k - 1)))
+    df = 2 * (k - 1)
+    pval = float(chi2.sf(W, df=df))
 
     if verbose:
         print("The Wheeler and Watson Two/Multi-Sample Test")
@@ -871,20 +1142,20 @@ def wheeler_watson_test(circs: list, verbose: bool = False) -> tuple[float, floa
         print(f"Test Statistics: {W:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return W, pval
+    return WheelerWatsonTestResult(W=float(W), pval=pval, df=df)
 
 
 def wallraff_test(
-    circs: list,
+    samples: Sequence[Any],
     angle: float = 0.0,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> WallraffTestResult:
     """Wallraff test of angular distances / dispersion against a specified angle.
 
     Parameters
     ----------
-    circs: list
-        A list of circular object
+    samples: sequence
+        A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
     angle: float
         A specified angle in radian.
@@ -894,30 +1165,29 @@ def wallraff_test(
 
     Returns
     -------
-    U: float
-        Test Statistics
-
-    pval: float
-        P-value.
+    WallraffTestResult
+        Dataclass containing the U statistic and p-value.
 
     Reference
     ---------
     P637-638, Section 27.8, Example 27.13 of Zar, 2010
     """
 
-    if len(circs) != 2:
+    normalized = _coerce_circular_samples(samples)
+
+    if len(normalized) != 2:
         raise ValueError("Current implementation only supports two-sample comparison.")
 
     angle_arr = np.asarray(angle, dtype=float)
     if angle_arr.ndim == 0:
-        angles = np.repeat(angle_arr, len(circs))
+        angles = np.repeat(angle_arr, len(normalized))
     else:
-        if angle_arr.size != len(circs):
-            raise ValueError("`angle` must be a scalar or have the same length as `circs`.")
+        if angle_arr.size != len(normalized):
+            raise ValueError("`angle` must be a scalar or have the same length as `samples`.")
         angles = angle_arr
 
-    ns = [c.n for c in circs]
-    distances = [angular_distance(c.alpha, angles[i]) for i, c in enumerate(circs)]
+    ns = [sample.n for sample in normalized]
+    distances = [angular_distance(normalized[i].alpha, angles[i]) for i in range(len(normalized))]
 
     rs = rankdata(np.hstack(distances))
 
@@ -939,7 +1209,7 @@ def wallraff_test(
         print(f"Test Statistics: {U:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return U, pval
+    return WallraffTestResult(U=float(U), pval=pval)
 
 
 def circ_anova(
@@ -948,7 +1218,7 @@ def circ_anova(
     kappa: Optional[float] = None,
     f_mod: bool = True,
     verbose: bool = False,
-) -> dict:
+) -> CircularAnovaResult:
     """
     Circular Analysis of Variance (ANOVA) for multi-sample comparison of mean directions.
 
@@ -972,20 +1242,8 @@ def circ_anova(
 
     Returns
     -------
-    result : dict
-        A dictionary with:
-        - `'method'`: `"F-test"` or `"LRT"`
-        - `'mu'`: Mean directions of each group (radians)
-        - `'mu_all'`: Mean direction of all samples combined
-        - `'kappa'`: Estimated concentration parameters for each group
-        - `'kappa_all'`: Estimated concentration parameter for all samples combined
-        - `'rho'`: Resultant vector lengths for each group
-        - `'rho_all'`: Resultant vector length for all samples combined
-        - `'df'`: Degrees of freedom
-        - `'statistic'`: Test statistic (F-value or Chi-Square)
-        - `'p_value'`: p-value
-        - `'SS'`: Sum of squares (for F-test)
-        - `'MS'`: Mean squares (for F-test)
+    result : CircularAnovaResult
+        Dataclass containing the selected statistic, p-value, and supporting metrics.
 
     References
     ----------
@@ -1015,6 +1273,7 @@ def circ_anova(
     # Estimate κ if not provided
     if kappa is None:
         kappa = circ_kappa(R_all / N)
+    kappa_value = float(kappa)
 
     # **F-test**
     if method == "F-test":
@@ -1038,43 +1297,43 @@ def circ_anova(
 
         p_value = 1 - f.cdf(F_stat, df_between, df_within)
 
-        result = {
-            "method": "F-test",
-            "mu": mus,
-            "mu_all": mu_all,
-            "kappa": kappa,
-            "kappa_all": kappa,
-            "rho": Rs,
-            "rho_all": R_all,
-            "df": (df_between, df_within, df_total),
-            "statistic": F_stat,
-            "p_value": p_value,
-            "SS": (SS_between, SS_within, SS_total),
-            "MS": (MS_between, MS_within),
-        }
+        result = CircularAnovaResult(
+            method="F-test",
+            mu=mus,
+            mu_all=float(mu_all),
+            kappa=kappa_value,
+            kappa_all=kappa_value,
+            rho=Rs,
+            rho_all=float(R_all),
+            df=(df_between, df_within, df_total),
+            statistic=float(F_stat),
+            pval=float(p_value),
+            SS=(float(SS_between), float(SS_within), float(SS_total)),
+            MS=(float(MS_between), float(MS_within)),
+        )
 
     # **Likelihood Ratio Test (LRT)**
     elif method == "LRT":
         # Compute test statistic
-        term1 = 1 - (1 / (4 * kappa)) * (sum(1 / ns) - 1 / N)
-        term2 = 2 * kappa * np.sum(Rs * (1 - np.cos(mus - mu_all)))
+        term1 = 1 - (1 / (4 * kappa_value)) * (sum(1 / ns) - 1 / N)
+        term2 = 2 * kappa_value * np.sum(Rs * (1 - np.cos(mus - mu_all)))
         chi_square_stat = term1 * term2
 
         df = k - 1
         p_value = 1 - chi2.cdf(chi_square_stat, df)
 
-        result = {
-            "method": "LRT",
-            "mu": mus,
-            "mu_all": mu_all,
-            "kappa": kappa,
-            "kappa_all": kappa,
-            "rho": Rs,
-            "rho_all": R_all,
-            "df": df,
-            "statistic": chi_square_stat,
-            "p_value": p_value,
-        }
+        result = CircularAnovaResult(
+            method="LRT",
+            mu=mus,
+            mu_all=float(mu_all),
+            kappa=kappa_value,
+            kappa_all=kappa_value,
+            rho=Rs,
+            rho_all=float(R_all),
+            df=int(df),
+            statistic=float(chi_square_stat),
+            pval=float(p_value),
+        )
 
     else:
         raise ValueError("Invalid method. Choose 'F-test' or 'LRT'.")
@@ -1083,27 +1342,27 @@ def circ_anova(
     if verbose:
         print("\nCircular Analysis of Variance (ANOVA)")
         print("--------------------------------------")
-        print(f"Method: {result['method']}")
-        print(f"Mean Directions (radians): {result['mu']}")
-        print(f"Overall Mean Direction (radians): {result['mu_all']}")
-        print(f"Kappa: {result['kappa']}")
-        print(f"Kappa (overall): {result['kappa_all']}")
-        print(f"Degrees of Freedom: {result['df']}")
-        print(f"Test Statistic: {result['statistic']:.5f}")
-        print(f"P-value: {result['p_value']:.5f}")
+        print(f"Method: {result.method}")
+        print(f"Mean Directions (radians): {result.mu}")
+        print(f"Overall Mean Direction (radians): {result.mu_all}")
+        print(f"Kappa: {result.kappa}")
+        print(f"Kappa (overall): {result.kappa_all}")
+        print(f"Degrees of Freedom: {result.df}")
+        print(f"Test Statistic: {result.statistic:.5f}")
+        print(f"P-value: {result.pval:.5f}")
         if method == "F-test":
-            print(f"Sum of Squares (Between, Within, Total): {result['SS']}")
-            print(f"Mean Squares (Between, Within): {result['MS']}")
+            print(f"Sum of Squares (Between, Within, Total): {result.SS}")
+            print(f"Mean Squares (Between, Within): {result.MS}")
         print("--------------------------------------\n")
 
     return result
 
 
 def angular_randomisation_test(
-    circs: list,
+    samples: Sequence[Any],
     n_simulation: int = 1000,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> AngularRandomisationTestResult:
     """The Angular Randomization Test (ART) for homogeneity.
 
     - H0: The two samples come from the same population.
@@ -1111,17 +1370,15 @@ def angular_randomisation_test(
 
     Parameters
     ----------
-    circs: list
-        A list of Circular objects.
+    samples: sequence
+        A sequence of `Circular` objects or one-dimensional array-like radian samples.
     n_simulation: int, optional
         Number of permutations for the test. Defaults to 1000.
 
     Returns
     -------
-    T_obs: float
-        Observed value of the ART test statistic.
-    p_value: float
-        p-value of the test.
+    AngularRandomisationTestResult
+        Dataclass containing the observed statistic and permutation p-value.
 
     Reference
     ---------
@@ -1130,13 +1387,15 @@ def angular_randomisation_test(
     International Journal of Nonlinear Analysis and Applications, 13(1), 2703-2711.
     """
 
-    if len(circs) != 2:
+    normalized = _coerce_circular_samples(samples)
+
+    if len(normalized) != 2:
         raise ValueError("The Angular Randomization Test requires exactly two samples.")
     if n_simulation <= 0:
         raise ValueError("`n_simulation` must be a positive integer.")
 
-    samples = [np.asarray(c.alpha, dtype=float) for c in circs]
-    if any(sample.size == 0 for sample in samples):
+    sample_arrays = [np.asarray(sample.alpha, dtype=float) for sample in normalized]
+    if any(arr.size == 0 for arr in sample_arrays):
         raise ValueError("Each sample must contain at least one observation.")
 
     def art_statistic(S1: np.ndarray, S2: np.ndarray) -> float:
@@ -1164,14 +1423,14 @@ def angular_randomisation_test(
         return scaling_factor * total_distance
 
     # 1. Compute observed test statistic T*₀
-    observed_stat = art_statistic(samples[0], samples[1])
+    observed_stat = art_statistic(sample_arrays[0], sample_arrays[1])
 
     # Initialize counter for permutations more extreme than observed
     n_extreme = 1  # Start at 1 to count the observed statistic
 
     # Combine samples for permutation
-    combined_data = np.concatenate(samples)
-    n1 = samples[0].size
+    combined_data = np.concatenate(sample_arrays)
+    n1 = sample_arrays[0].size
 
     # Perform permutation test
     rng = np.random.default_rng()
@@ -1203,7 +1462,7 @@ def angular_randomisation_test(
         print(f"Observed Test Statistic: {observed_stat:.5f}")
         print(f"P-value: {p_value:.5f} {significance_code(p_value)}")
 
-    return observed_stat, p_value
+    return AngularRandomisationTestResult(statistic=float(observed_stat), pval=float(p_value), n_simulation=n_simulation)
 
 
 #####################
@@ -1216,7 +1475,7 @@ def kuiper_test(
     n_simulation: int = 9999,
     seed: int = 2046,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> KuiperTestResult:
     """
     Kuiper's test for Circular Uniformity.
 
@@ -1242,10 +1501,8 @@ def kuiper_test(
 
     Returns
     -------
-    V: float
-        Test Statistics
-    pval: flaot
-        Asymptotic p-value
+    KuiperTestResult
+        Dataclass containing the Kuiper statistic, p-value, simulation mode, and count.
 
     Note
     ----
@@ -1276,6 +1533,7 @@ def kuiper_test(
 
     if n_simulation == 1:
         # asymptotic p-value
+        mode = "asymptotic"
         m = (np.arange(1, 50, dtype=float)) ** 2
         a1 = 4 * m * Vo**2
         a2 = np.exp(-2 * m * Vo**2)
@@ -1283,6 +1541,7 @@ def kuiper_test(
         b2 = 8 * Vo / (3 * f) * m * (a1 - 3) * a2
         pval = float(np.sum(b1 - b2))
     else:
+        mode = "simulation"
         rng = np.random.default_rng(seed)
         uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
         x = np.sort(uniforms, axis=0)
@@ -1296,7 +1555,7 @@ def kuiper_test(
         print(f"Test Statistic: {Vo:.4f}")
         print(f"P-value = {pval} {significance_code(pval)}")
 
-    return Vo, pval
+    return KuiperTestResult(V=float(Vo), pval=float(pval), mode=mode, n_simulation=n_simulation)
 
 
 def watson_test(
@@ -1304,7 +1563,7 @@ def watson_test(
     n_simulation: int = 9999,
     seed: int = 2046,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> WatsonTestResult:
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
 
@@ -1329,10 +1588,8 @@ def watson_test(
 
     Returns
     -------
-    U2o: float
-        Test Statistics
-    pval: flaot
-        Asymptotic p-value
+    WatsonTestResult
+        Dataclass containing the Watson U² statistic, p-value, and simulation details.
 
     Note
     ----
@@ -1367,9 +1624,11 @@ def watson_test(
     U2o = compute_U2(alpha)
 
     if n_simulation == 1:
+        mode = "asymptotic"
         m = np.arange(1, 51)
         pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
     else:
+        mode = "simulation"
         rng = np.random.default_rng(seed)
         uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
         x = np.sort(uniforms, axis=0)
@@ -1383,7 +1642,7 @@ def watson_test(
         print(f"Test Statistic: {U2o:.4f}")
         print(f"P-value = {pval} {significance_code(pval)}")
 
-    return U2o, pval
+    return WatsonTestResult(U2=float(U2o), pval=float(pval), mode=mode, n_simulation=n_simulation)
 
 
 def rao_spacing_test(
@@ -1393,7 +1652,7 @@ def rao_spacing_test(
     n_simulation: int = 9999,
     seed: int = 2046,
     verbose: bool = False,
-) -> tuple[float, float]:
+) -> RaoSpacingTestResult:
     """Simulation based Rao's spacing test.
 
     - H0: The sample data come from a population distributed uniformly around the circle.
@@ -1420,11 +1679,8 @@ def rao_spacing_test(
 
     Returns
     -------
-    Uo: float
-        Test statistics
-
-    pval: float
-        Simulation-based p-value
+    RaoSpacingTestResult
+        Dataclass containing the Rao spacing statistic (degrees), p-value, method, and simulation count.
 
     Reference
     ---------
@@ -1459,9 +1715,11 @@ def rao_spacing_test(
             raise ValueError("Sum of weights must be positive.")
         m = alpha.size
         expanded_alpha = np.repeat(alpha, w)
+        mode = "grouped"
     else:
         expanded_alpha = alpha
         n = expanded_alpha.size
+        mode = "ungrouped"
 
     rng = np.random.default_rng(seed)
 
@@ -1487,10 +1745,15 @@ def rao_spacing_test(
         print(f"Test Statistic: {Uo:.4f}")
         print(f"P-value = {pval}\n")
 
-    return np.rad2deg(Uo), pval
+    return RaoSpacingTestResult(
+        statistic=float(np.rad2deg(Uo)),
+        pval=float(pval),
+        mode=mode,
+        n_simulation=n_simulation,
+    )
 
 
-def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
+def circ_range_test(alpha: np.ndarray) -> CircularRangeTestResult:
     """
     Perform the Circular Range Test for uniformity.
 
@@ -1504,10 +1767,8 @@ def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
 
     Returns
     -------
-    range_stat : float
-        The circular range test statistic.
-    p_value : float
-        The p-value indicating significance of non-uniformity.
+    CircularRangeTestResult
+        Dataclass containing the range statistic and corresponding p-value.
 
     Reference
     ---------
@@ -1532,10 +1793,10 @@ def circ_range_test(alpha: np.ndarray) -> tuple[float, float]:
     )
     p_value = float(np.sum(sequence))
 
-    return range_stat, p_value
+    return CircularRangeTestResult(range_stat=float(range_stat), pval=float(p_value))
 
 
-def binomial_test(alpha: np.ndarray, md: float) -> float:
+def binomial_test(alpha: np.ndarray, md: float) -> BinomialTestResult:
     """
     Perform the binomial test for the median direction of circular data.
 
@@ -1553,8 +1814,8 @@ def binomial_test(alpha: np.ndarray, md: float) -> float:
 
     Returns
     -------
-    pval : float
-        p-value of the test (small values suggest rejecting H0).
+    BinomialTestResult
+        Dataclass containing the p-value and counts on each side of the hypothesized median.
 
     References
     ----------
@@ -1573,21 +1834,21 @@ def binomial_test(alpha: np.ndarray, md: float) -> float:
     d = circ_dist(alpha, float(md))
 
     # Count the number of angles on each side of the hypothesized median
-    n1 = np.sum(d < 0)
-    n2 = np.sum(d > 0)
+    n1 = int(np.sum(d < 0))
+    n2 = int(np.sum(d > 0))
     n_eff = int(n1 + n2)
     if n_eff == 0:
-        return 1.0
+        return BinomialTestResult(pval=1.0, n_eff=0, n1=n1, n2=n2)
 
     # Compute p-value using binomial test
     n_min = int(min(n1, n2))
     pval = float(2 * binom.cdf(n_min, n_eff, 0.5))
     pval = min(pval, 1.0)
 
-    return pval
+    return BinomialTestResult(pval=pval, n_eff=n_eff, n1=n1, n2=n2)
 
 
-def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, float]:
+def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> ConcentrationTestResult:
     """
     Parametric two-sample test for concentration equality in circular data.
 
@@ -1606,10 +1867,8 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
 
     Returns
     -------
-    f_stat : float
-        The F-statistic for the test.
-    pval : float
-        The p-value indicating whether the samples have significantly different concentrations.
+    ConcentrationTestResult
+        Dataclass with the F statistic, p-value, and associated degrees of freedom.
 
     Notes
     -----
@@ -1660,10 +1919,15 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> tuple[float, f
     else:
         pval = 2 * f.sf(1 / f_stat, df2, df1)
 
-    return float(f_stat), float(min(pval, 1.0))
+    return ConcentrationTestResult(
+        f_stat=float(f_stat),
+        pval=float(min(pval, 1.0)),
+        df1=int(df1),
+        df2=int(df2),
+    )
 
 
-def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
+def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> RaoHomogeneityTestResult:
     """
     Perform Rao's test for homogeneity on multiple samples of angular data.
 
@@ -1679,8 +1943,8 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
 
     Returns
     -------
-    dict
-        A dictionary with test statistics and p-values for both tests.
+    RaoHomogeneityTestResult
+        Dataclass containing test statistics, p-values, and rejection flags.
 
     References
     ----------
@@ -1749,17 +2013,17 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> dict:
     reject_polar = H_polar > crit_polar
     reject_disp = H_disp > crit_disp
 
-    return {
-        "H_polar": H_polar,
-        "pval_polar": pval_polar,
-        "reject_polar": reject_polar,
-        "H_disp": H_disp,
-        "pval_disp": pval_disp,
-        "reject_disp": reject_disp,
-    }
+    return RaoHomogeneityTestResult(
+        H_polar=float(H_polar),
+        pval_polar=float(pval_polar),
+        reject_polar=bool(reject_polar),
+        H_disp=float(H_disp),
+        pval_disp=float(pval_disp),
+        reject_disp=bool(reject_disp),
+    )
 
 
-def change_point_test(alpha):
+def change_point_test(alpha) -> ChangePointTestResult:
     """
     Perform a change point test for mean direction, concentration, or both.
 
@@ -1770,8 +2034,8 @@ def change_point_test(alpha):
 
     Returns
     -------
-    pd.DataFrame
-        DataFrame containing test statistics and estimated change point locations.
+    ChangePointTestResult
+        Dataclass containing the change point statistics.
 
     References
     ----------
@@ -1836,17 +2100,15 @@ def change_point_test(alpha):
     else:
         raise ValueError("Sample size must be at least 4.")
 
-    return pd.DataFrame(
-        {
-            "n": [n],
-            "rho": [rho],
-            "rmax": [rmax],
-            "k.r": [k_r],
-            "rave": [rave],
-            "tmax": [tmax],
-            "k.t": [k_t],
-            "tave": [tave],
-        }
+    return ChangePointTestResult(
+        n=int(n),
+        rho=float(rho),
+        rmax=float(rmax),
+        k_r=int(k_r),
+        rave=float(rave),
+        tmax=float(tmax),
+        k_t=int(k_t),
+        tave=float(tave),
     )
 
 
@@ -1856,7 +2118,7 @@ def harrison_kanji_test(
     idq: np.ndarray,
     inter: bool = True,
     fn: Optional[list] = None,
-) -> tuple[tuple[float, float, float], pd.DataFrame]:
+) -> HarrisonKanjiTestResult:
     """
     Harrison-Kanji Test (Two-Way ANOVA) for Circular Data.
     """
@@ -1988,10 +2250,10 @@ def harrison_kanji_test(
             }
         ).set_index("Source")
 
-    return pval, table
+    return HarrisonKanjiTestResult(p_values=pval, anova_table=table)
 
 
-def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
+def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualKappaTestResult:
     """
     Test for Homogeneity of Concentration Parameters (κ) in Circular Data.
 
@@ -2007,15 +2269,8 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
 
     Returns
     -------
-    result : dict
-        A dictionary containing:
-        - `'kappa'`: Estimated concentration parameters for each group.
-        - `'kappa_all'`: Estimated common κ for all samples combined.
-        - `'rho'`: Mean resultant lengths for each group.
-        - `'rho_all'`: Mean resultant length for all samples combined.
-        - `'df'`: Degrees of freedom.
-        - `'statistic'`: Test statistic (Chi-Square).
-        - `'p_value'`: p-value.
+    EqualKappaTestResult
+        Dataclass containing the test statistic, p-value, and supporting metrics.
 
     Notes
     -----
@@ -2064,12 +2319,14 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
         ws = 4 * (ns - 4) / 3
         g1s = np.arcsin(np.sqrt(3 / 8) * 2 * r_bars)
         chi_square_stat = np.sum(ws * g1s**2) - (np.sum(ws * g1s) ** 2 / np.sum(ws))
+        regime = "small"
 
     elif 0.45 <= r_bar_all <= 0.7:
         # Moderate `r̄`: asinh transformation
         ws = (ns - 3) / 0.798
         g2s = np.arcsinh((r_bars - 1.089) / 0.258)
         chi_square_stat = np.sum(ws * g2s**2) - (np.sum(ws * g2s) ** 2 / np.sum(ws))
+        regime = "moderate"
 
     else:
         # Large `r̄`: Bartlett-type test
@@ -2085,32 +2342,35 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> dict:
         chi_square_stat = (1 / (1 + d)) * (
             v * np.log(total_residual / v) - np.sum(vs * np.log(residuals / vs))
         )
+        regime = "large"
 
     # Compute p-value
     df = k - 1
     p_value = 1 - chi2.cdf(chi_square_stat, df)
 
-    result = {
-        "kappa": kappas,
-        "kappa_all": kappa_all,
-        "rho": r_bars,
-        "rho_all": r_bar_all,
-        "df": df,
-        "statistic": chi_square_stat,
-        "p_value": p_value,
-    }
+    result = EqualKappaTestResult(
+        kappa=kappas,
+        kappa_all=float(kappa_all),
+        rho=r_bars,
+        rho_all=float(r_bar_all),
+        df=int(df),
+        statistic=float(chi_square_stat),
+        pval=float(p_value),
+        regime=regime,
+    )
 
     # Print results if verbose is enabled
     if verbose:
         print("\nTest for Homogeneity of Concentration Parameters (κ)")
         print("------------------------------------------------------")
-        print(f"Mean Resultant Lengths: {r_bars}")
-        print(f"Overall Mean Resultant Length: {r_bar_all:.5f}")
-        print(f"Estimated Kappa Values: {kappas}")
-        print(f"Overall Estimated Kappa: {kappa_all:.5f}")
-        print(f"Degrees of Freedom: {df}")
-        print(f"Chi-Square Statistic: {chi_square_stat:.5f}")
-        print(f"P-value: {p_value:.5f}")
+        print(f"Mean Resultant Lengths: {result.rho}")
+        print(f"Overall Mean Resultant Length: {result.rho_all:.5f}")
+        print(f"Estimated Kappa Values: {result.kappa}")
+        print(f"Overall Estimated Kappa: {result.kappa_all:.5f}")
+        print(f"Degrees of Freedom: {result.df}")
+        print(f"Chi-Square Statistic: {result.statistic:.5f}")
+        print(f"P-value: {result.pval:.5f}")
+        print(f"Regime: {result.regime}")
         print("------------------------------------------------------\n")
 
     return result
@@ -2120,7 +2380,7 @@ def common_median_test(
     samples: list[np.ndarray],
     alpha: float = 0.05,
     verbose: bool = False,
-) -> dict:
+) -> CommonMedianTestResult:
     """
     Common Median Test (Equal Median Test) for Multiple Circular Samples.
 
@@ -2138,12 +2398,8 @@ def common_median_test(
 
     Returns
     -------
-    result : dict
-        A dictionary containing:
-        - `'common_median'`: Estimated shared median if H₀ is not rejected; otherwise, `NaN`.
-        - `'test_statistic'`: Test statistic (Chi-Square).
-        - `'p_value'`: p-value.
-        - `'reject'`: Boolean indicating whether to reject H₀.
+    CommonMedianTestResult
+        Dataclass containing the common median, test statistic, p-value, and rejection flag.
 
     References
     ----------
@@ -2192,21 +2448,23 @@ def common_median_test(
     if reject:
         common_median = np.nan
 
-    result = {
-        "common_median": common_median,
-        "test_statistic": P,
-        "p_value": p_value,
-        "reject": reject,
-    }
+    result = CommonMedianTestResult(
+        common_median=float(common_median),
+        statistic=float(P),
+        pval=float(p_value),
+        reject=bool(reject),
+    )
 
     # Print results if verbose is enabled
     if verbose:
         print("\nCommon Median Test (Equal Median Test)")
         print("--------------------------------------")
-        print(f"Estimated Common Median: {common_median if not reject else 'NaN'}")
-        print(f"Test Statistic: {P:.5f}")
-        print(f"P-value: {p_value:.5f}")
-        print(f"Reject H₀ (α={alpha:.2f}): {'Yes' if reject else 'No'}")
+        median_display = result.common_median if not result.reject else "NaN"
+        print(f"Estimated Common Median: {median_display}")
+        print(f"Test Statistic: {result.statistic:.5f}")
+        print(f"P-value: {result.pval:.5f}")
+        decision = "Yes" if result.reject else "No"
+        print(f"Reject H₀ (α={alpha:.2f}): {decision}")
         print("--------------------------------------\n")
 
     return result
