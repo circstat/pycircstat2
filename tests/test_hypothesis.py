@@ -283,7 +283,7 @@ def test_rao_spacing_test():
 
 
 def test_circ_range_test():
-    x = np.array(
+    x_deg = np.array(
         [
             0.0,
             0.0,
@@ -311,9 +311,16 @@ def test_circ_range_test():
             324.0,
         ]
     )
-    result = circ_range_test(x)
-    np.testing.assert_approx_equal(result.range_stat, 4.584073, significant=5)
-    np.testing.assert_approx_equal(result.pval, 0.01701148, significant=5)
+    x_rad = np.deg2rad(x_deg)
+    result = circ_range_test(x_rad)
+    np.testing.assert_approx_equal(result.range_stat, 3.581416, significant=5)
+    np.testing.assert_approx_equal(result.pval, 5.825496e-05, significant=5)
+
+
+def test_circ_range_test_rejects_degree_input():
+    x_deg = np.array([0.0, 10.0, 20.0])
+    with pytest.raises(ValueError):
+        circ_range_test(x_deg)
 
 
 def test_binomial_test_uniform():

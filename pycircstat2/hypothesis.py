@@ -42,6 +42,21 @@ class TestResult:
 
         return asdict(self)
 
+    def significance(self, attr: str = "pval") -> Optional[str]:
+        """Return significance stars for the requested p-value attribute."""
+
+        if not hasattr(self, attr):
+            return None
+
+        value = getattr(self, attr)
+        if value is None:
+            return None
+
+        try:
+            return significance_code(float(value))
+        except (TypeError, ValueError):
+            return None
+
 
 @dataclass(frozen=True)
 class RayleighTestResult(TestResult):
@@ -449,12 +464,6 @@ def rayleigh_test(
             )
 
     return RayleighTestResult(r=r, z=z, pval=pval, bootstrap_pval=bootstrap_pval)
-
-
-@dataclass(frozen=True)
-class ChiSquareTestResult:
-    chi2: float
-    pval: float
 
 
 def chisquare_test(w: np.ndarray, verbose: bool = False) -> ChiSquareTestResult:
@@ -1789,7 +1798,7 @@ def circ_range_test(alpha: np.ndarray) -> CircularRangeTestResult:
     Parameters
     ----------
     alpha : np.ndarray
-        Angles in radians.
+        Angles in radians. Values must already be wrapped into ``[-2π, 2π]``.
 
     Returns
     -------
@@ -1803,6 +1812,9 @@ def circ_range_test(alpha: np.ndarray) -> CircularRangeTestResult:
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
+
+    if np.any(np.abs(alpha) > 2 * np.pi + 1e-8):
+        raise ValueError("`alpha` must be provided in radians within [-2π, 2π].")
 
     range_stat = circ_range(alpha)  # Compute test statistic
 
