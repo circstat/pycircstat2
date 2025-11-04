@@ -282,6 +282,35 @@ def test_rao_spacing_test():
     assert 0.05 < result.pval < 0.10
 
 
+def test_randomized_tests_seed_harmonization():
+    alpha = np.linspace(0.0, 2 * np.pi, 12, endpoint=False)
+    seed_value = 123
+
+    def make_generator():
+        return np.random.default_rng(seed_value)
+
+    rayleigh_int = rayleigh_test(alpha=alpha, B=128, seed=seed_value)
+    rayleigh_gen = rayleigh_test(alpha=alpha, B=128, seed=make_generator())
+    assert rayleigh_int.bootstrap_pval == rayleigh_gen.bootstrap_pval
+
+    samples = [alpha[:6], alpha[6:]]
+    art_int = angular_randomisation_test(samples, n_simulation=128, seed=seed_value)
+    art_gen = angular_randomisation_test(samples, n_simulation=128, seed=make_generator())
+    assert art_int.pval == art_gen.pval
+
+    kuiper_int = kuiper_test(alpha=alpha, n_simulation=256, seed=seed_value)
+    kuiper_gen = kuiper_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    assert kuiper_int.pval == kuiper_gen.pval
+
+    watson_int = watson_test(alpha=alpha, n_simulation=256, seed=seed_value)
+    watson_gen = watson_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    assert watson_int.pval == watson_gen.pval
+
+    rao_int = rao_spacing_test(alpha=alpha, n_simulation=256, seed=seed_value)
+    rao_gen = rao_spacing_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    assert rao_int.pval == rao_gen.pval
+
+
 def test_circ_range_test():
     x_deg = np.array(
         [

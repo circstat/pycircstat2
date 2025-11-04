@@ -27,6 +27,25 @@ from .utils import (
     significance_code,
 )
 
+SeedLike = Union[
+    None,
+    int,
+    Sequence[int],
+    np.random.Generator,
+    np.random.BitGenerator,
+    np.random.SeedSequence,
+]
+
+
+def _init_rng(seed: SeedLike) -> np.random.Generator:
+    """Normalize a seed-like input into a Generator instance."""
+
+    if isinstance(seed, np.random.Generator):
+        return seed
+
+    return np.random.default_rng(seed)
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -331,6 +350,7 @@ def rayleigh_test(
     r: Optional[float] = None,
     n: Optional[int] = None,
     B: int = 1,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> RayleighTestResult:
     r"""
@@ -365,6 +385,12 @@ def rayleigh_test(
 
     B: int
         Number of bootstrap samples for p-value estimation.
+
+    seed: SeedLike
+        Seed used to initialize the random number generator for bootstrap resampling
+        when ``B > 1``. Accepts integers, sequences of integers, ``numpy.random.Generator``,
+        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
+        Defaults to 2046.
 
     verbose: bool
         Print formatted results.
@@ -440,8 +466,17 @@ def rayleigh_test(
     pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
 
     bootstrap_pval: Optional[float]
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        verbose = bool(seed)
+        seed = 2046
+
     if B > 1:
-        rng = np.random.default_rng()
+        rng = _init_rng(seed)
         uniforms = rng.uniform(0.0, 2 * np.pi, size=(B, n))
         unit_vectors = np.exp(1j * uniforms)
         resultant_lengths = np.abs(np.sum(unit_vectors, axis=1))
@@ -1396,6 +1431,7 @@ def circ_anova(
 def angular_randomisation_test(
     samples: Sequence[Any],
     n_simulation: int = 1000,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> AngularRandomisationTestResult:
     """The Angular Randomization Test (ART) for homogeneity.
@@ -1409,6 +1445,11 @@ def angular_randomisation_test(
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
     n_simulation: int, optional
         Number of permutations for the test. Defaults to 1000.
+    seed: SeedLike
+        Seed used to initialize the random number generator for the permutation test.
+        Accepts integers, sequences of integers, ``numpy.random.Generator``,
+        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
+        Defaults to 2046.
 
     Returns
     -------
@@ -1468,7 +1509,16 @@ def angular_randomisation_test(
     n1 = sample_arrays[0].size
 
     # Perform permutation test
-    rng = np.random.default_rng()
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        verbose = bool(seed)
+        seed = 2046
+
+    rng = _init_rng(seed)
 
     for _ in range(n_simulation):
         # Randomly permute the combined data
@@ -1508,7 +1558,7 @@ def angular_randomisation_test(
 def kuiper_test(
     alpha: np.ndarray,
     n_simulation: int = 9999,
-    seed: int = 2046,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> KuiperTestResult:
     """
@@ -1531,8 +1581,11 @@ def kuiper_test(
         If n_simulation>1, the p-value is simulated.
         Default is 9999.
 
-    seed: int
-        Random seed.
+    seed: SeedLike
+        Seed used to initialize the random number generator for the simulation-based
+        p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
+        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
+        Defaults to 2046.
 
     Returns
     -------
@@ -1566,6 +1619,15 @@ def kuiper_test(
     n = alpha.size
     Vo, f = compute_V(alpha)
 
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        verbose = bool(seed)
+        seed = 2046
+
     if n_simulation == 1:
         # asymptotic p-value
         mode = "asymptotic"
@@ -1577,7 +1639,7 @@ def kuiper_test(
         pval = float(np.sum(b1 - b2))
     else:
         mode = "simulation"
-        rng = np.random.default_rng(seed)
+        rng = _init_rng(seed)
         uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
         x = np.sort(uniforms, axis=0)
         Vs = np.array([compute_V(x[:, i])[0] for i in range(n_simulation)])
@@ -1596,7 +1658,7 @@ def kuiper_test(
 def watson_test(
     alpha: np.ndarray,
     n_simulation: int = 9999,
-    seed: int = 2046,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> WatsonTestResult:
     """
@@ -1618,8 +1680,11 @@ def watson_test(
         If n_simulation=1, the p-value is asymptotically approximated.
         If n_simulation>1, the p-value is simulated.
 
-    seed: int
-        Random seed.
+    seed: SeedLike
+        Seed used to initialize the random number generator for the simulation-based
+        p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
+        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
+        Defaults to 2046.
 
     Returns
     -------
@@ -1658,13 +1723,22 @@ def watson_test(
     n = alpha.size
     U2o = compute_U2(alpha)
 
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        verbose = bool(seed)
+        seed = 2046
+
     if n_simulation == 1:
         mode = "asymptotic"
         m = np.arange(1, 51)
         pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
     else:
         mode = "simulation"
-        rng = np.random.default_rng(seed)
+        rng = _init_rng(seed)
         uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
         x = np.sort(uniforms, axis=0)
         U2s = np.array([compute_U2(x[:, i]) for i in range(n_simulation)])
@@ -1685,7 +1759,7 @@ def rao_spacing_test(
     w: Union[np.ndarray, None] = None,
     kappa: float = 1000.0,
     n_simulation: int = 9999,
-    seed: int = 2046,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> RaoSpacingTestResult:
     """Simulation based Rao's spacing test.
@@ -1709,8 +1783,11 @@ def rao_spacing_test(
     n_simulation: int
         Number of simulations.
 
-    seed: int
-        Random seed.
+    seed: SeedLike
+        Seed used to initialize the random number generator for the simulation-based
+        p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
+        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
+        Defaults to 2046.
 
     Returns
     -------
@@ -1756,7 +1833,16 @@ def rao_spacing_test(
         n = expanded_alpha.size
         mode = "ungrouped"
 
-    rng = np.random.default_rng(seed)
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        verbose = bool(seed)
+        seed = 2046
+
+    rng = _init_rng(seed)
 
     Uo = compute_U(expanded_alpha)
     if w is not None:  # noncontinuous / grouped data
