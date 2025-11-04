@@ -397,21 +397,6 @@ def rayleigh_test(
 
     Returns
     -------
-    SymmetryTestResult
-        Dataclass containing the Wilcoxon statistic and p-value.
-
-    Returns
-    -------
-    BatscheletTestResult
-        Dataclass containing the count statistic `C` and the associated p-value.
-
-    Returns
-    -------
-    OneSampleTestResult
-        Dataclass with the rejection decision, tested angle, and confidence interval.
-
-    Returns
-    -------
     RayleighTestResult
         A dataclass containing:
 
