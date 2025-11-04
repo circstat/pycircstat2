@@ -27,6 +27,33 @@ from .utils import (
     significance_code,
 )
 
+__all__ = [
+    "rayleigh_test",
+    "chisquare_test",
+    "V_test",
+    "one_sample_test",
+    "omnibus_test",
+    "batschelet_test",
+    "symmetry_test",
+    "watson_williams_test",
+    "watson_u2_test",
+    "wheeler_watson_test",
+    "wallraff_test",
+    "circ_anova",
+    "angular_randomisation_test",
+    "kuiper_test",
+    "watson_test",
+    "rao_spacing_test",
+    "circ_range_test",
+    "binomial_test",
+    "concentration_test",
+    "rao_homogeneity_test",
+    "change_point_test",
+    "harrison_kanji_test",
+    "equal_kappa_test",
+    "common_median_test",
+]
+
 SeedLike = Union[
     None,
     int,
@@ -1260,6 +1287,8 @@ def wallraff_test(
     if verbose:
         print("Wallraff test of angular distances / dispersion")
         print("-----------------------------------------------")
+        print("H0: The groups have equal dispersion around the specified reference angle.")
+        print("HA: At least one group differs in dispersion around the specified angle.")
         print("")
         print(f"Test Statistics: {U:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -1633,6 +1662,8 @@ def kuiper_test(
     if verbose:
         print("Kuiper's Test of Circular Uniformity")
         print("------------------------------------")
+        print("H0: The sample is drawn from a circularly uniform distribution.")
+        print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {Vo:.4f}")
         print(f"P-value = {pval} {significance_code(pval)}")
@@ -1732,6 +1763,8 @@ def watson_test(
     if verbose:
         print("Watson's One-Sample U2 Test of Circular Uniformity")
         print("--------------------------------------------------")
+        print("H0: The sample is drawn from a circularly uniform distribution.")
+        print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {U2o:.4f}")
         print(f"P-value = {pval} {significance_code(pval)}")
@@ -1847,6 +1880,8 @@ def rao_spacing_test(
     if verbose:
         print("Rao's Spacing Test of Circular Uniformity")
         print("-----------------------------------------")
+        print("H0: The sample is drawn from a circularly uniform distribution.")
+        print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {Uo:.4f}")
         print(f"P-value = {pval}\n")
@@ -1859,7 +1894,7 @@ def rao_spacing_test(
     )
 
 
-def circ_range_test(alpha: np.ndarray) -> CircularRangeTestResult:
+def circ_range_test(alpha: np.ndarray, verbose: bool = False) -> CircularRangeTestResult:
     """
     Perform the Circular Range Test for uniformity.
 
@@ -1870,6 +1905,8 @@ def circ_range_test(alpha: np.ndarray) -> CircularRangeTestResult:
     ----------
     alpha : np.ndarray
         Angles in radians. Values must already be wrapped into ``[-2π, 2π]``.
+    verbose : bool, optional
+        If ``True``, prints test details and results.
 
     Returns
     -------
@@ -1902,10 +1939,27 @@ def circ_range_test(alpha: np.ndarray) -> CircularRangeTestResult:
     )
     p_value = float(np.sum(sequence))
 
-    return CircularRangeTestResult(range_stat=float(range_stat), pval=float(p_value))
+    result = CircularRangeTestResult(range_stat=float(range_stat), pval=float(p_value))
+
+    if verbose:
+        range_deg = float(np.rad2deg(result.range_stat))
+        print("Circular Range Test of Uniformity")
+        print("---------------------------------")
+        print("H0: The sample is uniformly distributed around the circle.")
+        print("HA: The sample exhibits clustering (non-uniformity).")
+        print("")
+        print(f"Sample size: {n}")
+        print(f"Range statistic: {result.range_stat:.5f} rad ({range_deg:.2f}°)")
+        print(f"P-value: {result.pval:.5g} {significance_code(result.pval)}")
+
+    return result
 
 
-def binomial_test(alpha: np.ndarray, md: float) -> BinomialTestResult:
+def binomial_test(
+    alpha: np.ndarray,
+    md: float,
+    verbose: bool = False,
+) -> BinomialTestResult:
     """
     Perform the binomial test for the median direction of circular data.
 
@@ -1920,6 +1974,8 @@ def binomial_test(alpha: np.ndarray, md: float) -> BinomialTestResult:
         Sample of angles in radians.
     md : float
         Hypothesized median angle.
+    verbose : bool, optional
+        If ``True``, prints test details and results.
 
     Returns
     -------
@@ -1947,17 +2003,32 @@ def binomial_test(alpha: np.ndarray, md: float) -> BinomialTestResult:
     n2 = int(np.sum(d > 0))
     n_eff = int(n1 + n2)
     if n_eff == 0:
-        return BinomialTestResult(pval=1.0, n_eff=0, n1=n1, n2=n2)
+        result = BinomialTestResult(pval=1.0, n_eff=0, n1=n1, n2=n2)
+    else:
+        # Compute p-value using binomial test
+        n_min = int(min(n1, n2))
+        pval = float(2 * binom.cdf(n_min, n_eff, 0.5))
+        pval = min(pval, 1.0)
+        result = BinomialTestResult(pval=pval, n_eff=n_eff, n1=n1, n2=n2)
 
-    # Compute p-value using binomial test
-    n_min = int(min(n1, n2))
-    pval = float(2 * binom.cdf(n_min, n_eff, 0.5))
-    pval = min(pval, 1.0)
+    if verbose:
+        print("Circular Binomial Test for Median Direction")
+        print("--------------------------------------------")
+        print(f"H0: Median direction equals {float(md):.5f} rad.")
+        print("HA: Median direction differs from the hypothesized value.")
+        print("")
+        print(f"Effective sample size: {result.n_eff}")
+        print(f"Counts below/above median: n1 = {result.n1}, n2 = {result.n2}")
+        print(f"P-value: {result.pval:.5f} {significance_code(result.pval)}")
 
-    return BinomialTestResult(pval=pval, n_eff=n_eff, n1=n1, n2=n2)
+    return result
 
 
-def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> ConcentrationTestResult:
+def concentration_test(
+    alpha1: np.ndarray,
+    alpha2: np.ndarray,
+    verbose: bool = False,
+) -> ConcentrationTestResult:
     """
     Parametric two-sample test for concentration equality in circular data.
 
@@ -1973,6 +2044,8 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> ConcentrationT
         First sample of circular data (radians).
     alpha2 : np.ndarray
         Second sample of circular data (radians).
+    verbose : bool, optional
+        If ``True``, prints test details and results.
 
     Returns
     -------
@@ -2028,15 +2101,34 @@ def concentration_test(alpha1: np.ndarray, alpha2: np.ndarray) -> ConcentrationT
     else:
         pval = 2 * f.sf(1 / f_stat, df2, df1)
 
-    return ConcentrationTestResult(
+    result = ConcentrationTestResult(
         f_stat=float(f_stat),
         pval=float(min(pval, 1.0)),
         df1=int(df1),
         df2=int(df2),
     )
 
+    if verbose:
+        print("Concentration Equality Test")
+        print("---------------------------")
+        print("H0: Both samples share the same concentration parameter (κ).")
+        print("HA: The samples have different concentration parameters.")
+        print("")
+        print(f"Sample sizes: n1 = {n1}, n2 = {n2}")
+        print(
+            f"F statistic: {result.f_stat:.5f} "
+            f"(df1 = {result.df1}, df2 = {result.df2})"
+        )
+        print(f"P-value: {result.pval:.5f} {significance_code(result.pval)}")
 
-def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> RaoHomogeneityTestResult:
+    return result
+
+
+def rao_homogeneity_test(
+    samples: list,
+    alpha: float = 0.05,
+    verbose: bool = False,
+) -> RaoHomogeneityTestResult:
     """
     Perform Rao's test for homogeneity on multiple samples of angular data.
 
@@ -2049,6 +2141,8 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> RaoHomogeneityTe
         A list where each entry is a vector of angular values (in radians).
     alpha : float, optional
         Significance level for the hypothesis test. Default is 0.05.
+    verbose : bool, optional
+        If ``True``, prints test details and decisions.
 
     Returns
     -------
@@ -2122,7 +2216,7 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> RaoHomogeneityTe
     reject_polar = H_polar > crit_polar
     reject_disp = H_disp > crit_disp
 
-    return RaoHomogeneityTestResult(
+    result = RaoHomogeneityTestResult(
         H_polar=float(H_polar),
         pval_polar=float(pval_polar),
         reject_polar=bool(reject_polar),
@@ -2131,8 +2225,27 @@ def rao_homogeneity_test(samples: list, alpha: float = 0.05) -> RaoHomogeneityTe
         reject_disp=bool(reject_disp),
     )
 
+    if verbose:
+        print("Rao's Homogeneity Test")
+        print("----------------------")
+        print("Test 1 H0: All groups share the same mean direction.")
+        print("Test 2 H0: All groups share the same dispersion.")
+        print("")
+        print(
+            f"Mean directions: H = {result.H_polar:.5f}, "
+            f"p = {result.pval_polar:.5f} {significance_code(result.pval_polar)}; "
+            f"reject @ α={alpha}: {result.reject_polar}"
+        )
+        print(
+            f"Dispersions:     H = {result.H_disp:.5f}, "
+            f"p = {result.pval_disp:.5f} {significance_code(result.pval_disp)}; "
+            f"reject @ α={alpha}: {result.reject_disp}"
+        )
 
-def change_point_test(alpha) -> ChangePointTestResult:
+    return result
+
+
+def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
     """
     Perform a change point test for mean direction, concentration, or both.
 
@@ -2140,6 +2253,8 @@ def change_point_test(alpha) -> ChangePointTestResult:
     ----------
     alpha : np.ndarray
         Vector of angular measurements in radians.
+    verbose : bool, optional
+        If ``True``, prints test details and summary statistics.
 
     Returns
     -------
@@ -2209,7 +2324,7 @@ def change_point_test(alpha) -> ChangePointTestResult:
     else:
         raise ValueError("Sample size must be at least 4.")
 
-    return ChangePointTestResult(
+    result = ChangePointTestResult(
         n=int(n),
         rho=float(rho),
         rmax=float(rmax),
@@ -2220,6 +2335,21 @@ def change_point_test(alpha) -> ChangePointTestResult:
         tave=float(tave),
     )
 
+    if verbose:
+        print("Circular Change Point Test")
+        print("--------------------------")
+        print("H0: No change point in mean direction or concentration.")
+        print("HA: A change point is present in the sequence.")
+        print("")
+        print(f"Sample size: {result.n}")
+        print(f"Overall resultant length (ρ): {result.rho:.5f}")
+        print(f"Max R statistic: {result.rmax:.5f} at k = {result.k_r}")
+        print(f"Average R statistic: {result.rave:.5f}")
+        print(f"Max T statistic: {result.tmax:.5f} at k = {result.k_t}")
+        print(f"Average T statistic: {result.tave:.5f}")
+
+    return result
+
 
 def harrison_kanji_test(
     alpha: np.ndarray,
@@ -2227,9 +2357,25 @@ def harrison_kanji_test(
     idq: np.ndarray,
     inter: bool = True,
     fn: Optional[list] = None,
+    verbose: bool = False,
 ) -> HarrisonKanjiTestResult:
     """
     Harrison-Kanji Test (Two-Way ANOVA) for Circular Data.
+
+    Parameters
+    ----------
+    alpha : np.ndarray
+        Angular measurements (radians).
+    idp : np.ndarray
+        Factor A identifiers for each observation.
+    idq : np.ndarray
+        Factor B identifiers for each observation.
+    inter : bool, optional
+        Whether to include the interaction term. Defaults to ``True``.
+    fn : list, optional
+        Names for the two factors. Defaults to ``["A", "B"]``.
+    verbose : bool, optional
+        If ``True``, prints test details and results.
     """
 
     if fn is None:
@@ -2359,7 +2505,32 @@ def harrison_kanji_test(
             }
         ).set_index("Source")
 
-    return HarrisonKanjiTestResult(p_values=pval, anova_table=table)
+    result = HarrisonKanjiTestResult(p_values=pval, anova_table=table)
+
+    if verbose:
+        p_a, p_b, p_inter = result.p_values
+
+        def _fmt(p: Optional[float]) -> str:
+            if p is None or (isinstance(p, float) and math.isnan(p)):
+                return "n/a"
+            return f"{p:.5f} {significance_code(p)}"
+
+        print("Harrison-Kanji Two-Way Circular ANOVA")
+        print("-------------------------------------")
+        print(f"H0 ({fn[0]}): No difference in mean direction across factor {fn[0]}.")
+        print(f"H0 ({fn[1]}): No difference in mean direction across factor {fn[1]}.")
+        if inter:
+            print("H0 (Interaction): No interaction between the two factors.")
+        print("")
+        print(f"{fn[0]} effect p-value: {_fmt(p_a)}")
+        print(f"{fn[1]} effect p-value: {_fmt(p_b)}")
+        if inter:
+            print(f"Interaction p-value: {_fmt(p_inter)}")
+        print("")
+        print("ANOVA table (first rows):")
+        print(result.anova_table.head())
+
+    return result
 
 
 def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualKappaTestResult:
