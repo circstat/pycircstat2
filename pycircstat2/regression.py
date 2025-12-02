@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union
+from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -9,6 +9,20 @@ from scipy.stats import chi2, norm
 from .utils import A1, A1inv, significance_code
 
 __all__ = ["CLRegression", "CCRegression"]
+
+
+def _safe_solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    try:
+        return np.linalg.solve(matrix, rhs)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(matrix) @ rhs
+
+
+def _safe_inverse(matrix: np.ndarray) -> np.ndarray:
+    try:
+        return np.linalg.inv(matrix)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(matrix)
 
 
 class CLRegression:
@@ -102,33 +116,75 @@ class CLRegression:
 
         # Parse inputs
         if formula and data is not None:
-            self.theta, self.X, self.feature_names = self._parse_formula(formula, data)
+            theta_arr, X_arr, feature_names = self._parse_formula(formula, data)
         elif theta is not None and X is not None:
-            self.theta = theta
-            self.X = X
-            self.feature_names = [f"x{i}" for i in range(X.shape[1])]
+            feature_names = None
+            theta_arr, X_arr = theta, X
         else:
             raise ValueError("Provide either a formula + data or theta and X.")
+
+        self.theta, self.X = self._prepare_design(theta_arr, X_arr)
+        if feature_names is None:
+            self.feature_names = [f"x{i}" for i in range(self.X.shape[1])]
+        else:
+            self.feature_names = feature_names
 
         # Validate model type
         if model_type not in ["mean", "kappa", "mixed"]:
             raise ValueError("Model type must be 'mean', 'kappa', or 'mixed'.")
 
         # Initialize parameters
-        self.alpha = alpha0 if alpha0 is not None else 0.0
-        self.beta = beta0 if beta0 is not None else np.zeros(self.X.shape[1])
-        self.gamma = gamma0 if gamma0 is not None else np.zeros(self.X.shape[1])
+        p = self.X.shape[1]
+        self.alpha = float(alpha0) if alpha0 is not None else 0.0
+        self.beta = self._coerce_vector(beta0, p, name="beta")
+        self.gamma = self._coerce_vector(gamma0, p, name="gamma")
 
         # Fit the model
         self.result = self._fit()
+
+    @staticmethod
+    def _coerce_vector(vec: Optional[np.ndarray], length: int, name: str) -> np.ndarray:
+        if vec is None:
+            return np.zeros(length, dtype=float)
+        arr = np.asarray(vec, dtype=float).reshape(-1)
+        if arr.size != length:
+            raise ValueError(f"Initial {name} must have length {length} (got {arr.size}).")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"Initial {name} contains non-finite values.")
+        return arr
+
+    @staticmethod
+    def _prepare_design(theta: Iterable[float], X: Iterable[Iterable[float]]) -> Tuple[np.ndarray, np.ndarray]:
+        theta_arr = np.asarray(theta, dtype=float).reshape(-1)
+        if theta_arr.size == 0:
+            raise ValueError("`theta` must contain at least one observation.")
+        if not np.all(np.isfinite(theta_arr)):
+            raise ValueError("`theta` contains non-finite values.")
+
+        X_arr = np.asarray(X, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr[:, None]
+        if X_arr.ndim != 2:
+            raise ValueError("`X` must be convertible to a 2D numeric array.")
+        if X_arr.shape[0] != theta_arr.size:
+            raise ValueError("`theta` and `X` must have matching numbers of rows.")
+        if not np.all(np.isfinite(X_arr)):
+            raise ValueError("`X` contains non-finite values.")
+        return theta_arr, X_arr
 
     def _parse_formula(
         self, formula: str, data: pd.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         theta_col, x_cols = formula.split("~")
-        theta = data[theta_col.strip()].to_numpy()
+        theta_series = data[theta_col.strip()]
+        if theta_series.isnull().any():
+            raise ValueError("Response column contains missing values.")
+        theta = theta_series.to_numpy()
         x_cols = [col.strip() for col in x_cols.split("+")]
-        X = data[x_cols].to_numpy()
+        X_df = data[x_cols]
+        if X_df.isnull().any().any():
+            raise ValueError("Predictor columns contain missing values.")
+        X = X_df.to_numpy()
         return theta, X, x_cols
 
     def _A1(self, kappa: np.ndarray) -> np.ndarray:
@@ -161,16 +217,20 @@ class CLRegression:
                 raw_deviation = theta - 2 * np.arctan(X @ beta)
                 S = np.mean(np.sin(raw_deviation))
                 C = np.mean(np.cos(raw_deviation))
-                R = np.sqrt(S**2 + C**2)
-                kappa = A1inv(R)
+                R = np.hypot(S, C)
+                kappa = float(A1inv(R))
                 mu = np.arctan2(S, C)
 
                 # Step 2: Update beta
-                G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
-                A = np.eye(n) * (kappa * A1(np.asarray(kappa)))
+                denom = 1 + (X @ beta) ** 2
+                G = 2 * X / denom[:, None]
+                weight = float(kappa * A1(np.array([kappa]))[0])
                 u = kappa * np.sin(raw_deviation - mu)
-                beta_new = np.linalg.solve(G.T @ A @ G, G.T @ (u + A @ G @ beta))
-                alpha_new, gamma_new = np.nan, np.nan
+                XtX = G.T @ G
+                rhs = G.T @ u + weight * XtX @ beta
+                mat = weight * XtX + 1e-8 * np.eye(X.shape[1])
+                beta_new = _safe_solve(mat, rhs)
+                alpha_new, gamma_new = alpha, gamma
 
                 # Log-likelihood
                 log_likelihood = -n * np.log(i0(kappa)) + kappa * np.sum(
@@ -180,20 +240,24 @@ class CLRegression:
             elif self.model_type == "kappa":
                 # Step 1: Compute mu and kappa
                 kappa = np.exp(alpha + X @ gamma)
-                S = np.sum(kappa * np.sin(theta))
-                C = np.sum(kappa * np.cos(theta))
+                S = float(np.sum(kappa * np.sin(theta)))
+                C = float(np.sum(kappa * np.cos(theta)))
                 mu = np.arctan2(S, C)
 
                 # Step 2: Update gamma
-                residuals_gamma = np.cos(theta - mu) - self._A1(kappa)
-                y_gamma = residuals_gamma / (self._A1_prime(kappa) * kappa)
-                W_gamma = np.diag((kappa**2) * self._A1_prime(kappa))
-                XtWX = X1.T @ W_gamma @ X1
-                XtWy = X1.T @ W_gamma @ y_gamma
-                update = np.linalg.solve(XtWX, XtWy)
+                a1_kappa = self._A1(kappa)
+                a1_prime = self._A1_prime(kappa)
+                if np.any(np.isclose(a1_prime, 0.0)):
+                    raise ValueError("Encountered zero derivative in concentration update.")
+                residuals_gamma = np.cos(theta - mu) - a1_kappa
+                y_gamma = residuals_gamma / (a1_prime * kappa)
+                weights = (kappa**2) * a1_prime
+                XtWX = X1.T @ (weights[:, None] * X1)
+                XtWy = X1.T @ (weights * y_gamma)
+                update = _safe_solve(XtWX + 1e-8 * np.eye(X1.shape[1]), XtWy)
                 alpha_new = alpha + update[0]
                 gamma_new = gamma + update[1:]
-                beta_new = np.nan
+                beta_new = beta
                 # Log-likelihood
                 log_likelihood = -np.sum(np.log(i0(kappa))) + np.sum(
                     kappa * np.cos(theta - mu)
@@ -209,19 +273,26 @@ class CLRegression:
                 residuals = theta - mu
 
                 # Step 2: Update beta
-                G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
-                W_kappa = np.diag(kappa * self._A1(kappa))
-                beta_new = np.linalg.solve(
-                    G.T @ W_kappa @ G, G.T @ W_kappa @ np.sin(residuals)
+                denom = 1 + (X @ beta) ** 2
+                G = 2 * X / denom[:, None]
+                weights_beta = kappa * self._A1(kappa)
+                XtWX_beta = G.T @ (weights_beta[:, None] * G)
+                rhs_beta = G.T @ (weights_beta * np.sin(residuals))
+                beta_new = _safe_solve(
+                    XtWX_beta + 1e-8 * np.eye(X.shape[1]), rhs_beta
                 )
 
                 # Step 3: Update gamma
-                residuals_gamma = np.cos(raw_deviation - mu) - self._A1(kappa)
-                y_gamma = residuals_gamma / (self._A1_prime(kappa) * kappa)
-                W_gamma = np.diag((kappa**2) * self._A1_prime(kappa))
-                XtWX = X1.T @ W_gamma @ X1
-                XtWy = X1.T @ W_gamma @ y_gamma
-                update = np.linalg.solve(XtWX, XtWy)
+                a1_kappa = self._A1(kappa)
+                a1_prime = self._A1_prime(kappa)
+                if np.any(np.isclose(a1_prime, 0.0)):
+                    raise ValueError("Encountered zero derivative in concentration update.")
+                residuals_gamma = np.cos(raw_deviation - mu) - a1_kappa
+                y_gamma = residuals_gamma / (a1_prime * kappa)
+                weights_gamma = (kappa**2) * a1_prime
+                XtWX = X1.T @ (weights_gamma[:, None] * X1)
+                XtWy = X1.T @ (weights_gamma * y_gamma)
+                update = _safe_solve(XtWX + 1e-8 * np.eye(X1.shape[1]), XtWy)
                 alpha_new = alpha + update[0]
                 gamma_new = gamma + update[1:]
 
@@ -273,16 +344,17 @@ class CLRegression:
 
         if self.model_type == "mean":
             # Mean Direction Model
-            G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
-            A = np.eye(n) * (kappa * self._A1(kappa))
-            XtAX = G.T @ A @ G
-            cov_beta = np.linalg.solve(XtAX, np.eye(XtAX.shape[0]))
+            denom = 1 + (X @ beta) ** 2
+            G = 2 * X / denom[:, None]
+            weight = float(kappa * self._A1(np.array([kappa]))[0])
+            XtAX = weight * (G.T @ G) + 1e-8 * np.eye(X.shape[1])
+            cov_beta = _safe_inverse(XtAX)
             se_beta = np.sqrt(np.diag(cov_beta))
 
-            se_mu = 1 / np.sqrt((n - X.shape[1]) * kappa * self._A1(kappa))
-            se_kappa = np.sqrt(
-                1 / (n * (1 - self._A1(kappa) ** 2 - self._A1(kappa) / kappa))
-            )
+            denom_mu = max((n - X.shape[1]) * kappa * self._A1(np.array([kappa]))[0], 1e-12)
+            se_mu = 1 / np.sqrt(denom_mu)
+            denom_kappa = n * (1 - self._A1(np.array([kappa]))[0] ** 2 - self._A1(np.array([kappa]))[0] / kappa)
+            se_kappa = np.sqrt(1 / max(denom_kappa, 1e-12))
 
             se_results.update(
                 {
@@ -295,19 +367,18 @@ class CLRegression:
         elif self.model_type == "kappa":
             # Concentration Parameter Model
             X1 = np.column_stack((np.ones(n), X))  # Add intercept
-            W = np.diag(
-                (np.exp(X1 @ np.hstack([alpha, gamma])) ** 2) * self._A1_prime(kappa)
-            )
-            XtWX = X1.T @ W @ X1
+            weights = (np.exp(X1 @ np.hstack([alpha, gamma])) ** 2) * self._A1_prime(kappa)
+            XtWX = X1.T @ (weights[:, None] * X1) + 1e-8 * np.eye(X1.shape[1])
 
-            cov_gamma_alpha = np.linalg.solve(XtWX, np.eye(XtWX.shape[0]))
+            cov_gamma_alpha = _safe_inverse(XtWX)
 
             se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
             se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
 
-            se_mu = 1 / np.sqrt(np.sum(kappa * self._A1(kappa)) - 0.5)
+            denom_mu = max(np.sum(kappa * self._A1(kappa)) - 0.5, 1e-12)
+            se_mu = 1 / np.sqrt(denom_mu)
 
-            se_kappa = np.sqrt(1 / (n * self._A1_prime(kappa)))
+            se_kappa = np.sqrt(1 / np.clip(n * self._A1_prime(kappa), 1e-12, None))
 
             se_results.update(
                 {
@@ -320,32 +391,27 @@ class CLRegression:
 
         elif self.model_type == "mixed":
             # Mixed Model
-            G = 2 * X / (1 + (X @ beta) ** 2)[:, None]
-            K = np.diag(kappa * self._A1(kappa))
-            XtGKGX = G.T @ K @ G
+            denom = 1 + (X @ beta) ** 2
+            G = 2 * X / denom[:, None]
+            weights_beta = kappa * self._A1(kappa)
+            XtGKGX = G.T @ (weights_beta[:, None] * G) + 1e-8 * np.eye(X.shape[1])
 
-            cov_beta = np.linalg.solve(XtGKGX, np.eye(XtGKGX.shape[0]))
+            cov_beta = _safe_inverse(XtGKGX)
             se_beta = np.sqrt(np.diag(cov_beta))
 
             X1 = np.column_stack((np.ones(n), X))  # Add intercept
-            W_gamma = np.diag(
-                (np.exp(X1 @ np.hstack([alpha, gamma])) ** 2) * self._A1_prime(kappa)
-            )
-            XtWX_gamma = X1.T @ W_gamma @ X1
+            weights_gamma = (np.exp(X1 @ np.hstack([alpha, gamma])) ** 2) * self._A1_prime(kappa)
+            XtWX_gamma = X1.T @ (weights_gamma[:, None] * X1) + 1e-8 * np.eye(X1.shape[1])
 
-            # Check positive definiteness and regularize if needed
-            eigenvalues_gamma = np.linalg.eigvals(XtWX_gamma)
-            if np.any(eigenvalues_gamma <= 0):
-                XtWX_gamma += np.eye(XtWX_gamma.shape[0]) * 1e-8
-
-            cov_gamma_alpha = np.linalg.solve(XtWX_gamma, np.eye(XtWX_gamma.shape[0]))
+            cov_gamma_alpha = _safe_inverse(XtWX_gamma)
             se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
             se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
 
-            se_mu = 1 / np.sqrt(np.sum(kappa * self._A1(kappa)) - 0.5)
-            se_kappa = np.sqrt(
-                1 / (n * (1 - self._A1(kappa) ** 2 - self._A1(kappa) / kappa))
-            )
+            denom_mu = max(np.sum(kappa * self._A1(kappa)) - 0.5, 1e-12)
+            se_mu = 1 / np.sqrt(denom_mu)
+            a1_vals = self._A1(kappa)
+            denom_kappa = n * (1 - a1_vals**2 - a1_vals / kappa)
+            se_kappa = np.sqrt(1 / np.clip(denom_kappa, 1e-12, None))
             se_results.update(
                 {
                     "se_beta": se_beta,
@@ -421,9 +487,22 @@ class CLRegression:
         if self.result is None:
             raise ValueError("Model must be fitted before making predictions.")
 
+        beta = self.result.get("beta")
+        if beta is None or np.any(~np.isfinite(beta)):
+            raise ValueError("Model does not contain beta coefficients for prediction.")
+
+        X_arr = np.asarray(X_new, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr[:, None]
+        if X_arr.shape[1] != beta.size:
+            raise ValueError(
+                f"Expected {beta.size} predictors, received {X_arr.shape[1]}."
+            )
+        if not np.all(np.isfinite(X_arr)):
+            raise ValueError("`X_new` contains non-finite values.")
+
         mu = self.result["mu"]
-        beta = self.result["beta"]
-        return mu + 2 * np.arctan(X_new @ beta)
+        return mu + 2 * np.arctan(X_arr @ beta)
 
     def summary(self):
         if self.result is None:
@@ -442,33 +521,43 @@ class CLRegression:
         print(f"  CLRegression(model_type='{self.model_type}')\n")
 
         # Coefficients for mean direction (Beta)
-        if self.model_type in ["mean", "mixed"] and self.result["beta"] is not None:
+        se_beta = self.result.get("se_beta")
+        if (
+            self.model_type in ["mean", "mixed"]
+            and self.result.get("beta") is not None
+            and se_beta is not None
+        ):
             print("Coefficients for Mean Direction (Beta):\n")
             print(
                 f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)'}"
             )
             for i, coef in enumerate(self.result["beta"]):
-                # Placeholder for standard error and p-values
-                se_beta = self.result["se_beta"][i]
-                t_value = np.abs(coef / se_beta) if se_beta else np.nan
+                se_val = se_beta[i]
+                t_value = abs(coef / se_val) if se_val else np.nan
                 p_value = (
                     2 * (1 - norm.cdf(np.abs(t_value)))
                     if not np.isnan(t_value)
                     else np.nan
                 )
                 print(
-                    f"β{i:<3} {coef:<12.5f} {se_beta:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value):<3}"
+                    f"β{i:<3} {coef:<12.5f} {se_val:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value):<3}"
                 )
 
         # Coefficients for concentration parameter (Gamma)
-        if self.model_type in ["kappa", "mixed"] and self.result["gamma"] is not None:
+        se_gamma = self.result.get("se_gamma")
+        se_alpha = self.result.get("se_alpha")
+        if (
+            self.model_type in ["kappa", "mixed"]
+            and self.result.get("gamma") is not None
+            and se_gamma is not None
+            and se_alpha is not None
+        ):
             print("\nCoefficients for Concentration (Gamma):\n")
             print(
                 f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)':<12}"
             )
             # Report alpha as the first coefficient
             alpha = self.result["alpha"]
-            se_alpha = self.result["se_alpha"]
             t_value_alpha = alpha / se_alpha if se_alpha else np.nan
             p_value_alpha = (
                 2 * (1 - norm.cdf(np.abs(t_value_alpha)))
@@ -479,35 +568,44 @@ class CLRegression:
                 f"α{'':<5} {alpha:<12.5f} {se_alpha:<12.5f} {t_value_alpha:<10.2f} {p_value_alpha:<12.5f}{significance_code(p_value_alpha)}"
             )
             for i, coef in enumerate(self.result["gamma"]):
-                # Placeholder for standard error and p-values
-                se_gamma = self.result["se_gamma"][i]
-                t_value = coef / se_gamma if se_gamma else np.nan
+                se_val = se_gamma[i]
+                t_value = coef / se_val if se_val else np.nan
                 p_value = (
                     2 * (1 - norm.cdf(np.abs(t_value)))
                     if not np.isnan(t_value)
                     else np.nan
                 )
                 print(
-                    f"γ{i:<5} {coef:<12.5f} {se_gamma:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value)}"
+                    f"γ{i:<5} {coef:<12.5f} {se_val:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value)}"
                 )
 
         # Summary for mu and kappa
         print("\nSummary:")
         print("  Mean Direction (mu) in radians:")
         mu = self.result["mu"]
-        se_mu = self.result["se_mu"]
-        print(f"    μ: {mu:.5f} (SE: {se_mu:.5f})")
+        se_mu = self.result.get("se_mu")
+        if se_mu is not None:
+            print(f"    μ: {mu:.5f} (SE: {se_mu:.5f})")
+        else:
+            print(f"    μ: {mu:.5f}")
 
         print("\n  Concentration Parameter (kappa):")
         kappa = self.result["kappa"]
-        se_kappa = self.result["se_kappa"]
+        se_kappa = self.result.get("se_kappa")
         if isinstance(kappa, np.ndarray):
             print("    Index    kappa        Std. Error")
-            for i, (k, se) in enumerate(zip(kappa, se_kappa), start=1):
-                print(f"    [{i}]    {k:>10.5f}    {se:>10.5f}")
-            print(f"    Mean:    {np.mean(kappa):.5f} (SE: {np.mean(se_kappa):.5f})")
+            for i, k in enumerate(kappa, start=1):
+                se_val = se_kappa[i - 1] if se_kappa is not None else float("nan")
+                print(f"    [{i}]    {k:>10.5f}    {se_val:>10.5f}")
+            if se_kappa is not None:
+                print(f"    Mean:    {np.mean(kappa):.5f} (SE: {np.mean(se_kappa):.5f})")
+            else:
+                print(f"    Mean:    {np.mean(kappa):.5f}")
         else:
-            print(f"    κ: {kappa:.5f} (SE: {se_kappa:.5f})")
+            if se_kappa is not None:
+                print(f"    κ: {kappa:.5f} (SE: {se_kappa:.5f})")
+            else:
+                print(f"    κ: {kappa:.5f}")
 
         # Summary for model fit metrics
         print("\nModel Fit Metrics:\n")
@@ -581,7 +679,11 @@ class CCRegression:
         level: float = 0.05,
     ):
         if formula and data is not None:
-            self.theta, self.x, self.feature_names = self._parse_formula(formula, data)
+            theta_arr, x_arr, self.feature_names = self._parse_formula(formula, data)
+            self.theta = self._validate_input(theta_arr)
+            self.x = self._validate_input(x_arr)
+            if self.x.ndim == 1:
+                self.x = self.x[:, None]
         elif theta is not None and x is not None:
             self.theta = self._validate_input(theta)
             self.x = self._validate_input(x)
@@ -594,6 +696,11 @@ class CCRegression:
         self.order = order
         self.level = level
 
+        if self.order < 1:
+            raise ValueError("`order` must be a positive integer.")
+        if not (0 < self.level < 1):
+            raise ValueError("`level` must lie between 0 and 1.")
+
         # Fit the model
         self.result = self._fit()
 
@@ -602,9 +709,12 @@ class CCRegression:
         """
         Validate input array and ensure it is in radians.
         """
-        if not isinstance(arr, np.ndarray):
-            raise ValueError("Input must be a numpy array.")
-        return arr % (2 * np.pi)
+        arr_np = np.asarray(arr, dtype=float)
+        if arr_np.ndim == 0:
+            raise ValueError("Input must be at least one-dimensional.")
+        if not np.all(np.isfinite(arr_np)):
+            raise ValueError("Circular input contains non-finite values.")
+        return np.mod(arr_np, 2 * np.pi)
 
     def _parse_formula(
         self, formula: str, data: pd.DataFrame
@@ -618,63 +728,88 @@ class CCRegression:
     def _fit(self):
         n = self.x.shape[0]
         order = self.order
+        n_features = self.x.shape[1]
 
         # Create harmonic terms
-        order_matrix = np.arange(1, order + 1)
-        cos_x = np.cos(self.x * order_matrix)
-        sin_x = np.sin(self.x * order_matrix)
+        cos_terms = []
+        sin_terms = []
+        cos_labels: List[Tuple[int, int]] = []
+        sin_labels: List[Tuple[int, int]] = []
+        for j in range(n_features):
+            x_col = self.x[:, j]
+            for k in range(1, order + 1):
+                cos_terms.append(np.cos(k * x_col))
+                sin_terms.append(np.sin(k * x_col))
+                cos_labels.append((j, k))
+                sin_labels.append((j, k))
 
         # Linear models for cos(theta) and sin(theta)
         Y_cos = np.cos(self.theta)
         Y_sin = np.sin(self.theta)
 
-        X = np.column_stack([np.ones(n), cos_x, sin_x])
+        design_matrix = [np.ones(n)] + cos_terms + sin_terms
+        X = np.column_stack(design_matrix)
         beta_cos, _, _, _ = lstsq(X, Y_cos)
         beta_sin, _, _, _ = lstsq(X, Y_sin)
 
         # Fitted values
         cos_fit = X @ beta_cos
         sin_fit = X @ beta_sin
-        fitted = np.arctan2(sin_fit, cos_fit) % (2 * np.pi)
+        fitted = np.mod(np.arctan2(sin_fit, cos_fit), 2 * np.pi)
 
         # Residuals
-        residuals = (self.theta - fitted) % (2 * np.pi)
+        residuals = np.angle(np.exp(1j * (self.theta - fitted)))
 
         # Circular correlation coefficient
-        rho = np.sqrt(np.mean(cos_fit**2) + np.mean(sin_fit**2))
+        rho = float(np.clip(np.sqrt(np.mean(cos_fit**2 + sin_fit**2)), 0.0, 1.0))
 
         # Test higher-order terms
-        higher_order_cos = np.cos((order + 1) * self.x)
-        higher_order_sin = np.sin((order + 1) * self.x)
+        higher_order_cos = []
+        higher_order_sin = []
+        for j in range(n_features):
+            x_col = self.x[:, j]
+            higher_order_cos.append(np.cos((order + 1) * x_col))
+            higher_order_sin.append(np.sin((order + 1) * x_col))
+        if higher_order_cos:
+            W = np.column_stack(higher_order_cos + higher_order_sin)
+        else:
+            W = np.empty((n, 0))
 
         # Projection matrix for the current model
-        M = X @ np.linalg.inv(X.T @ X) @ X.T
-        W = np.column_stack([higher_order_cos, higher_order_sin])
-        H = W.T @ (np.eye(n) - M) @ W
-        H_inv = np.linalg.inv(H)
-        N = W @ H_inv @ W.T
+        if W.size:
+            XtX = X.T @ X
+            M = X @ _safe_inverse(XtX) @ X.T
+            H = W.T @ (np.eye(n) - M) @ W
+            H_inv = _safe_inverse(H)
+            N = W @ H_inv @ W.T
 
-        residual_cos = (np.eye(n) - M) @ Y_cos
-        residual_sin = (np.eye(n) - M) @ Y_sin
+            residual_cos = Y_cos - X @ beta_cos
+            residual_sin = Y_sin - X @ beta_sin
 
-        T1 = (
-            (n - (2 * order + 1))
-            * (residual_cos.T @ N @ residual_cos)
-            / (residual_cos.T @ residual_cos)
-        )
-        T2 = (
-            (n - (2 * order + 1))
-            * (residual_sin.T @ N @ residual_sin)
-            / (residual_sin.T @ residual_sin)
-        )
+            denom_cos = float(residual_cos.T @ residual_cos)
+            denom_sin = float(residual_sin.T @ residual_sin)
+            adj = max(n - (2 * order + 1), 1)
+            T1 = (
+                adj
+                * float(residual_cos.T @ N @ residual_cos)
+                / max(denom_cos, 1e-12)
+            )
+            T2 = (
+                adj
+                * float(residual_sin.T @ N @ residual_sin)
+                / max(denom_sin, 1e-12)
+            )
 
-        p1 = 1 - chi2.cdf(T1, 2)
-        p2 = 1 - chi2.cdf(T2, 2)
-
-        p_values = np.array([p1, p2])
+            p1 = 1 - chi2.cdf(T1, W.shape[1])
+            p2 = 1 - chi2.cdf(T2, W.shape[1])
+            p_values = np.array([p1, p2], dtype=float)
+        else:
+            p_values = np.array([np.nan, np.nan], dtype=float)
 
         # Message about higher-order terms
-        if np.all(p_values > self.level):
+        if np.all(np.isnan(p_values)):
+            message = "No additional harmonics available for testing."
+        elif np.all(p_values > self.level):
             message = (
                 f"Higher-order terms are not significant at the {self.level} level."
             )
@@ -689,6 +824,8 @@ class CCRegression:
                 "cos": beta_cos,
                 "sin": beta_sin,
             },
+            "cos_labels": cos_labels,
+            "sin_labels": sin_labels,
             "p_values": p_values,
             "message": message,
         }
@@ -703,6 +840,8 @@ class CCRegression:
         print("Coefficients:")
         cos_coeffs = self.result["coefficients"]["cos"]
         sin_coeffs = self.result["coefficients"]["sin"]
+        cos_labels = self.result.get("cos_labels", [])
+        sin_labels = self.result.get("sin_labels", [])
 
         # Headers
         print(f"{'Harmonic':<12} {'Cosine Coeff':<14} {'Sine Coeff':<14}")
@@ -710,16 +849,21 @@ class CCRegression:
         # Intercept
         print(f"{'(Intercept)':<12} {cos_coeffs[0]:<14.5f} {sin_coeffs[0]:<14.5f}")
 
-        # Group harmonics: Cosine and Sine
-        for i in range(1, len(cos_coeffs)):
-            if i <= self.order:
-                print(
-                    f"{'cos.x' + str(i):<12} {cos_coeffs[i]:<14.5f} {sin_coeffs[i]:<14.5f}"
-                )
-            else:
-                print(
-                    f"{'sin.x' + str(i - self.order):<12} {cos_coeffs[i]:<14.5f} {sin_coeffs[i]:<14.5f}"
-                )
+        # Cosine harmonics
+        offset = 1
+        for idx, (feature_idx, harmonic) in enumerate(cos_labels):
+            label = f"cos(x{feature_idx + 1},k={harmonic})"
+            print(
+                f"{label:<12} {cos_coeffs[offset + idx]:<14.5f} {sin_coeffs[offset + idx]:<14.5f}"
+            )
+
+        # Sine harmonics
+        sine_offset = offset + len(cos_labels)
+        for idx, (feature_idx, harmonic) in enumerate(sin_labels):
+            label = f"sin(x{feature_idx + 1},k={harmonic})"
+            print(
+                f"{label:<12} {cos_coeffs[sine_offset + idx]:<14.5f} {sin_coeffs[sine_offset + idx]:<14.5f}"
+            )
 
         print("\nP-values for Higher-Order Terms:")
         print(

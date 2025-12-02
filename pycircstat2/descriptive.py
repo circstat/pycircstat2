@@ -87,7 +87,7 @@ def circ_mean(
     if w is None:
         w = np.ones_like(alpha)
 
-    # mean resultant vecotr length
+    # mean resultant vector length
     Cbar, Sbar = compute_C_and_S(alpha, w)
     r = circ_r(alpha, w, Cbar, Sbar)
 
@@ -128,18 +128,17 @@ def circ_mean_and_r(
     if w is None:
         w = np.ones_like(alpha)
 
-    # mean resultant vecotr length
+    # mean resultant vector length
     Cbar, Sbar = compute_C_and_S(alpha, w)
     r = circ_r(alpha, w, Cbar, Sbar)
 
     # angular mean
-    if np.isclose(r, 0):
-        m = np.nan
-        return float(m), r
-    else:
-        m = np.arctan2(Sbar, Cbar)
+    if np.isclose(r, 0.0, atol=1e-12):
+        return float(np.nan), float(r)
 
-        return float(angmod(m)), r
+    m = np.arctan2(Sbar, Cbar)
+
+    return float(angmod(m)), float(r)
 
 
 def circ_mean_and_r_of_means(
@@ -158,7 +157,7 @@ def circ_mean_and_r_of_means(
         a set of mean angles in radian
 
     rs: np.array (n, )
-        a set of mean resultant vecotr lengths
+        a set of mean resultant vector lengths
 
     Returns
     -------
@@ -169,23 +168,34 @@ def circ_mean_and_r_of_means(
         mean of mean resultant vector lengths
 
     """
-
     if circs is None:
-        assert isinstance(ms, np.ndarray) and isinstance(rs, np.ndarray), (
-            "If `circs` is None, then `ms` and `rs` are needed."
-        )
+        if ms is None or rs is None:
+            raise ValueError("If `circs` is None, then `ms` and `rs` must be provided.")
+        ms_arr = np.asarray(ms, dtype=float)
+        rs_arr = np.asarray(rs, dtype=float)
     else:
-        ms, rs = map(np.array, zip(*[(circ.mean, circ.r) for circ in circs]))
+        extracted = [(circ.mean, circ.r) for circ in circs]
+        if len(extracted) == 0:
+            raise ValueError("`circs` must contain at least one element.")
+        arr = np.asarray(extracted, dtype=float)
+        ms_arr, rs_arr = arr[:, 0], arr[:, 1]
 
-    X = np.mean(np.cos(ms) * rs)
-    Y = np.mean(np.sin(ms) * rs)
-    r = np.sqrt(X**2 + Y**2)
-    C = X / r
-    S = Y / r
+    if ms_arr.ndim != 1 or rs_arr.ndim != 1:
+        raise ValueError("`ms` and `rs` must be one-dimensional sequences of equal length.")
 
-    m = angmod(np.arctan2(S, C))
+    if ms_arr.size != rs_arr.size or ms_arr.size == 0:
+        raise ValueError("`ms` and `rs` must be non-empty and have the same length.")
 
-    return float(m), r
+    X = np.mean(np.cos(ms_arr) * rs_arr)
+    Y = np.mean(np.sin(ms_arr) * rs_arr)
+    r = np.hypot(X, Y)
+
+    if np.isclose(r, 0.0, atol=1e-12):
+        return float(np.nan), float(r)
+
+    m = angmod(np.arctan2(Y, X))
+
+    return float(m), float(r)
 
 
 def circ_moment(
@@ -638,7 +648,7 @@ def _circ_median_grouped(
     )[0]
 
     # if number of potential median is the same as the number of data points,
-    # meaning that the data is more or less uniformly distributed. Retrun Nan.
+    # meaning that the data is more or less uniformly distributed. Return NaN.
     if len(idx) == len(halfcircle_range):
         median = np.nan
     # get base interval, lower and upper freq
@@ -683,7 +693,7 @@ def _circ_median_count(alpha: np.ndarray) -> Union[float,np.ndarray]:
     diff = np.abs(right - left)
     idx_candidates = np.where(diff == diff.min())[0]
     # if number of potential median is the same as the number of data point
-    # meaning that the data is more or less uniformly distributed. Retrun Nan.
+    # meaning that the data is more or less uniformly distributed. Return NaN.
     if len(idx_candidates) == len(alpha):
         median = np.nan           
     # if number of potential median is 1, return it as median
@@ -705,14 +715,14 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
 
     # get pairwise circular mean deviation
     if len(alpha) > 10000:
-        angdist = circ_mean_deviation_chuncked(alpha, alpha)
+        angdist = circ_mean_deviation_chunked(alpha, alpha)
     else:
         # get pairwise circular mean deviation
         angdist = circ_mean_deviation(alpha, alpha)
     # data point(s) with minimal circular mean deviation is/are potential median(s);
     idx_candidates = np.where(angdist == angdist.min())[0]
     # if number of potential median is the same as the number of data point
-    # meaning that the data is more or less uniformly distributed. Retrun Nan.
+    # meaning that the data is more or less uniformly distributed. Return NaN.
     if len(idx_candidates) == len(alpha):
         median = np.nan            
     # if number of potential median is 1, return it as median
@@ -725,11 +735,11 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
     return median
 
 
-def circ_mean_deviation_chuncked(
+def circ_mean_deviation_chunked(
     alpha: Union[np.ndarray, float, int, list],
     beta: Union[np.ndarray, float, int, list],
-    chunk_size=1000,
-):
+    chunk_size: int = 1000,
+) -> np.ndarray:
     r"""
     Optimized circular mean deviation with chunking.
 
@@ -739,33 +749,44 @@ def circ_mean_deviation_chuncked(
 
     Parameters
     ----------
-    alpha : np.ndarray
+    alpha : array-like
         Data in radians.
-    beta : np.ndarray
+    beta : array-like
         Reference angles in radians.
     chunk_size : int
-        Number of rows to process in chunks.
+        Number of rows to process in chunks (must be positive).
 
     Returns
     -------
     np.ndarray
         Circular mean deviation.
     """
-    if not isinstance(alpha, np.ndarray):
-        alpha = np.array([alpha])
 
-    if not isinstance(beta, np.ndarray):
-        beta = np.array([beta])
+    if chunk_size <= 0:
+        raise ValueError("`chunk_size` must be a positive integer.")
 
-    n = len(beta)
-    result = np.zeros(n)
+    alpha_arr = np.atleast_1d(np.asarray(alpha, dtype=float))
+    beta_arr = np.atleast_1d(np.asarray(beta, dtype=float))
 
-    for i in range(0, n, chunk_size):
-        beta_chunk = beta[i : i + chunk_size]
-        angdist = np.pi - np.abs(np.pi - np.abs(alpha - beta_chunk[:, None]))
-        result[i : i + chunk_size] = np.mean(angdist, axis=1).round(5)
+    result = np.empty(beta_arr.size, dtype=float)
+
+    for start in range(0, beta_arr.size, chunk_size):
+        stop = start + chunk_size
+        beta_chunk = beta_arr[start:stop]
+        angdist = np.pi - np.abs(np.pi - np.abs(alpha_arr - beta_chunk[:, None]))
+        chunk_mean = np.round(np.mean(angdist, axis=1), 5)
+        result[start : start + beta_chunk.size] = chunk_mean
 
     return result
+
+
+# Backwards compatibility: original misspelled export
+def circ_mean_deviation_chuncked(
+    alpha: Union[np.ndarray, float, int, list],
+    beta: Union[np.ndarray, float, int, list],
+    chunk_size: int = 1000,
+) -> np.ndarray:
+    return circ_mean_deviation_chunked(alpha, beta, chunk_size)
 
 
 def circ_mean_deviation(
@@ -798,13 +819,14 @@ def circ_mean_deviation(
     ----
     eq 2.32, Section 2.3.2, Fisher (1993)
     """
-    if not isinstance(alpha, np.ndarray):
-        alpha = np.array([alpha])
+    alpha_arr = np.atleast_1d(np.asarray(alpha, dtype=float))
+    beta_arr = np.atleast_1d(np.asarray(beta, dtype=float))
 
-    if not isinstance(beta, np.ndarray):
-        beta = np.array([beta])
-
-    return (np.pi - np.mean(np.abs(np.pi - np.abs(alpha - beta[:, None])), 1)).round(5)
+    mean_dist = np.mean(
+        np.abs(np.pi - np.abs(alpha_arr - beta_arr[:, None])),
+        axis=1,
+    )
+    return np.round(np.pi - mean_dist, 5)
 
 
 def circ_mean_ci(
@@ -1070,62 +1092,72 @@ def _circ_mean_ci_approximate(
 
 
 def _circ_mean_ci_bootstrap(
-        alpha: np.ndarray, 
-        B:int=2000, 
-        ci:float=0.95
-    )->tuple[float, float]:
-    """
-    Implementation of Section 8.3 (Fisher, 1993, P207)
-    """
-    # sanity-check: is a mean direction identifiable?
-    n = len(alpha)
-    r = circ_r(alpha)
+    alpha: np.ndarray,
+    B: int = 2000,
+    ci: float = 0.95,
+) -> tuple[float, float]:
+    """Implementation of Section 8.3 (Fisher, 1993, p.207)."""
 
-    # classic Rayleigh test approximation, avoids import cycles
-    z_stat = n * r**2                  # Rayleigh's Z
-    p_val  = np.exp(-z_stat)           # p ≈ e^(−Z)  (valid for n ≥ 10)
+    if B <= 0:
+        raise ValueError("`B` must be a positive integer.")
 
-    if p_val > 0.05:                   # data look uniform ⇒ no mean dir.
+    alpha_arr = np.atleast_1d(np.asarray(alpha, dtype=float))
+    if alpha_arr.ndim != 1 or alpha_arr.size == 0:
+        raise ValueError("`alpha` must be a one-dimensional array with at least one element.")
+
+    # Sanity-check: is a mean direction identifiable?
+    n = alpha_arr.size
+    r = circ_r(alpha_arr)
+
+    # Classic Rayleigh test approximation, avoids import cycles
+    z_stat = n * r**2  # Rayleigh's Z
+    p_val = np.exp(-z_stat)  # p ≈ e^(−Z) (valid for n ≥ 10)
+
+    if p_val > 0.05:  # Data look uniform ⇒ no identifiable mean direction
         raise ValueError(
-            "Bootstrap CI not computed: resultant length r={:.4f} "
-            "(Rayleigh p≈{:.3f}) is too small. "
+            f"Bootstrap CI not computed: resultant length r={r:.4f} "
+            f"(Rayleigh p≈{p_val:.3f}) is too small. "
             "Sample may be uniform, so the mean direction is undefined."
-            .format(r, p_val)
         )
 
-    # Precompute z0 and v0 from original data
-    # algo 1
-    X = np.cos(alpha)
-    Y = np.sin(alpha)
-    z1 = np.mean(X)  # eq(8.24)
-    z2 = np.mean(Y)
-    z0 = np.array([z1, z2])
+    # Precompute z0 and v0 from original data (Algorithm 1 & 2)
+    cos_alpha = np.cos(alpha_arr)
+    sin_alpha = np.sin(alpha_arr)
+    z1 = np.mean(cos_alpha)  # eq (8.24)
+    z2 = np.mean(sin_alpha)
+    z0 = np.array([z1, z2], dtype=float)
 
-    # algo 2
-    u11 = np.mean((X - z1) ** 2)  # eq(8.25)
-    u22 = np.mean((Y - z2) ** 2)
-    u12 = np.mean((X - z1) * (Y - z2))  # eq(8.26)
+    u11 = np.mean((cos_alpha - z1) ** 2)  # eq (8.25)
+    u22 = np.mean((sin_alpha - z2) ** 2)
+    u12 = np.mean((cos_alpha - z1) * (sin_alpha - z2))  # eq (8.26)
 
-    β = (u11 - u22) / (2 * u12) - np.sqrt(
-        (u11 - u22) ** 2 / (4 * u12**2 + 1)
-    )  # eq(8.27)
-    t1 = np.sqrt(β**2 * u11 + 2 * β * u12 + u22) / np.sqrt(1 + β**2)  # eq(8.28)
-    t2 = np.sqrt(u11 - 2 * β * u12 + β**2 * u22) / np.sqrt(1 + β**2)  # eq(8.29)
-    v11 = (β**2 * t1 + t2) / (1 + β**2)  # eq(8.30)
-    v22 = (t1 + β**2 * t2) / (1 + β**2)
-    v12 = v21 = β * (t1 - t2) / (1 + β**2)  # eq(8.31)
-    v0 = np.array([[v11, v12], [v21, v22]])
+    if np.isclose(u12, 0.0):
+        beta_param = 0.0
+    else:
+        discriminant = (u11 - u22) ** 2 / (4 * u12**2 + 1)
+        beta_param = (u11 - u22) / (2 * u12) - np.sqrt(discriminant)  # eq (8.27)
 
-    beta = np.array([_circ_mean_resample(alpha, z0, v0) for i in range(B)]).flatten()
+    denom = np.sqrt(1 + beta_param**2)
+    t1 = np.sqrt(np.clip(beta_param**2 * u11 + 2 * beta_param * u12 + u22, 0.0, None)) / denom
+    t2 = np.sqrt(np.clip(u11 - 2 * beta_param * u12 + beta_param**2 * u22, 0.0, None)) / denom
+    v11 = (beta_param**2 * t1 + t2) / (1 + beta_param**2)  # eq (8.30)
+    v22 = (t1 + beta_param**2 * t2) / (1 + beta_param**2)
+    v12 = v21 = beta_param * (t1 - t2) / (1 + beta_param**2)  # eq (8.31)
+    v0 = np.array([[v11, v12], [v21, v22]], dtype=float)
 
-    # here we use HDI instead of the percentile method
-    lb, ub = compute_hdi(beta, ci=ci)
+    bootstrap_samples = np.asarray(
+        [_circ_mean_resample(alpha_arr, z0, v0) for _ in range(B)],
+        dtype=float,
+    ).reshape(-1)
 
-    mean = circ_mean(beta)
-    if not is_within_circular_range(mean, lb, ub):
+    # Use HDI instead of the percentile method
+    lb, ub = compute_hdi(bootstrap_samples, ci=ci)
+
+    mean_dir = circ_mean(bootstrap_samples)
+    if not is_within_circular_range(mean_dir, lb, ub):
         lb, ub = ub, lb
 
-    return lb, ub
+    return float(lb), float(ub)
 
 
 def _circ_mean_resample(alpha, z0, v0):
@@ -1133,34 +1165,49 @@ def _circ_mean_resample(alpha, z0, v0):
     Implementation of Section 8.3.5 (Fisher, 1993, P210)
     """
 
-    θ = np.random.choice(alpha, len(alpha), replace=True)
-    X = np.cos(θ)
-    Y = np.sin(θ)
+    alpha_arr = np.asarray(alpha, dtype=float)
+    theta_samples = np.random.choice(alpha_arr, alpha_arr.size, replace=True)
+    cos_theta = np.cos(theta_samples)
+    sin_theta = np.sin(theta_samples)
 
     # algo 1
-    z1 = np.mean(X)  # eq(8.24)
-    z2 = np.mean(Y)
-    zB = np.array([z1, z2])
+    z1 = np.mean(cos_theta)  # eq(8.24)
+    z2 = np.mean(sin_theta)
+    zB = np.array([z1, z2], dtype=float)
 
-    u11 = np.mean((X - z1) ** 2)  # eq(8.25)
-    u22 = np.mean((X - z2) ** 2)
-    u12 = np.mean((X - z1) * (Y - z2))  # eq(8.26)
+    u11 = np.mean((cos_theta - z1) ** 2)  # eq(8.25)
+    u22 = np.mean((sin_theta - z2) ** 2)
+    u12 = np.mean((cos_theta - z1) * (sin_theta - z2))  # eq(8.26)
 
     # algo 3
-    β = (u11 - u22) / (2 * u12) - np.sqrt(
-        (u11 - u22) ** 2 / (4 * u12**2 + 1)
-    )  # eq(8.27)
-    t1 = np.sqrt(1 + β**2) / np.sqrt(β**2 * u11 + 2 * β * u12 + u22)  # eq(8.33)
-    t2 = np.sqrt(1 + β**2) / np.sqrt(u11 - 2 * β * u12 + β**2 * u22)  # eq(8.34)
-    w11 = (β**2 * t1 + t2) / (1 + β**2)  # eq(8.35)
-    w22 = (t1 + β**2 * t2) / (1 + β**2)
-    w12 = w21 = β * (t1 - t2) / (1 + β**2)  # eq(8.36)
+    if np.isclose(u12, 0.0):
+        beta_param = 0.0
+    else:
+        discriminant = (u11 - u22) ** 2 / (4 * u12**2 + 1)
+        beta_param = (u11 - u22) / (2 * u12) - np.sqrt(discriminant)  # eq(8.27)
+
+    denom = np.sqrt(1 + beta_param**2)
+    denom1 = np.sqrt(
+        np.clip(beta_param**2 * u11 + 2 * beta_param * u12 + u22, 1e-15, None)
+    )
+    denom2 = np.sqrt(
+        np.clip(u11 - 2 * beta_param * u12 + beta_param**2 * u22, 1e-15, None)
+    )
+    t1 = denom / denom1  # eq(8.33)
+    t2 = denom / denom2  # eq(8.34)
+    w11 = (beta_param**2 * t1 + t2) / (1 + beta_param**2)  # eq(8.35)
+    w22 = (t1 + beta_param**2 * t2) / (1 + beta_param**2)
+    w12 = w21 = beta_param * (t1 - t2) / (1 + beta_param**2)  # eq(8.36)
 
     wB = np.array([[w11, w12], [w21, w22]])
 
-    Cbar, Sbar = z0 + v0 @ wB @ (zB - z0)
-    Cbar = np.power(Cbar**2 + Sbar**2, -0.5) * Cbar
-    Sbar = np.power(Cbar**2 + Sbar**2, -0.5) * Sbar
+    Cbar_raw, Sbar_raw = z0 + v0 @ wB @ (zB - z0)
+    norm = np.hypot(Cbar_raw, Sbar_raw)
+    if np.isclose(norm, 0.0):
+        raise ValueError("Bootstrap resample produced zero-length resultant vector.")
+
+    Cbar = Cbar_raw / norm
+    Sbar = Sbar_raw / norm
 
     m = np.arctan2(Sbar, Cbar)
 
@@ -1538,7 +1585,7 @@ def compute_C_and_S(
     return Cbar, Sbar
 
 
-def compute_hdi(samples: np.ndarray, ci:float=0.95)->tuple[float, float]:
+def compute_hdi(samples: np.ndarray, ci: float = 0.95) -> tuple[float, float]:
     """
     Compute the Highest Density Interval (HDI) for circular data.
 
@@ -1554,29 +1601,35 @@ def compute_hdi(samples: np.ndarray, ci:float=0.95)->tuple[float, float]:
     hdi : tuple
         Lower and upper bounds of the HDI in radians.
     """
-    # Wrap samples to [0, 2π) for circular consistency
+    if not (0 < ci < 1):
+        raise ValueError("`ci` must be between 0 and 1 (exclusive).")
+
     wrapped_samples = angmod(samples)
-
-    # Sort the samples
     sorted_samples = np.sort(wrapped_samples)
+    n_samples = sorted_samples.size
 
-    # Number of samples in the HDI
-    n_samples = len(sorted_samples)
-    interval_idx = int(np.floor(ci * n_samples))
-    if interval_idx == 0:
+    if n_samples == 0:
         raise ValueError("Insufficient data to compute HDI.")
 
-    # Find the shortest interval
-    hdi_width = np.inf
-    for i in range(n_samples - interval_idx):
-        lower = float(sorted_samples[i])
-        upper = float(sorted_samples[i + interval_idx])
-        width = angmod(upper - lower)  # Handle wrapping for circularity
-        if width < hdi_width:
-            hdi_width = width
-            hdi_bounds = (lower, upper)
+    window_size = max(1, int(np.floor(ci * n_samples)))
+    window_size = min(window_size, n_samples)
 
-    return hdi_bounds
+    extended_samples = np.concatenate((sorted_samples, sorted_samples + 2 * np.pi))
+
+    best_width = np.inf
+    best_lower = float(sorted_samples[0])
+    best_upper = float(sorted_samples[0])
+
+    for start in range(n_samples):
+        stop = start + window_size - 1
+        upper = float(extended_samples[stop])
+        lower = float(sorted_samples[start])
+        width = upper - lower
+        if width < best_width:
+            best_width = width
+            best_lower, best_upper = lower, upper
+
+    return float(angmod(best_lower)), float(angmod(best_upper))
 
 
 def compute_smooth_params(r: float, n: int) -> float:
@@ -1635,14 +1688,14 @@ def nonparametric_density_estimation(
     """
 
     # vectorized version of step 3
-    a = alpha
+    a = np.asarray(alpha, dtype=float)
     n = len(a)
     x = np.linspace(0, 2 * np.pi, 100)
     d = np.abs(x[:, None] - a)
     e = np.minimum(d, 2 * np.pi - d)
     e = np.minimum(e, h)
-    sum = np.sum((1 - e**2 / h**2) ** 2, 1)
-    f = 0.9375 * sum / n / h
+    weight_sum = np.sum((1 - e**2 / h**2) ** 2, axis=1)
+    f = 0.9375 * weight_sum / (n * h)
 
     f = radius * np.sqrt(1 + np.pi * f) - radius
 

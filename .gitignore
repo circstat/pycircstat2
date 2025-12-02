@@ -5,13 +5,14 @@
 .coverage
 .vscode
 .venv
+.mplconfig
 
 *.egg-info
 */__pycache__
-
-uv.lock
 
 dev/
 dist/
 docs/site/
 build/
+
+*copy*

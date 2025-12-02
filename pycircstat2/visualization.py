@@ -79,6 +79,7 @@ DEFAULT_CIRC_PLOT_CONFIG = {
         "linestyle": "dotted",
         "ci": True,
     },
+    "legend": True
 }
 
 
@@ -159,6 +160,10 @@ def circ_plot(
                     Color of the density line.
                 - **"linestyle"** : str, default="-"  
                     Line style of the density plot.
+                - **"f"** : array-like, optional  
+                    Precomputed radial density offsets. When provided, `method` is ignored.
+                - **"x"** : array-like, optional  
+                    Angles in radians corresponding to `f`. Defaults to an even grid on `[0, 2π]`.
 
         - **"mean"** : dict or bool  
             Controls mean direction plotting:
@@ -238,25 +243,44 @@ def circ_plot(
         # plot density
         if config["density"]:  # and not np.isclose(circ_data.r, 0):
 
-            density_method = config["density"].get("method", "nonparametric")
-            density_color = config["density"].get("color", "black")
-            density_linestyle = config["density"].get("linestyle", "-")
+            density_config = config["density"]
+            density_method = density_config.get("method", "nonparametric")
+            density_color = density_config.get("color", "black")
+            density_linestyle = density_config.get("linestyle", "-")
 
-            if density_method == "nonparametric":
-                h0 = config["density"].get(
-                    "h0", compute_smooth_params(circ_data.r, circ_data.n)
-                )
-                x, f = nonparametric_density_estimation(circ_data.alpha, h0)
+            custom_f = density_config.get("f", None)
+            custom_x = density_config.get("x", None)
 
-            elif density_method == "MovM":
+            if custom_f is not None:
+                f = np.asarray(custom_f, dtype=float)
+                if f.ndim != 1:
+                    raise ValueError("`density['f']` must be a one-dimensional array.")
 
-                x = np.linspace(0, 2 * np.pi, 100)
-                f = circ_data.mixture_opt.predict_density(x=x, unit="radian")
-
+                if custom_x is None:
+                    x = np.linspace(0, 2 * np.pi, f.size)
+                else:
+                    x = np.asarray(custom_x, dtype=float)
+                    if x.shape != f.shape:
+                        raise ValueError(
+                            "`density['x']` must have the same shape as `density['f']`."
+                        )
             else:
-                raise ValueError(
-                    f"`{config['density']['method']}` in `density` is not supported."
-                )
+
+                if density_method == "nonparametric":
+                    h0 = density_config.get(
+                        "h0", compute_smooth_params(circ_data.r, circ_data.n)
+                    )
+                    x, f = nonparametric_density_estimation(circ_data.alpha, h0)
+
+                elif density_method == "MovM":
+
+                    x = np.linspace(0, 2 * np.pi, 100)
+                    f = circ_data.mixture_opt.predict_density(x=x, unit="radian")
+
+                else:
+                    raise ValueError(
+                        f"`{density_config['method']}` in `density` is not supported."
+                    )
 
             # save density to circ_data
             circ_data.density_x = x
@@ -425,7 +449,7 @@ def circ_plot(
     gridlines[-1].set_color("k")
     gridlines[-1].set_linewidth(1)
 
-    if config["median"] or config["mean"]:
+    if config["legend"] and (config["median"] or config["mean"]):
         ax.legend(frameon=False)
 
     return ax

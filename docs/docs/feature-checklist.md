@@ -3,7 +3,7 @@
 ### 1. Descriptive Statistics
 
 | Feature                             | PyCircStat2           | PyCircStat                | CircStat (MATLAB)  | CircStats (R) | circular (R)                          |
-| ----------------------------------- | --------------------- | ------------------------- | ------------------ | ------------- | ------------------------------------- |
+|-------------------------------------|-----------------------|---------------------------|--------------------|---------------|---------------------------------------|
 | **Measures of Central Tendency**    |                       |                           |                    |               |                                       |
 | Circular Mean                       | `circ_mean`           | `mean(alpha)`             | `circ_mean(alpha)` | `circ.mean`   | `mean.circular`                       |
 | Circular Mean CI                    | `circ_mean_ci`        | `mean(alpha, ci=95)`      | `circ_confmean`    | -             | `mle.vonmises.bootstrap.ci`           |
@@ -31,7 +31,7 @@
 #### One-Sample Tests for Significance
 
 | Feature                     | H0                                  | PyCircStat2         | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)    |
-| --------------------------- | ----------------------------------- | ------------------- | ---------- | ----------------- | ------------- | --------------- |
+|-----------------------------|-------------------------------------|---------------------|------------|-------------------|---------------|-----------------|
 | **Mean Direction**          |                                     |                     |            |                   |               |                 |
 | Rayleigh Test               | $\rho=0$ [^uniform]                 | `rayleigh_test`     | `rayleigh` | `circ_rtest`      | `r.test`      | `rayleigh.test` |
 | V-Test                      | $\rho=0$                            | `V_test`            | `vtest`    | `circ_vtest`      | `v0.test`     | -               |
@@ -46,7 +46,7 @@
 #### Multi-Sample Tests for Significance
 
 | Feature                         | H0                                            | PyCircStat2                  | PyCircStat        | CircStat (MATLAB) | CircStats (R)     | circular (R)           |
-| ------------------------------- | --------------------------------------------- | ---------------------------- | ----------------- | ----------------- | ----------------- | ---------------------- |
+|---------------------------------|-----------------------------------------------|------------------------------|-------------------|-------------------|-------------------|------------------------|
 | **Mean Direction**              |                                               |                              |                   |                   |                   |                        |
 | Circular Analysis of Variance   | $\mu_1 = \dots = \mu_n$                       | `circ_anova`                 | -                 | -                 | -                 | `aov.circular`         |
 | Watson-Williams Test [^one-way] | $\mu_1 = \dots = \mu_n$                       | `watson_williams_test`       | `watson_williams` | `circ_wwtest`     | -                 | `watson.williams.test` |
@@ -66,7 +66,7 @@
 #### Goodness-of-fit Tests
 
 | Feature             | H0         | PyCircStat2        | PyCircStat   | CircStat (MATLAB) | CircStats (R) | circular (R)       |
-| ------------------- | ---------- | ------------------ | ------------ | ----------------- | ------------- | ------------------ |
+|---------------------|------------|--------------------|--------------|-------------------|---------------|--------------------|
 | Kuiper’s Test       | $\rho = 0$ | `circ_kuiper_test` | `kupier`     | `circ_kuipertest` | `kuiper`      | `kuiper.test`      |
 | Rao’s Spacing Test  | $\rho = 0$ | `rao_spacing_test` | `raospacing` | `circ_raotest`    | `rao.spacing` | `rao.spacing.test` |
 | Watson's Test       | $\rho = 0$ | `watson_test`      | -            | -                 | `watson`      | `watson.test`      |
@@ -75,7 +75,7 @@
 
 ### 3. Correlation & Regression
 | Feature                       | PyCircStat2    | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)              |
-| ----------------------------- | -------------- | ---------- | ----------------- | ------------- | ------------------------- |
+|-------------------------------|----------------|------------|-------------------|---------------|---------------------------|
 | Circular-Circular Correlation | `circ_corrcc`  | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
 | Circular-Linear Correlation   | `circ_corrcl`  | `corrcl`   | `circ_corrcl`     | -             | -                         |
 | Circular-Circular Regression  | `CCRegression` | -          | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
@@ -85,10 +85,12 @@
 
 ### 4. Circular Distributions
 
+All circular distributions assume angles are on ``[0, 2π)``. Inputs are automatically wrapped to that support as a convenience. We remove SciPy's ``loc``/``scale`` convention—parameters like ``mu``, ``rho``, etc. are the only inputs. 
+
 #### Symmetric Circular Distributions
 
 | Feature              | Method | PyCircStat2               | PyCircStat       | CircStat (MATLAB) | CircStats (R) | circular (R)        |
-| -------------------- | ------ | ------------------------- | ---------------- | ----------------- | ------------- | ------------------- |
+|----------------------|--------|---------------------------|------------------|-------------------|---------------|---------------------|
 | Circular Uniform     | PDF    | `circularuniform.pdf`     | -                | -                 | -             | `dcircularuniform`  |
 |                      | CDF    | `circularuniform.cdf`     | -                | -                 | -             | -                   |
 |                      | PPF    | `circularuniform.ppf`     | -                | -                 | -             | -                   |
@@ -134,15 +136,10 @@
 |                      | PPF    | `jonespewsey.ppf`         | -                | -                 | -             | -                   |
 |                      | RVS    | `jonespewsey.rvs`         | -                | -                 | -             | -                   |
 |                      | Fit    | `jonespewsey.fit`         | -                | -                 | -             | -                   |
-| Kato-Jones           | PDF    | -                         | -                | -                 | -             | `dkatojones`        |
-|                      | CDF    | -                         | -                | -                 | -             | -                   |
-|                      | PPF    | -                         | -                | -                 | -             | -                   |
-|                      | RVS    | -                         | -                | -                 | -             | `rkatojones`        |
-|                      | Fit    | -                         | -                | -                 | -             | -                   |
 
 #### Asymmetric Circular Distributions
 | Feature                  | Method | PyCircStat2                  | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)     |
-| ------------------------ | ------ | ---------------------------- | ---------- | ----------------- | ------------- | ---------------- |
+|--------------------------|--------|------------------------------|------------|-------------------|---------------|------------------|
 | Jones-Pewsey Sine-Skewed | PDF    | `jonespewsey_sineskewed.pdf` | -          | -                 | -             | -                |
 |                          | CDF    | `jonespewsey_sineskewed.cdf` | -          | -                 | -             | -                |
 |                          | PPF    | `jonespewsey_sineskewed.ppf` | -          | -                 | -             | -                |
@@ -158,6 +155,11 @@
 |                          | PPF    | `inverse_batschelet.ppf`     | -          | -                 | -             | -                |
 |                          | RVS    | `inverse_batschelet.rvs`     | -          | -                 | -             | -                |
 |                          | Fit    | `inverse_batschelet.fit`     | -          | -                 | -             | -                |
+| Kato-Jones               | PDF    | `katojones.pdf`              | -          | -                 | -             | `dkatojones`     |
+|                          | CDF    | `katojones.cdf`              | -          | -                 | -             | -                |
+|                          | PPF    | `katojones.ppf`              | -          | -                 | -             | -                |
+|                          | RVS    | `katojones.rvs`              | -          | -                 | -             | `rkatojones`     |
+|                          | Fit    | `katojones.fit`              | -          | -                 | -             | -                |
 | Wrapped Stable           | PDF    | `wrapstable.pdf`             | -          | -                 | -             | -                |
 |                          | CDF    | `wrapstable.cdf`             | -          | -                 | -             | -                |
 |                          | PPF    | `wrapstable.ppf`             | -          | -                 | -             | -                |
@@ -172,4 +174,3 @@
 [^F]: $F$ stands for distributions.
 [^one-way]: Yet anothr one-way ANOVA.
 [^two-way]: Two-way ANOVA.
-

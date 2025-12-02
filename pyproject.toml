@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pycircstat2"
-version = "0.1.14"
+version = "0.1.15"
 description = "Circular statistcs with Python."
 authors = [
 ]
@@ -22,10 +22,12 @@ dev = [
     "ruff",
     "pytest",
     "mkdocs",
+    "mkdocs-material",
     "mkdocs-material-extensions",
     "mkdocstrings[python]",
     "watermark",
     "polars",
+    "ipykernel>=6.31.0",
 ]
 
 [tool.setuptools]

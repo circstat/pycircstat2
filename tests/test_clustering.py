@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from pycircstat2.clustering import CircHAC, CircKMeans, MovM
+from pycircstat2.clustering import CircHAC, CircKMeans, MoCD, MovM
+from pycircstat2.distributions import vonmises
 
 ############################
 #  Fixtures and Utilities  #
@@ -34,6 +35,20 @@ def circkmeans_instance():
     return CircKMeans(n_clusters=3, metric="geodesic", unit="radian", random_seed=42)
 
 
+@pytest.fixture
+def mocd_instance():
+    """Create a default instance of MoCD (von Mises mixture) for testing."""
+    return MoCD(
+        distribution=vonmises,
+        n_clusters=3,
+        n_iters=50,
+        unit="radian",
+        random_seed=42,
+        threshold=1e-6,
+        burnin=10,
+    )
+
+
 ############################
 #  Tests for MovM          #
 ############################
@@ -61,7 +76,7 @@ def test_predict(movm_instance, sample_data):
     movm_instance.fit(sample_data, verbose=False)
     predicted_labels = movm_instance.predict(sample_data)
     assert len(predicted_labels) == len(sample_data)
-    assert predicted_labels.dtype == np.int64
+    assert np.issubdtype(predicted_labels.dtype, np.integer)
 
 def test_predict_density(movm_instance):
     """Ensure density prediction returns reasonable values."""
@@ -70,6 +85,54 @@ def test_predict_density(movm_instance):
     density = movm_instance.predict_density(x_test)
     assert len(density) == len(x_test)
     assert np.all(density >= 0)  # Probabilities should not be negative
+
+
+############################
+#  Tests for MoCD          #
+############################
+
+def test_mocd_initialization_defaults(mocd_instance):
+    """Ensure MoCD initialises with the desired configuration."""
+    assert mocd_instance.n_clusters == 3
+    assert mocd_instance.unit == "radian"
+    assert mocd_instance.param_names == ["mu", "kappa"]
+
+
+def test_mocd_fit_and_params(mocd_instance, sample_data):
+    """Fitting should produce mixing weights and component parameters."""
+    mocd_instance.fit(sample_data)
+    assert mocd_instance.p_ is not None
+    assert mocd_instance.params_ is not None
+    assert len(mocd_instance.p_) == mocd_instance.n_clusters
+    assert len(mocd_instance.params_) == mocd_instance.n_clusters
+
+
+def test_mocd_predict_proba(mocd_instance, sample_data):
+    """Responsibilities should form a valid probability distribution."""
+    mocd_instance.fit(sample_data)
+    resp = mocd_instance.predict_proba(sample_data)
+    assert resp.shape == (mocd_instance.n_clusters, sample_data.size)
+    col_sums = resp.sum(axis=0)
+    np.testing.assert_allclose(col_sums, 1.0)
+
+
+def test_mocd_predict_labels(mocd_instance, sample_data):
+    """Cluster labels should be returned with the correct shape."""
+    mocd_instance.fit(sample_data)
+    labels = mocd_instance.predict(sample_data)
+    assert labels.shape == sample_data.shape
+    assert np.issubdtype(labels.dtype, np.integer)
+
+
+def test_mocd_density_and_bic(mocd_instance, sample_data):
+    """Density predictions and BIC should be finite after fit."""
+    mocd_instance.fit(sample_data)
+    grid = np.linspace(0, 2 * np.pi, 32)
+    density = mocd_instance.predict_density(grid)
+    assert density.shape == grid.shape
+    assert np.all(np.isfinite(density))
+    bic = mocd_instance.bic()
+    assert np.isfinite(bic)
 
 
 ############################
@@ -106,7 +169,7 @@ def test_circhac_predict(circhac_instance, sample_data):
     new_points = np.random.vonmises(mu=0, kappa=4, size=10)
     pred_labels = circhac_instance.predict(new_points)
     assert len(pred_labels) == len(new_points)
-    assert pred_labels.dtype == np.int64
+    assert np.issubdtype(pred_labels.dtype, np.integer)
 
 def test_circhac_silhouette(circhac_instance, sample_data):
     """Check that the silhouette score is in a valid range."""
@@ -164,7 +227,7 @@ def test_circkmeans_predict(circkmeans_instance, sample_data):
     pred_labels = circkmeans_instance.predict(new_points)
     
     assert len(pred_labels) == len(new_points)
-    assert pred_labels.dtype == np.int64  # Ensure integer cluster labels
+    assert np.issubdtype(pred_labels.dtype, np.integer)  # Ensure integer cluster labels
 
 def test_circkmeans_convergence(circkmeans_instance, sample_data):
     """Ensure K-means stops after reaching convergence criteria."""
