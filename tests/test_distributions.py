@@ -231,6 +231,21 @@ def test_pdf_vectorized_shape_parameters(name, dist, args):
     assert np.all(np.isfinite(vals)), f"{name} pdf returned non-finite values"
 
 
+def test_circular_cdf_is_periodic():
+    theta = np.array([0.3, 1.0, np.pi, 4.0])
+    shifted = theta + 2.0 * np.pi
+
+    uni_base = circularuniform.cdf(theta)
+    uni_shift = circularuniform.cdf(shifted)
+    np.testing.assert_allclose(uni_base, uni_shift, atol=1e-12)
+
+    mu = 0.4
+    rho = 0.2
+    card_base = cardioid.cdf(theta, mu=mu, rho=rho)
+    card_shift = cardioid.cdf(shifted, mu=mu, rho=rho)
+    np.testing.assert_allclose(card_base, card_shift, atol=1e-10)
+
+
 _SCALAR_ONLY_CALLS = [
     ("vonmises_flattopped", lambda: vonmises_flattopped.pdf(0.1, mu=np.array([0.0, 0.1]), kappa=1.0, nu=0.1)),
     ("jonespewsey", lambda: jonespewsey.pdf(0.1, mu=0.0, kappa=np.array([1.0, 1.1]), psi=0.1)),

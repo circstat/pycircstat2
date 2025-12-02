@@ -104,7 +104,18 @@ OPTIMIZERS = [
 
 
 class CircularContinuous(rv_continuous):
-    """Base class for circular distributions with fixed loc=0 and scale=1."""
+    """
+    Base class for circular distributions with fixed loc=0 and scale=1.
+
+    Notes
+    -----
+    - ``loc``/``scale`` are intentionally removed from the user-facing API; the
+      named parameters of each distribution already encode location/shape.
+    - Circular data are assumed to be pre-wrapped to ``[0, 2π)``; for
+      convenience every public method wraps angular inputs to that support.
+    - Cumulative methods remain circular/periodic under this wrapping
+      (``cdf(θ + 2π) == cdf(θ)``).
+    """
 
     _loc_default = 0.0
     _scale_default = 1.0

@@ -85,6 +85,8 @@
 
 ### 4. Circular Distributions
 
+All circular distributions assume angles are on ``[0, 2π)``. Inputs are automatically wrapped to that support as a convenience. We remove SciPy's ``loc``/``scale`` convention—parameters like ``mu``, ``rho``, etc. are the only inputs. 
+
 #### Symmetric Circular Distributions
 
 | Feature              | Method | PyCircStat2               | PyCircStat       | CircStat (MATLAB) | CircStats (R) | circular (R)        |
@@ -172,4 +174,3 @@
 [^F]: $F$ stands for distributions.
 [^one-way]: Yet anothr one-way ANOVA.
 [^two-way]: Two-way ANOVA.
-
