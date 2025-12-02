@@ -3921,6 +3921,7 @@ class vonmises_flattopped_gen(CircularContinuous):
 
     Note
     ----
+    Parameters must be scalar; cached normalization tables are built per parameter set.
     Implementation based on Section 4.3.10 of Pewsey et al. (2014)
     """
 
@@ -4690,6 +4691,7 @@ class jonespewsey_gen(CircularContinuous):
 
     Note
     ----
+    Parameters must be scalar; cached normalisation tables are built per parameter set.
     Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
 
@@ -5481,6 +5483,7 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
 
     Note
     ----
+    Parameters must be scalar; cached normalisation tables are built per parameter set.
     Implementation based on Section 4.3.11 of Pewsey et al. (2014)
     """
 
@@ -5966,6 +5969,7 @@ class jonespewsey_asym_gen(CircularContinuous):
 
     Note
     ----
+    Parameters must be scalar; cached normalisation tables are built per parameter set.
     Implementation from 4.3.12 of Pewsey et al. (2014)
     """
 
@@ -6490,7 +6494,8 @@ class inverse_batschelet_gen(CircularContinuous):
     $b = \tfrac{2\lambda}{1 + \lambda}$, and the normalising constant
     $c(\kappa, \lambda)$ depends only on $\kappa$ and $\lambda$.
     Setting $\nu = \lambda = 0$ recovers the von Mises distribution, while
-    $\kappa \to 0$ yields the circular uniform law.
+    $\kappa \to 0$ yields the circular uniform law. Parameters must be scalar;
+    cached normalisation tables are built per parameter set.
 
     Methods
     -------
@@ -7511,6 +7516,9 @@ class wrapstable_gen(CircularContinuous):
     References
     ----------
     - Pewsey (2008). *Computational Statistics & Data Analysis* 52(3), 1516-1523.
+
+    Parameters must be scalar; Fourier series coefficients are cached per
+    parameter set.
     """
 
     def __init__(self, *args, **kwargs):

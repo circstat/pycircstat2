@@ -245,6 +245,10 @@ def test_circular_cdf_is_periodic():
     card_shift = cardioid.cdf(shifted, mu=mu, rho=rho)
     np.testing.assert_allclose(card_base, card_shift, atol=1e-10)
 
+    wn_base = np.array([wrapnorm.cdf(val, mu=0.1, rho=0.5) for val in theta])
+    wn_shift = np.array([wrapnorm.cdf(val, mu=0.1, rho=0.5) for val in shifted])
+    np.testing.assert_allclose(wn_base, wn_shift, atol=1e-10)
+
 
 _SCALAR_ONLY_CALLS = [
     ("vonmises_flattopped", lambda: vonmises_flattopped.pdf(0.1, mu=np.array([0.0, 0.1]), kappa=1.0, nu=0.1)),
