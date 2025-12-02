@@ -1,0 +1,1912 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../reference/base/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>Feature Checklist - pycircstat2</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.618322db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../css/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="pycircstat2" class="md-header__button md-logo" aria-label="pycircstat2" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pycircstat2
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Feature Checklist
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="pycircstat2" class="md-nav__button md-logo" aria-label="pycircstat2" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pycircstat2
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Feature Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/base/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Circular Data Base
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/descriptive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Descriptive Statistics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/hypothesis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hypothesis Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/correlation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Correlation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/regression/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Regression
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/distributions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Distributions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/clustering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clustering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/visualization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+  <h1>Feature Checklist</h1>
+
+<h3 id="1-descriptive-statistics">1. Descriptive Statistics</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Measures of Central Tendency</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Circular Mean</td>
+<td><code>circ_mean</code></td>
+<td><code>mean(alpha)</code></td>
+<td><code>circ_mean(alpha)</code></td>
+<td><code>circ.mean</code></td>
+<td><code>mean.circular</code></td>
+</tr>
+<tr>
+<td>Circular Mean CI</td>
+<td><code>circ_mean_ci</code></td>
+<td><code>mean(alpha, ci=95)</code></td>
+<td><code>circ_confmean</code></td>
+<td>-</td>
+<td><code>mle.vonmises.bootstrap.ci</code></td>
+</tr>
+<tr>
+<td>Circular Median</td>
+<td><code>circ_median</code></td>
+<td><code>median</code></td>
+<td><code>circ_median</code></td>
+<td>-</td>
+<td><code>median.circular</code>/<code>medianHL.circular</code></td>
+</tr>
+<tr>
+<td>Circular Median CI</td>
+<td><code>circ_median_ci</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Circular Quantile</td>
+<td><code>circ_quantile</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>quantile.circular</code></td>
+</tr>
+<tr>
+<td><strong>Measures of Spread &amp; Dispersion</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Resultant Vector Length</td>
+<td><code>circ_r</code></td>
+<td><code>resultant_vector_length</code></td>
+<td><code>circ_r</code></td>
+<td><code>est.rho</code></td>
+<td><code>rho.circular</code></td>
+</tr>
+<tr>
+<td>Angular Variance</td>
+<td><code>angular_var</code></td>
+<td><code>avar</code></td>
+<td><code>circ_var</code></td>
+<td>-</td>
+<td><code>angular.variance</code></td>
+</tr>
+<tr>
+<td>Angular Standard Deviation</td>
+<td><code>angular_std</code></td>
+<td><code>astd</code></td>
+<td><code>circ_std</code></td>
+<td>-</td>
+<td><code>angular.deviation</code></td>
+</tr>
+<tr>
+<td>Circular Variance</td>
+<td><code>circ_var</code></td>
+<td><code>var</code></td>
+<td><code>circ_var</code></td>
+<td><code>circ.disp</code></td>
+<td><code>var.circular</code></td>
+</tr>
+<tr>
+<td>Circular Standard Deviation</td>
+<td><code>circ_std</code></td>
+<td><code>std</code></td>
+<td><code>circ_std</code></td>
+<td>-</td>
+<td><code>sd.circular</code></td>
+</tr>
+<tr>
+<td>Circular Dispersion</td>
+<td><code>circ_dispersion</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>Higher-Order Statistics</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Circular Moment</td>
+<td><code>circ_moment</code></td>
+<td><code>moment</code></td>
+<td><code>circ_moment</code></td>
+<td><code>tri.moment</code></td>
+<td><code>trigonometric.moment</code></td>
+</tr>
+<tr>
+<td>Circular Skewness</td>
+<td><code>circ_skewness</code></td>
+<td><code>skewness</code></td>
+<td><code>circ_skewness</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Circular Kurtosis</td>
+<td><code>circ_kurtosis</code></td>
+<td><code>kurtoisis</code></td>
+<td><code>circ_kurtosis</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>Distance &amp; Pairwise Comparisons</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Mean deviation</td>
+<td><code>circ_mean_deviation</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>meandeviation</code></td>
+</tr>
+<tr>
+<td>Circular Distance</td>
+<td><code>circ_dist</code></td>
+<td><code>cdist</code></td>
+<td><code>circ_dist</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Pairwise Circular Distance</td>
+<td><code>circ_pairdist</code></td>
+<td><code>pairwise_cdiff</code></td>
+<td><code>circ_dist2</code></td>
+<td>-</td>
+<td><code>dist.circular</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="2-hypothesis-testing">2. Hypothesis Testing</h3>
+<h4 id="one-sample-tests-for-significance">One-Sample Tests for Significance</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>H0</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mean Direction</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Rayleigh Test</td>
+<td><span class="arithmatex">\(\rho=0\)</span> <sup id="fnref:uniform"><a class="footnote-ref" href="#fn:uniform">1</a></sup></td>
+<td><code>rayleigh_test</code></td>
+<td><code>rayleigh</code></td>
+<td><code>circ_rtest</code></td>
+<td><code>r.test</code></td>
+<td><code>rayleigh.test</code></td>
+</tr>
+<tr>
+<td>V-Test</td>
+<td><span class="arithmatex">\(\rho=0\)</span></td>
+<td><code>V_test</code></td>
+<td><code>vtest</code></td>
+<td><code>circ_vtest</code></td>
+<td><code>v0.test</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td>One-sample Test</td>
+<td><span class="arithmatex">\(\tilde\mu=μ_0\)</span></td>
+<td><code>one_sample_test</code></td>
+<td><code>mtest</code></td>
+<td><code>circ_mtest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Change Point Test</td>
+<td>no change point</td>
+<td><code>change_point_test</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>change.pt</code></td>
+<td><code>change.point</code></td>
+</tr>
+<tr>
+<td><strong>Median Direction</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Hodges-Ajne (omnibus) Test</td>
+<td><span class="arithmatex">\(\rho=0\)</span></td>
+<td><code>omnibus_test</code></td>
+<td><code>omnibus</code></td>
+<td><code>circ_otest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Batschelet Test</td>
+<td><span class="arithmatex">\(\rho=0\)</span></td>
+<td><code>batschelet_test</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Binomial Test</td>
+<td><span class="arithmatex">\(\tilde\theta = \theta_0\)</span> <sup id="fnref:median"><a class="footnote-ref" href="#fn:median">2</a></sup></td>
+<td><code>binomial_test</code></td>
+<td><code>medtest</code></td>
+<td><code>circ_medtest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Symmetry Test around median</td>
+<td><span class="arithmatex">\(\text{symmetry}\)</span></td>
+<td><code>symmetry_test</code></td>
+<td><code>symtest</code></td>
+<td><code>circ_symtest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<h4 id="multi-sample-tests-for-significance">Multi-Sample Tests for Significance</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>H0</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mean Direction</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Circular Analysis of Variance</td>
+<td><span class="arithmatex">\(\mu_1 = \dots = \mu_n\)</span></td>
+<td><code>circ_anova</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>aov.circular</code></td>
+</tr>
+<tr>
+<td>Watson-Williams Test <sup id="fnref:one-way"><a class="footnote-ref" href="#fn:one-way">4</a></sup></td>
+<td><span class="arithmatex">\(\mu_1 = \dots = \mu_n\)</span></td>
+<td><code>watson_williams_test</code></td>
+<td><code>watson_williams</code></td>
+<td><code>circ_wwtest</code></td>
+<td>-</td>
+<td><code>watson.williams.test</code></td>
+</tr>
+<tr>
+<td>Harrison-Kanji Test<sup id="fnref:two-way"><a class="footnote-ref" href="#fn:two-way">5</a></sup></td>
+<td><span class="arithmatex">\(\mu_1 = \dots = \mu_n\)</span></td>
+<td><code>harrison_kanji_test</code></td>
+<td><code>hktest</code></td>
+<td><code>circ_hktest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>Median Direction</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Common Median Test</td>
+<td><span class="arithmatex">\(\tilde{\theta}_1 = \dots = \tilde{\theta}_n\)</span></td>
+<td><code>common_median_test</code></td>
+<td><code>cmtest</code></td>
+<td><code>circ_cmtest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>Concentration</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Concentration Test (F-test)</td>
+<td><span class="arithmatex">\(\kappa_1 = \dots = \kappa_n\)</span></td>
+<td><code>concentration_test</code></td>
+<td>-</td>
+<td><code>circ_ktest</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Equal Kappa Test</td>
+<td><span class="arithmatex">\(\kappa_1 = \dots = \kappa_n\)</span></td>
+<td><code>equal_kappa_test</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>equal.kappa.test</code></td>
+</tr>
+<tr>
+<td><strong>Distribution Homogeneity</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Watson's U2 Test</td>
+<td><span class="arithmatex">\(F_1 = F_2\)</span> <sup id="fnref:F"><a class="footnote-ref" href="#fn:F">3</a></sup></td>
+<td><code>watson_u2_test</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>watson.two</code></td>
+<td><code>watson.two.test</code></td>
+</tr>
+<tr>
+<td>Wallraff Test</td>
+<td><span class="arithmatex">\(F_1 = F_2\)</span></td>
+<td><code>wallraff_test</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>wallraff.test</code></td>
+</tr>
+<tr>
+<td>Wheeler-Watson Test</td>
+<td><span class="arithmatex">\(F_1 = F_2\)</span></td>
+<td><code>wheeler_watson_test</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>watson.wheeler.test</code></td>
+</tr>
+<tr>
+<td>Angular Randomization Test</td>
+<td><span class="arithmatex">\(F_1 = F_2\)</span></td>
+<td><code>angular_randomisation_test</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Rao's Tests for Homogeneity</td>
+<td><span class="arithmatex">\(F_1 = F_2\)</span></td>
+<td><code>rao_homogeneity_test</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>rao.homogeneity</code></td>
+<td><code>rao.test</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="goodness-of-fit-tests">Goodness-of-fit Tests</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>H0</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kuiper’s Test</td>
+<td><span class="arithmatex">\(\rho = 0\)</span></td>
+<td><code>circ_kuiper_test</code></td>
+<td><code>kupier</code></td>
+<td><code>circ_kuipertest</code></td>
+<td><code>kuiper</code></td>
+<td><code>kuiper.test</code></td>
+</tr>
+<tr>
+<td>Rao’s Spacing Test</td>
+<td><span class="arithmatex">\(\rho = 0\)</span></td>
+<td><code>rao_spacing_test</code></td>
+<td><code>raospacing</code></td>
+<td><code>circ_raotest</code></td>
+<td><code>rao.spacing</code></td>
+<td><code>rao.spacing.test</code></td>
+</tr>
+<tr>
+<td>Watson's Test</td>
+<td><span class="arithmatex">\(\rho = 0\)</span></td>
+<td><code>watson_test</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>watson</code></td>
+<td><code>watson.test</code></td>
+</tr>
+<tr>
+<td>Circular Range Test</td>
+<td><span class="arithmatex">\(\rho = 0\)</span></td>
+<td><code>circ_range_test</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>circ_range</code></td>
+<td><code>range.circular</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-correlation-regression">3. Correlation &amp; Regression</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Circular-Circular Correlation</td>
+<td><code>circ_corrcc</code></td>
+<td><code>corrcc</code></td>
+<td><code>circ_corrcc</code></td>
+<td><code>circ.cor</code></td>
+<td><code>cor.circular</code></td>
+</tr>
+<tr>
+<td>Circular-Linear Correlation</td>
+<td><code>circ_corrcl</code></td>
+<td><code>corrcl</code></td>
+<td><code>circ_corrcl</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Circular-Circular Regression</td>
+<td><code>CCRegression</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>circ.reg</code></td>
+<td><code>lm.circular(type="c-c")</code></td>
+</tr>
+<tr>
+<td>Circular-Linear Regression</td>
+<td><code>CLRegression</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>lm.circular(type="c-l")</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-circular-distributions">4. Circular Distributions</h3>
+<p>All circular distributions assume angles are on <code>[0, 2π)</code>. Inputs are automatically wrapped to that support as a convenience. We remove SciPy's <code>loc</code>/<code>scale</code> convention—parameters like <code>mu</code>, <code>rho</code>, etc. are the only inputs. </p>
+<h4 id="symmetric-circular-distributions">Symmetric Circular Distributions</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Method</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Circular Uniform</td>
+<td>PDF</td>
+<td><code>circularuniform.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>dcircularuniform</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>circularuniform.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>circularuniform.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>circularuniform.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>rcircularuniform</code></td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>circularuniform.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Triangular</td>
+<td>PDF</td>
+<td><code>triangular.pdf</code></td>
+<td><code>triangular.pdf</code></td>
+<td>-</td>
+<td><code>dtri</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>triangular.cdf</code></td>
+<td><code>triangular.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>triangular.ppf</code></td>
+<td><code>triangular.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>triangular.rvs</code></td>
+<td><code>triangular.rvs</code></td>
+<td>-</td>
+<td><code>rtri</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>triangular.fit</code></td>
+<td><code>triangular.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Cardioid</td>
+<td>PDF</td>
+<td><code>cardioid.pdf</code></td>
+<td><code>cardioid.pdf</code></td>
+<td>-</td>
+<td><code>dcard</code></td>
+<td><code>dcardioid</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>cardioid.cdf</code></td>
+<td><code>cardioid.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>cardioid.ppf</code></td>
+<td><code>cardioid.ppf</code></td>
+<td></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>cardioid.rvs</code></td>
+<td><code>cardioid.rvs</code></td>
+<td>-</td>
+<td><code>rcard</code></td>
+<td><code>rcardioid</code></td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>cardioid.fit</code></td>
+<td><code>cardioid.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td></td>
+</tr>
+<tr>
+<td>Cartwright</td>
+<td>PDF</td>
+<td><code>cartwright.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>dcarthwrite</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>cartwright.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>cartwright.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>cartwright.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>cartwright.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Wrapped Normal</td>
+<td>PDF</td>
+<td><code>wrapnorm.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>dwrpnorm</code></td>
+<td><code>dwrappednormal</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>wrapnorm.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>pwrappednormal</code></td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>wrapnorm.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>qwrappednormal</code></td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>wrapnorm.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>rwrpnorm</code></td>
+<td><code>rwrappednormal</code></td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>wrapnorm.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>mle.wrappednormal</code></td>
+</tr>
+<tr>
+<td>Wrapped Cauchy</td>
+<td>PDF</td>
+<td><code>wrapcauchy.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>dwrpcauchy</code></td>
+<td><code>dwrappedcauchy</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>wrapcauchy.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>wrapcauchy.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>wrapcauchy.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>rwrpcauchy</code></td>
+<td><code>rwrappedcauchy</code></td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>wrapcauchy.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>mle.wrappedcauchy</code></td>
+</tr>
+<tr>
+<td>Von Mises</td>
+<td>PDF</td>
+<td><code>vonmises.pdf</code></td>
+<td>-</td>
+<td><code>circ_vmpdf</code></td>
+<td><code>dvm</code></td>
+<td><code>dvonmises</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>vonmises.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>pvm</code></td>
+<td><code>pvonmises</code></td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>vonmises.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>qvonmises</code></td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>vonmises.rvs</code></td>
+<td>-</td>
+<td><code>circ_vmrnd</code></td>
+<td><code>rvm</code></td>
+<td><code>rvonmises</code></td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>vonmises.fit</code></td>
+<td>-</td>
+<td><code>circ_vmpar</code></td>
+<td><code>vm.ml</code></td>
+<td><code>mle.vonmises</code></td>
+</tr>
+<tr>
+<td>Flattopped Von Mises</td>
+<td>PDF</td>
+<td><code>vonmises_flattopped.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>vonmises_flattopped.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>vonmises_flattopped.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>vonmises_flattopped.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>vonmises_flattopped.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Jones-Pewsey</td>
+<td>PDF</td>
+<td><code>jonespewsey.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>djonespewsey</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>jonespewsey.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>jonespewsey.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>jonespewsey.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>jonespewsey.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<h4 id="asymmetric-circular-distributions">Asymmetric Circular Distributions</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Method</th>
+<th>PyCircStat2</th>
+<th>PyCircStat</th>
+<th>CircStat (MATLAB)</th>
+<th>CircStats (R)</th>
+<th>circular (R)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jones-Pewsey Sine-Skewed</td>
+<td>PDF</td>
+<td><code>jonespewsey_sineskewed.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>jonespewsey_sineskewed.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>jonespewsey_sineskewed.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>jonespewsey_sineskewed.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>jonespewsey_sineskewed.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Jones-Pewsey Asymmetric</td>
+<td>PDF</td>
+<td><code>jonespewsey_asym.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>jonespewsey_asym.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>jonespewsey_asym.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>jonespewsey_asym.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>jonespewsey_asym.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Inverse Batschelet</td>
+<td>PDF</td>
+<td><code>inverse_batschelet.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>inverse_batschelet.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>inverse_batschelet.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>inverse_batschelet.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>inverse_batschelet.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Kato-Jones</td>
+<td>PDF</td>
+<td><code>katojones.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>dkatojones</code></td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>katojones.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>katojones.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>katojones.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>rkatojones</code></td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>katojones.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Wrapped Stable</td>
+<td>PDF</td>
+<td><code>wrapstable.pdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>CDF</td>
+<td><code>wrapstable.cdf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>PPF</td>
+<td><code>wrapstable.ppf</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td><code>wrapstable.rvs</code></td>
+<td>-</td>
+<td>-</td>
+<td><code>rwrpstab</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td></td>
+<td>Fit</td>
+<td><code>wrapstable.fit</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Asymmetric Trangular</td>
+<td>PDF</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>dasytriangular</code></td>
+</tr>
+<tr>
+<td>Projected Normal</td>
+<td>PDF</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>dpnorm</code></td>
+</tr>
+<tr>
+<td></td>
+<td>RVS</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td><code>rpnorm</code></td>
+</tr>
+</tbody>
+</table>
+<div class="footnote">
+<hr />
+<ol>
+<li id="fn:uniform">
+<p><span class="arithmatex">\(\rho=0\)</span> stands for uniform distributed.&#160;<a class="footnote-backref" href="#fnref:uniform" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+<li id="fn:median">
+<p><span class="arithmatex">\(\theta\)</span> stands for median.&#160;<a class="footnote-backref" href="#fnref:median" title="Jump back to footnote 2 in the text">&#8617;</a></p>
+</li>
+<li id="fn:F">
+<p><span class="arithmatex">\(F\)</span> stands for distributions.&#160;<a class="footnote-backref" href="#fnref:F" title="Jump back to footnote 3 in the text">&#8617;</a></p>
+</li>
+<li id="fn:one-way">
+<p>Yet anothr one-way ANOVA.&#160;<a class="footnote-backref" href="#fnref:one-way" title="Jump back to footnote 4 in the text">&#8617;</a></p>
+</li>
+<li id="fn:two-way">
+<p>Two-way ANOVA.&#160;<a class="footnote-backref" href="#fnref:two-way" title="Jump back to footnote 5 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "content.code.copy", "content.tabs.link", "content.mathjax"], "search": "../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
