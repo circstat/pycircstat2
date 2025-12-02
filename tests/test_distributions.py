@@ -3,9 +3,11 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 import pytest
-from scipy import stats, special
+from scipy import special, stats
+from scipy.integrate import quad
 
 from pycircstat2.distributions import (
+    _VMFT_KAPPA_UPPER,
     cardioid,
     cartwright,
     circularuniform,
@@ -21,10 +23,11 @@ from pycircstat2.distributions import (
     wrapnorm,
     wrapstable,
 )
-from pycircstat2.distributions import _VMFT_KAPPA_UPPER
 
 
-def _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_tol=1e-12):
+def _assert_monotonic_cdf_ppf(
+    dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_tol=1e-12
+):
     def _evaluate(func, grid):
         try:
             return np.asarray(func(grid), dtype=float)
@@ -41,12 +44,16 @@ def _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_to
 
     cdf_diffs = np.diff(cdf_vals)
     assert np.all(cdf_diffs >= -cdf_tol), "CDF must be non-decreasing"
-    assert np.all((cdf_vals >= -cdf_tol) & (cdf_vals <= 1.0 + cdf_tol)), "CDF outside [0, 1]"
+    assert np.all((cdf_vals >= -cdf_tol) & (cdf_vals <= 1.0 + cdf_tol)), (
+        "CDF outside [0, 1]"
+    )
 
     ppf_diffs = np.diff(ppf_vals)
     assert np.all(ppf_diffs >= -ppf_tol), "PPF must be non-decreasing"
     two_pi = 2.0 * np.pi
-    assert np.all((ppf_vals >= -ppf_tol) & (ppf_vals <= two_pi + ppf_tol)), "PPF outside [0, 2π]"
+    assert np.all((ppf_vals >= -ppf_tol) & (ppf_vals <= two_pi + ppf_tol)), (
+        "PPF outside [0, 2π]"
+    )
 
 
 @dataclass(frozen=True)
@@ -111,7 +118,12 @@ def _evaluate_array(func: Callable[..., Any], grid: Any, **kwargs: Any) -> np.nd
 
 
 _ARGCHECK_CASES = [
-    ("triangular", triangular, (np.array([-0.1, 0.1, 0.5]),), np.array([False, True, False])),
+    (
+        "triangular",
+        triangular,
+        (np.array([-0.1, 0.1, 0.5]),),
+        np.array([False, True, False]),
+    ),
     (
         "cardioid",
         cardioid,
@@ -145,7 +157,11 @@ _ARGCHECK_CASES = [
     (
         "vonmises_flattopped",
         vonmises_flattopped,
-        (np.array([0.0, 0.0]), np.array([0.5, _VMFT_KAPPA_UPPER + 1.0]), np.array([0.0, 0.0])),
+        (
+            np.array([0.0, 0.0]),
+            np.array([0.5, _VMFT_KAPPA_UPPER + 1.0]),
+            np.array([0.0, 0.0]),
+        ),
         np.array([True, False]),
     ),
     (
@@ -157,19 +173,34 @@ _ARGCHECK_CASES = [
     (
         "jonespewsey_sineskewed",
         jonespewsey_sineskewed,
-        (np.array([0.0, 0.0]), np.array([0.5, 0.5]), np.array([0.0, 0.0]), np.array([0.0, 2.0])),
+        (
+            np.array([0.0, 0.0]),
+            np.array([0.5, 0.5]),
+            np.array([0.0, 0.0]),
+            np.array([0.0, 2.0]),
+        ),
         np.array([True, False]),
     ),
     (
         "jonespewsey_asym",
         jonespewsey_asym,
-        (np.array([0.0, 0.0]), np.array([0.5, 0.5]), np.array([0.0, 0.0]), np.array([0.5, 1.2])),
+        (
+            np.array([0.0, 0.0]),
+            np.array([0.5, 0.5]),
+            np.array([0.0, 0.0]),
+            np.array([0.5, 1.2]),
+        ),
         np.array([True, False]),
     ),
     (
         "inverse_batschelet",
         inverse_batschelet,
-        (np.array([0.0, 0.0]), np.array([0.5, -0.5]), np.array([0.0, 0.0]), np.array([0.0, 0.0])),
+        (
+            np.array([0.0, 0.0]),
+            np.array([0.5, -0.5]),
+            np.array([0.0, 0.0]),
+            np.array([0.0, 0.0]),
+        ),
         np.array([True, False]),
     ),
     (
@@ -197,7 +228,9 @@ _ARGCHECK_CASES = [
 ]
 
 
-@pytest.mark.parametrize("name, dist, params, expected", _ARGCHECK_CASES, ids=[c[0] for c in _ARGCHECK_CASES])
+@pytest.mark.parametrize(
+    "name, dist, params, expected", _ARGCHECK_CASES, ids=[c[0] for c in _ARGCHECK_CASES]
+)
 def test_argcheck_vectorized_mask_all(name, dist, params, expected):
     mask = dist._argcheck(*params)
     assert isinstance(mask, np.ndarray), f"{name} should return an array mask"
@@ -216,12 +249,20 @@ _PDF_VECTOR_CASES = [
     (
         "katojones",
         katojones,
-        (0.25, np.array([0.0, 0.2]), np.array([0.5, 0.6]), np.array([0.2, 0.3]), np.array([0.1, 0.2])),
+        (
+            0.25,
+            np.array([0.0, 0.2]),
+            np.array([0.5, 0.6]),
+            np.array([0.2, 0.3]),
+            np.array([0.1, 0.2]),
+        ),
     ),
 ]
 
 
-@pytest.mark.parametrize("name, dist, args", _PDF_VECTOR_CASES, ids=[c[0] for c in _PDF_VECTOR_CASES])
+@pytest.mark.parametrize(
+    "name, dist, args", _PDF_VECTOR_CASES, ids=[c[0] for c in _PDF_VECTOR_CASES]
+)
 def test_pdf_vectorized_shape_parameters(name, dist, args):
     vals = dist.pdf(*args)
     shapes = [np.shape(arg) for arg in args[1:]]  # skip x
@@ -251,26 +292,52 @@ def test_circular_cdf_is_periodic():
 
 
 _SCALAR_ONLY_CALLS = [
-    ("vonmises_flattopped", lambda: vonmises_flattopped.pdf(0.1, mu=np.array([0.0, 0.1]), kappa=1.0, nu=0.1)),
-    ("jonespewsey", lambda: jonespewsey.pdf(0.1, mu=0.0, kappa=np.array([1.0, 1.1]), psi=0.1)),
+    (
+        "vonmises_flattopped",
+        lambda: vonmises_flattopped.pdf(
+            0.1, mu=np.array([0.0, 0.1]), kappa=1.0, nu=0.1
+        ),
+    ),
+    (
+        "jonespewsey",
+        lambda: jonespewsey.pdf(0.1, mu=0.0, kappa=np.array([1.0, 1.1]), psi=0.1),
+    ),
     (
         "jonespewsey_sineskewed",
-        lambda: jonespewsey_sineskewed.pdf(0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, lmbd=0.1),
+        lambda: jonespewsey_sineskewed.pdf(
+            0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, lmbd=0.1
+        ),
     ),
     (
         "jonespewsey_asym",
-        lambda: jonespewsey_asym.pdf(0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, nu=0.2),
+        lambda: jonespewsey_asym.pdf(
+            0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, nu=0.2
+        ),
     ),
     (
         "inverse_batschelet",
-        lambda: inverse_batschelet.pdf(0.1, xi=0.0, kappa=np.array([1.0, 1.1]), nu=0.2, lmbd=0.1),
+        lambda: inverse_batschelet.pdf(
+            0.1, xi=0.0, kappa=np.array([1.0, 1.1]), nu=0.2, lmbd=0.1
+        ),
     ),
-    ("wrapstable", lambda: wrapstable.pdf(0.1, delta=np.array([0.0, 0.1]), alpha=1.0, beta=0.0, gamma=1.0)),
-    ("katojones_ppf", lambda: katojones.ppf(0.5, mu=np.array([0.0, 0.1]), gamma=0.5, rho=0.2, lam=0.1)),
+    (
+        "wrapstable",
+        lambda: wrapstable.pdf(
+            0.1, delta=np.array([0.0, 0.1]), alpha=1.0, beta=0.0, gamma=1.0
+        ),
+    ),
+    (
+        "katojones_ppf",
+        lambda: katojones.ppf(
+            0.5, mu=np.array([0.0, 0.1]), gamma=0.5, rho=0.2, lam=0.1
+        ),
+    ),
 ]
 
 
-@pytest.mark.parametrize("name, call", _SCALAR_ONLY_CALLS, ids=[c[0] for c in _SCALAR_ONLY_CALLS])
+@pytest.mark.parametrize(
+    "name, call", _SCALAR_ONLY_CALLS, ids=[c[0] for c in _SCALAR_ONLY_CALLS]
+)
 def test_scalar_only_distributions_reject_arrays(name, call):
     with pytest.raises(ValueError, match="scalar"):
         call()
@@ -507,7 +574,7 @@ CDF_PPF_CASES = [
     DistributionCase(
         id="triangular-rho4/pi^2",
         factory=triangular,
-        params={"rho": 4.0 / np.pi ** 2},
+        params={"rho": 4.0 / np.pi**2},
         theta_points=256,
         q_points=256,
     ),
@@ -962,8 +1029,16 @@ def test_distribution_cdf_ppf_consistency(case):
     wrapped = np.mod(theta_back - theta + np.pi, 2.0 * np.pi) - np.pi
     pdf_vals = _evaluate_array(case.factory.pdf, theta, **case.params)
 
-    default_high_tol = case.ppf_high_slope_tol if case.ppf_high_slope_tol is not None else max(case.ppf_tol * 50, 5e-8)
-    default_low_tol = case.ppf_low_slope_tol if case.ppf_low_slope_tol is not None else default_high_tol
+    default_high_tol = (
+        case.ppf_high_slope_tol
+        if case.ppf_high_slope_tol is not None
+        else max(case.ppf_tol * 50, 5e-8)
+    )
+    default_low_tol = (
+        case.ppf_low_slope_tol
+        if case.ppf_low_slope_tol is not None
+        else default_high_tol
+    )
 
     if case.ppf_slope_threshold > 0.0:
         high_slope = pdf_vals > case.ppf_slope_threshold
@@ -1000,10 +1075,12 @@ def test_distribution_cdf_ppf_consistency(case):
                 expected,
                 atol=max(case.ppf_tol * 50, 1e-8),
                 rtol=0.0,
-    )
+            )
 
 
-def _check_textbook_reference(case_id: str, *, rounding: Optional[int] = None, significant: Optional[int] = None):
+def _check_textbook_reference(
+    case_id: str, *, rounding: Optional[int] = None, significant: Optional[int] = None
+):
     case = _REFERENCE_LOOKUP[case_id]
     dist = case.factory(**case.params)
     method = getattr(dist, case.method)
@@ -1087,7 +1164,9 @@ def test_distribution_cdf_matches_numeric(case):
 
 @pytest.mark.parametrize("case", RVS_CASES, ids=lambda case: case.id)
 def test_distribution_rvs_pit(case):
-    cdf_callable = lambda values: _evaluate_array(case.factory.cdf, values, **case.params)
+    cdf_callable = lambda values: _evaluate_array(
+        case.factory.cdf, values, **case.params
+    )
     _assert_rvs_reasonable(
         case.dist(),
         size=case.size,
@@ -1121,7 +1200,9 @@ def test_vonmises_descriptive_stats_consistency():
     frozen = vonmises(mu=mu_true, kappa=kappa_true)
     generator_stats = vonmises.stats(mu=mu_true, kappa=kappa_true)
     expected_r = special.i1(kappa_true) / special.i0(kappa_true)
-    expected_m2 = special.iv(2, kappa_true) / special.i0(kappa_true) * np.exp(2j * mu_true)
+    expected_m2 = (
+        special.iv(2, kappa_true) / special.i0(kappa_true) * np.exp(2j * mu_true)
+    )
 
     np.testing.assert_allclose(frozen.r(), expected_r, atol=5e-12, rtol=0.0)
     np.testing.assert_allclose(frozen.mean(), mu_true, atol=1e-12, rtol=0.0)
@@ -1221,7 +1302,9 @@ def test_logpdf_matches_log_of_pdf(dist, params):
 
     assert np.all(np.isfinite(logpdf_vals))
     mask = pdf_vals > 0.0
-    np.testing.assert_allclose(logpdf_vals[mask], np.log(pdf_vals[mask]), atol=5e-10, rtol=0.0)
+    np.testing.assert_allclose(
+        logpdf_vals[mask], np.log(pdf_vals[mask]), atol=5e-10, rtol=0.0
+    )
 
 
 def test_vonmises_random_state_reproducibility():
@@ -1257,10 +1340,13 @@ def test_rvs_output_shapes(dist, params):
 
     empty = dist.rvs(size=0, random_state=42, **params)
     assert empty.shape == (0,)
+
+
 def test_triangular_ppf_vectorized():
     q = np.linspace(0.1, 0.9, num=5)
     out_zero = triangular.ppf(q, rho=0.0)
     np.testing.assert_allclose(out_zero, q * (2 * np.pi))
+
 
 def test_triangular_pdf_periodic():
     rho = 0.3
@@ -1321,7 +1407,9 @@ def test_vonmises_flattopped_uniform_limit():
 def test_vonmises_flattopped_fit_recovers_parameters():
     mu_true, kappa_true, nu_true = 1.1, 4.0, -0.25
     rng = np.random.default_rng(2024)
-    sample = vonmises_flattopped.rvs(mu=mu_true, kappa=kappa_true, nu=nu_true, size=6000, random_state=rng)
+    sample = vonmises_flattopped.rvs(
+        mu=mu_true, kappa=kappa_true, nu=nu_true, size=6000, random_state=rng
+    )
 
     estimates, info = vonmises_flattopped.fit(sample, method="mle", return_info=True)
     assert info["converged"]
@@ -1334,7 +1422,9 @@ def test_vonmises_flattopped_fit_recovers_parameters():
 
     moments = vonmises_flattopped.fit(sample, method="moments")
     assert moments[2] == 0.0
-    np.testing.assert_allclose(np.mod(moments[0] - mu_true + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=1e-1)
+    np.testing.assert_allclose(
+        np.mod(moments[0] - mu_true + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=1e-1
+    )
 
 
 def test_vonmises_fit_wraps_data():
@@ -1389,9 +1479,15 @@ def test_inverse_batschelet_pdf_scalar_consistency():
 
 
 def test_inverse_batschelet_fit_moments():
-    samples = inverse_batschelet.rvs(xi=1.1, kappa=3.0, nu=0.2, lmbd=-0.3, size=600, random_state=123)
-    xi_hat, kappa_hat, nu_hat, lmbd_hat = inverse_batschelet.fit(samples, method="moments")
-    np.testing.assert_allclose(np.mod(xi_hat - 1.1 + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=0.3)
+    samples = inverse_batschelet.rvs(
+        xi=1.1, kappa=3.0, nu=0.2, lmbd=-0.3, size=600, random_state=123
+    )
+    xi_hat, kappa_hat, nu_hat, lmbd_hat = inverse_batschelet.fit(
+        samples, method="moments"
+    )
+    np.testing.assert_allclose(
+        np.mod(xi_hat - 1.1 + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=0.3
+    )
     assert nu_hat == 0.0
     assert lmbd_hat == 0.0
     assert kappa_hat >= 0.0
@@ -1400,7 +1496,14 @@ def test_inverse_batschelet_fit_moments():
 def test_inverse_batschelet_fit_mle():
     rng = np.random.default_rng(246)
     xi_true, kappa_true, nu_true, lmbd_true = 0.8, 2.5, -0.25, 0.4
-    data = inverse_batschelet.rvs(xi=xi_true, kappa=kappa_true, nu=nu_true, lmbd=lmbd_true, size=800, random_state=rng)
+    data = inverse_batschelet.rvs(
+        xi=xi_true,
+        kappa=kappa_true,
+        nu=nu_true,
+        lmbd=lmbd_true,
+        size=800,
+        random_state=rng,
+    )
 
     (xi_hat, kappa_hat, nu_hat, lmbd_hat), info = inverse_batschelet.fit(
         data,
@@ -1410,7 +1513,9 @@ def test_inverse_batschelet_fit_mle():
     )
 
     assert info["converged"]
-    np.testing.assert_allclose(np.mod(xi_hat - xi_true + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=0.2)
+    np.testing.assert_allclose(
+        np.mod(xi_hat - xi_true + np.pi, 2.0 * np.pi) - np.pi, 0.0, atol=0.2
+    )
     np.testing.assert_allclose(kappa_hat, kappa_true, atol=0.7)
     np.testing.assert_allclose(nu_hat, nu_true, atol=0.12)
     np.testing.assert_allclose(lmbd_hat, lmbd_true, atol=0.12)
@@ -1429,7 +1534,7 @@ def test_wrapstable_pdf_matches_wrapped_normal():
     gamma = 0.5
     theta = np.linspace(0.0, 2.0 * np.pi, 13)
     ws_vals = wrapstable.pdf(theta, delta=delta, alpha=2.0, beta=0.0, gamma=gamma)
-    rho = np.exp(-(gamma ** 2))
+    rho = np.exp(-(gamma**2))
     wn_vals = wrapnorm.pdf(theta, mu=delta, rho=rho)
     np.testing.assert_allclose(ws_vals, wn_vals, atol=1e-6, rtol=5e-6)
 
@@ -1445,7 +1550,9 @@ def test_wrapstable_pdf_matches_wrapcauchy():
 
 
 def test_wrapstable_series_adaptive_truncation():
-    rho_vals, mu_vals, p = wrapstable._get_series_terms(delta=0.0, alpha=1.6, beta=0.1, gamma=0.02)
+    rho_vals, mu_vals, p = wrapstable._get_series_terms(
+        delta=0.0, alpha=1.6, beta=0.1, gamma=0.02
+    )
     assert len(p) > 150
     assert rho_vals.shape == mu_vals.shape == p.shape
 
@@ -1492,8 +1599,10 @@ def test_wrapstable_rvs_reduces_to_wrapped_normal():
     rng = np.random.default_rng(321)
     delta = 1.0
     gamma = 0.5
-    samples = wrapstable.rvs(delta=delta, alpha=2.0, beta=0.0, gamma=gamma, size=2000, random_state=rng)
-    rho = np.exp(-(gamma ** 2))
+    samples = wrapstable.rvs(
+        delta=delta, alpha=2.0, beta=0.0, gamma=gamma, size=2000, random_state=rng
+    )
+    rho = np.exp(-(gamma**2))
     wn_samples = wrapnorm.rvs(mu=delta, rho=rho, size=2000, random_state=321)
     # Compare first trigonometric moment
     m1_ws = np.mean(np.exp(1j * samples))
@@ -1605,8 +1714,11 @@ def test_katojones_ppf_roundtrip():
 def test_katojones_rvs_reasonable():
     dist = katojones(mu=0.7, gamma=0.5, rho=0.25, lam=1.2)
     _assert_rvs_reasonable(dist, size=512, seed=2025, uniform_tol=0.01)
-    
-def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05, cdf_callable=None):
+
+
+def _assert_rvs_reasonable(
+    dist, size=256, seed=123, uniform_tol=0.05, cdf_callable=None
+):
     rng = np.random.default_rng(seed)
     samples = dist.rvs(size=size, random_state=rng)
     samples = np.asarray(samples, dtype=float)
@@ -1619,3 +1731,41 @@ def _assert_rvs_reasonable(dist, size=256, seed=123, uniform_tol=0.05, cdf_calla
     u = np.mod(u, 1.0)
     stat, pvalue = stats.kstest(u, "uniform")
     assert pvalue > uniform_tol, f"kstest failed: statistic={stat}, p={pvalue}"
+
+
+def _check_pdf_normalizes(dist, params=None, atol=1e-6, limit=400):
+    if params is None:
+        integrand = lambda t: dist.pdf(t)
+    else:
+        integrand = lambda t: dist.pdf(t, *params)
+
+    val, err = quad(integrand, 0, 2 * np.pi, limit=limit)
+    assert np.isfinite(val)
+    assert abs(val - 1.0) < atol + err
+
+
+def test_vonmises_flattopped_extreme_kappa():
+    # Use a very large (but not pathological) kappa to stress the table building
+    params = (0.7, min(150.0, _VMFT_KAPPA_UPPER - 1.0), 0.6)
+    dist = vonmises_flattopped(*params)
+    theta = np.linspace(0, 2 * np.pi, 257)
+    _check_pdf_normalizes(dist, params=None, atol=5e-6)
+    _assert_monotonic_cdf_ppf(dist, theta, np.linspace(0, 1, 257))
+
+
+def test_katojones_gamma_rho_close_to_one():
+    # Stay inside the feasibility disk by aligning lambda with the first moment
+    params = (1.1, 0.99, 0.99, 0.0)
+    dist = katojones(*params)
+    theta = np.linspace(0, 2 * np.pi, 257)
+    _check_pdf_normalizes(dist, params=None, atol=1e-6)
+    _assert_monotonic_cdf_ppf(dist, theta, np.linspace(0, 1, 257))
+
+
+@pytest.mark.parametrize("alpha", [1e-6, 1.999])  # Lévy-like and almost-Gaussian
+def test_wrapstable_alpha_extremes(alpha):
+    params = (0.0, alpha, 0.0, 0.7)  # delta, alpha, beta, gamma
+    dist = wrapstable(*params)
+    theta = np.linspace(0, 2 * np.pi, 257)
+    _check_pdf_normalizes(dist, params=None, atol=5e-5 if alpha < 0.01 else 1e-6)
+    _assert_monotonic_cdf_ppf(dist, theta, np.linspace(0, 1, 257), cdf_tol=1e-9, ppf_tol=1e-9)

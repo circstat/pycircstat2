@@ -104,7 +104,7 @@ def test_omnibus_test():
 
     np.testing.assert_approx_equal(result.pval, 0.0043, significant=2)
 
-    # test large sample size 
+    # test large sample size
     # (factorial division overflow while computing p-val)
     # fixed in PR 12
     from pycircstat2.distributions import circularuniform, vonmises
@@ -116,7 +116,9 @@ def test_omnibus_test():
     result = omnibus_test(alpha=d0)
     assert result.pval < 0.05, "Expected significant p-value for von Mises distribution"
     result = omnibus_test(alpha=d1)
-    assert result.pval > 0.05, "Expected non-significant p-value for uniform distribution"
+    assert result.pval > 0.05, (
+        "Expected non-significant p-value for uniform distribution"
+    )
 
 
 def test_batschelet_test():
@@ -144,7 +146,9 @@ def test_symmetry_test():
     data_zar_ex6_ch27 = load_data("D9", source="zar")
     circ_zar_ex6_ch27 = Circular(data=data_zar_ex6_ch27["θ"].values[:], unit="degree")
 
-    result = symmetry_test(median=float(circ_zar_ex6_ch27.median), alpha=circ_zar_ex6_ch27.alpha)
+    result = symmetry_test(
+        median=float(circ_zar_ex6_ch27.median), alpha=circ_zar_ex6_ch27.alpha
+    )
     assert result.pval > 0.5
 
 
@@ -295,7 +299,9 @@ def test_randomized_tests_seed_harmonization():
 
     samples = [alpha[:6], alpha[6:]]
     art_int = angular_randomisation_test(samples, n_simulation=128, seed=seed_value)
-    art_gen = angular_randomisation_test(samples, n_simulation=128, seed=make_generator())
+    art_gen = angular_randomisation_test(
+        samples, n_simulation=128, seed=make_generator()
+    )
     assert art_int.pval == art_gen.pval
 
     kuiper_int = kuiper_test(alpha=alpha, n_simulation=256, seed=seed_value)
@@ -360,7 +366,9 @@ def test_binomial_test_uniform():
 
     result = binomial_test(alpha, md)
 
-    assert 0.05 < result.pval < 1.0, f"Unexpected p-value for uniform data: {result.pval}"
+    assert 0.05 < result.pval < 1.0, (
+        f"Unexpected p-value for uniform data: {result.pval}"
+    )
 
 
 def test_binomial_test_skewed():
@@ -404,14 +412,20 @@ def test_concentration_identical():
 
     result = concentration_test(alpha1, alpha2)
 
-    assert result.pval > 0.05, f"Unexpectedly small p-value: {result.pval}, should not reject H0."
+    assert result.pval > 0.05, (
+        f"Unexpectedly small p-value: {result.pval}, should not reject H0."
+    )
 
 
 def test_concentration_different():
     """Test concentration_test with different kappa values (should reject H0)."""
     rng = np.random.default_rng(123)
-    alpha1 = vonmises.rvs(mu=0, kappa=3, size=50, random_state=rng)  # Higher concentration
-    alpha2 = vonmises.rvs(mu=0, kappa=1, size=50, random_state=rng)  # Lower concentration
+    alpha1 = vonmises.rvs(
+        mu=0, kappa=3, size=50, random_state=rng
+    )  # Higher concentration
+    alpha2 = vonmises.rvs(
+        mu=0, kappa=1, size=50, random_state=rng
+    )  # Lower concentration
 
     result = concentration_test(alpha1, alpha2)
 
@@ -426,7 +440,9 @@ def test_concentration_high_dispersion():
 
     result = concentration_test(alpha1, alpha2)
 
-    assert result.pval > 0.05, f"Unexpectedly small p-value: {result.pval}, should not reject H0."
+    assert result.pval > 0.05, (
+        f"Unexpectedly small p-value: {result.pval}, should not reject H0."
+    )
 
 
 def test_concentration_extreme_case():
@@ -437,7 +453,9 @@ def test_concentration_extreme_case():
 
     result = concentration_test(alpha1, alpha2)
 
-    assert result.pval > 0.05, f"Unexpectedly small p-value: {result.pval}, should not reject H0."
+    assert result.pval > 0.05, (
+        f"Unexpectedly small p-value: {result.pval}, should not reject H0."
+    )
 
 
 def test_rao_homogeneity_identical():
@@ -453,9 +471,7 @@ def test_rao_homogeneity_identical():
     assert results.pval_polar > 0.05, (
         f"Unexpectedly small p-value: {results.pval_polar}"
     )
-    assert results.pval_disp > 0.05, (
-        f"Unexpectedly small p-value: {results.pval_disp}"
-    )
+    assert results.pval_disp > 0.05, f"Unexpectedly small p-value: {results.pval_disp}"
 
 
 def test_rao_homogeneity_different_means():
@@ -478,15 +494,15 @@ def test_rao_homogeneity_different_dispersion():
     seeds = [301, 302, 303]
     kappas = (5, 2, 1)
     samples = [
-        vonmises.rvs(mu=0, kappa=kappa, size=50, random_state=np.random.default_rng(seed))
+        vonmises.rvs(
+            mu=0, kappa=kappa, size=50, random_state=np.random.default_rng(seed)
+        )
         for seed, kappa in zip(seeds, kappas)
     ]
 
     results = rao_homogeneity_test(samples)
 
-    assert results.pval_disp < 0.05, (
-        f"Expected rejection but got p={results.pval_disp}"
-    )
+    assert results.pval_disp < 0.05, f"Expected rejection but got p={results.pval_disp}"
 
 
 def test_rao_homogeneity_small_samples():
@@ -767,7 +783,9 @@ def test_circ_anova():
     # Edge case: All groups have the same mean direction
     identical_group = np.random.vonmises(mu=0, kappa=5, size=50)
     result_identical = circ_anova([identical_group] * 3, method="F-test")
-    assert result_identical.pval > 0.05, "F-test should not reject H0 for identical groups"
+    assert result_identical.pval > 0.05, (
+        "F-test should not reject H0 for identical groups"
+    )
 
     # Edge case: Small sample sizes
     small_group1 = np.random.vonmises(mu=0, kappa=5, size=5)
