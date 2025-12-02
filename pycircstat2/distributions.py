@@ -897,7 +897,8 @@ class triangular_gen(CircularContinuous):
     """
 
     def _argcheck(self, rho):
-        return 0 <= rho <= 4 / np.pi**2
+        rho_arr = np.asarray(rho, dtype=float)
+        return (rho_arr >= 0.0) & (rho_arr <= 4.0 / np.pi**2)
 
     def _pdf(self, x, rho):
         return (
@@ -1286,7 +1287,16 @@ class cardioid_gen(CircularContinuous):
     """
 
     def _argcheck(self, mu, rho):
-        return 0 <= mu <= np.pi * 2 and 0 <= rho <= 0.5
+        try:
+            mu_arr, rho_arr = np.broadcast_arrays(mu, rho)
+        except ValueError:
+            return False
+        return (
+            (mu_arr >= 0.0)
+            & (mu_arr <= 2.0 * np.pi)
+            & (rho_arr >= 0.0)
+            & (rho_arr <= 0.5)
+        )
 
     def _pdf(self, x, mu, rho):
         return (1 + 2 * rho * np.cos(x - mu)) / 2.0 / np.pi
@@ -1739,7 +1749,11 @@ class cartwright_gen(CircularContinuous):
     """
 
     def _argcheck(self, mu, zeta):
-        return 0 <= mu <= 2 * np.pi and zeta > 0
+        try:
+            mu_arr, zeta_arr = np.broadcast_arrays(mu, zeta)
+        except ValueError:
+            return False
+        return (mu_arr >= 0.0) & (mu_arr <= 2.0 * np.pi) & (zeta_arr > 0.0)
 
     @staticmethod
     def _moment_r(zeta):
@@ -2257,7 +2271,16 @@ class wrapnorm_gen(CircularContinuous):
         self._series_window_cache = {}
 
     def _argcheck(self, mu, rho):
-        return 0 <= mu <= np.pi * 2 and 0 < rho < 1
+        try:
+            mu_arr, rho_arr = np.broadcast_arrays(mu, rho)
+        except ValueError:
+            return False
+        return (
+            (mu_arr >= 0.0)
+            & (mu_arr <= 2.0 * np.pi)
+            & (rho_arr > 0.0)
+            & (rho_arr < 1.0)
+        )
 
     def _pdf(self, x, mu, rho):
         return (
@@ -2812,7 +2835,16 @@ class wrapcauchy_gen(CircularContinuous):
     """
 
     def _argcheck(self, mu, rho):
-        return 0 <= mu <= np.pi * 2 and 0 <= rho < 1
+        try:
+            mu_arr, rho_arr = np.broadcast_arrays(mu, rho)
+        except ValueError:
+            return False
+        return (
+            (mu_arr >= 0.0)
+            & (mu_arr <= 2.0 * np.pi)
+            & (rho_arr >= 0.0)
+            & (rho_arr < 1.0)
+        )
 
     def _pdf(self, x, mu, rho):
         return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
@@ -3272,7 +3304,15 @@ class vonmises_gen(CircularContinuous):
     __call__.__doc__ = _freeze_doc
 
     def _argcheck(self, mu, kappa):
-        return 0 <= mu <= np.pi * 2 and kappa > 0
+        try:
+            mu_arr, kappa_arr = np.broadcast_arrays(mu, kappa)
+        except ValueError:
+            return False
+        return (
+            (mu_arr >= 0.0)
+            & (mu_arr <= 2.0 * np.pi)
+            & (kappa_arr > 0.0)
+        )
 
     def _pdf(self, x, mu, kappa):
         return np.exp(kappa * np.cos(x - mu)) / (2 * np.pi * i0(kappa))
@@ -3879,10 +3919,21 @@ class vonmises_flattopped_gen(CircularContinuous):
         self._vmft_sampler_cache = {}
 
     def _validate_params(self, mu, kappa, nu):
-        return (0 <= mu <= np.pi * 2) and (0 <= kappa <= _VMFT_KAPPA_UPPER) and (-1 <= nu <= 1)
+        mu_arr, kappa_arr, nu_arr = np.broadcast_arrays(mu, kappa, nu)
+        return (
+            (mu_arr >= 0.0)
+            & (mu_arr <= 2.0 * np.pi)
+            & (kappa_arr >= 0.0)
+            & (kappa_arr <= _VMFT_KAPPA_UPPER)
+            & (nu_arr >= -1.0)
+            & (nu_arr <= 1.0)
+        )
 
     def _argcheck(self, mu, kappa, nu):
-        return bool(self._validate_params(mu, kappa, nu))
+        try:
+            return self._validate_params(mu, kappa, nu)
+        except ValueError:
+            return False
 
     def _clear_normalization_cache(self):
         super()._clear_normalization_cache()
@@ -4634,10 +4685,20 @@ class jonespewsey_gen(CircularContinuous):
         self._series_cache = {}
 
     def _validate_params(self, mu, kappa, psi):
-        return (0 <= mu <= np.pi * 2) and (kappa >= 0) and (-np.inf <= psi <= np.inf)
+        mu_arr, kappa_arr, psi_arr = np.broadcast_arrays(mu, kappa, psi)
+        return (
+            (mu_arr >= 0.0)
+            & (mu_arr <= 2.0 * np.pi)
+            & (kappa_arr >= 0.0)
+            & np.isfinite(kappa_arr)
+            & np.isfinite(psi_arr)
+        )
 
     def _argcheck(self, mu, kappa, psi):
-        return bool(self._validate_params(mu, kappa, psi))
+        try:
+            return self._validate_params(mu, kappa, psi)
+        except ValueError:
+            return False
 
     def _pdf(self, x, mu, kappa, psi):
         x = np.asarray(x, dtype=float)
@@ -5407,15 +5468,22 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
     """
 
     def _validate_params(self, xi, kappa, psi, lmbd):
+        xi_arr, kappa_arr, psi_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, psi, lmbd)
         return (
-            (0 <= xi <= np.pi * 2)
-            and (kappa >= 0)
-            and (-np.inf <= psi <= np.inf)
-            and (-1 <= lmbd <= 1)
+            (xi_arr >= 0.0)
+            & (xi_arr <= 2.0 * np.pi)
+            & (kappa_arr >= 0.0)
+            & np.isfinite(kappa_arr)
+            & np.isfinite(psi_arr)
+            & (lmbd_arr >= -1.0)
+            & (lmbd_arr <= 1.0)
         )
 
     def _argcheck(self, xi, kappa, psi, lmbd):
-        return bool(self._validate_params(xi, kappa, psi, lmbd))
+        try:
+            return self._validate_params(xi, kappa, psi, lmbd)
+        except ValueError:
+            return False
 
     def _pdf(self, x, xi, kappa, psi, lmbd):
         x = np.asarray(x, dtype=float)
@@ -5890,15 +5958,22 @@ class jonespewsey_asym_gen(CircularContinuous):
         self._cdf_table_cache = {}
 
     def _validate_params(self, xi, kappa, psi, nu):
+        xi_arr, kappa_arr, psi_arr, nu_arr = np.broadcast_arrays(xi, kappa, psi, nu)
         return (
-            (0 <= xi <= np.pi * 2)
-            and (kappa >= 0)
-            and (-np.inf <= psi <= np.inf)
-            and (0 <= nu < 1)
+            (xi_arr >= 0.0)
+            & (xi_arr <= 2.0 * np.pi)
+            & (kappa_arr >= 0.0)
+            & np.isfinite(kappa_arr)
+            & np.isfinite(psi_arr)
+            & (nu_arr >= 0.0)
+            & (nu_arr < 1.0)
         )
 
     def _argcheck(self, xi, kappa, psi, nu):
-        return bool(self._validate_params(xi, kappa, psi, nu))
+        try:
+            return self._validate_params(xi, kappa, psi, nu)
+        except ValueError:
+            return False
 
     def _pdf(self, x, xi, kappa, psi, nu):
         x = np.asarray(x, dtype=float)
@@ -6429,15 +6504,23 @@ class inverse_batschelet_gen(CircularContinuous):
         self._invbat_sampler_cache = {}
 
     def _validate_params(self, xi, kappa, nu, lmbd):
+        xi_arr, kappa_arr, nu_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, nu, lmbd)
         return (
-            (0 <= xi <= np.pi * 2)
-            and (kappa >= 0)
-            and (-1 <= nu <= 1)
-            and (-1 <= lmbd <= 1)
+            (xi_arr >= 0.0)
+            & (xi_arr <= 2.0 * np.pi)
+            & (kappa_arr >= 0.0)
+            & np.isfinite(kappa_arr)
+            & (nu_arr >= -1.0)
+            & (nu_arr <= 1.0)
+            & (lmbd_arr >= -1.0)
+            & (lmbd_arr <= 1.0)
         )
 
     def _argcheck(self, xi, kappa, nu, lmbd):
-        return bool(self._validate_params(xi, kappa, nu, lmbd))
+        try:
+            return self._validate_params(xi, kappa, nu, lmbd)
+        except ValueError:
+            return False
 
     def _pdf(self, x, xi, kappa, nu, lmbd):
         scalar_input = np.isscalar(x)
@@ -7419,17 +7502,21 @@ class wrapstable_gen(CircularContinuous):
         self._series_cache = {}
 
     def _validate_params(self, delta, alpha, beta, gamma):
+        delta_arr, alpha_arr, beta_arr, gamma_arr = np.broadcast_arrays(delta, alpha, beta, gamma)
         return (
-            (0 <= delta <= np.pi * 2)
-            and (0 < alpha <= 2)
-            and (-1 < beta < 1)
-            and (gamma > 0)
+            (delta_arr >= 0.0)
+            & (delta_arr <= 2.0 * np.pi)
+            & (alpha_arr > 0.0)
+            & (alpha_arr <= 2.0)
+            & (beta_arr > -1.0)
+            & (beta_arr < 1.0)
+            & (gamma_arr > 0.0)
         )
 
     def _argcheck(self, delta, alpha, beta, gamma):
-        if self._validate_params(delta, alpha, beta, gamma):
-            return True
-        else:
+        try:
+            return self._validate_params(delta, alpha, beta, gamma)
+        except ValueError:
             return False
 
     def _pdf(self, x, delta, alpha, beta, gamma):

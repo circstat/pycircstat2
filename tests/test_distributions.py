@@ -21,6 +21,7 @@ from pycircstat2.distributions import (
     wrapnorm,
     wrapstable,
 )
+from pycircstat2.distributions import _VMFT_KAPPA_UPPER
 
 
 def _assert_monotonic_cdf_ppf(dist, theta_grid, q_grid, *, cdf_tol=1e-12, ppf_tol=1e-12):
@@ -107,6 +108,127 @@ def _evaluate_array(func: Callable[..., Any], grid: Any, **kwargs: Any) -> np.nd
         flat = np.asarray(grid, dtype=float).reshape(-1)
         evaluated = np.array([func(float(val), **kwargs) for val in flat], dtype=float)
         return evaluated.reshape(np.shape(grid))
+
+
+_ARGCHECK_CASES = [
+    ("triangular", triangular, (np.array([-0.1, 0.1, 0.5]),), np.array([False, True, False])),
+    (
+        "cardioid",
+        cardioid,
+        (np.array([0.0, 2 * np.pi + 0.1]), np.array([0.2, 0.6])),
+        np.array([True, False]),
+    ),
+    (
+        "cartwright",
+        cartwright,
+        (np.array([0.0, -0.1]), np.array([0.5, 0.5])),
+        np.array([True, False]),
+    ),
+    (
+        "wrapnorm",
+        wrapnorm,
+        (np.array([0.0, 0.0]), np.array([0.5, 1.2])),
+        np.array([True, False]),
+    ),
+    (
+        "wrapcauchy",
+        wrapcauchy,
+        (np.array([0.0, 0.0]), np.array([0.1, -0.1])),
+        np.array([True, False]),
+    ),
+    (
+        "vonmises",
+        vonmises,
+        (np.array([0.0, 7.0]), np.array([0.5, 0.5])),
+        np.array([True, False]),
+    ),
+    (
+        "vonmises_flattopped",
+        vonmises_flattopped,
+        (np.array([0.0, 0.0]), np.array([0.5, _VMFT_KAPPA_UPPER + 1.0]), np.array([0.0, 0.0])),
+        np.array([True, False]),
+    ),
+    (
+        "jonespewsey",
+        jonespewsey,
+        (np.array([0.0, -0.1]), np.array([0.5, 0.5]), np.array([0.0, 0.0])),
+        np.array([True, False]),
+    ),
+    (
+        "jonespewsey_sineskewed",
+        jonespewsey_sineskewed,
+        (np.array([0.0, 0.0]), np.array([0.5, 0.5]), np.array([0.0, 0.0]), np.array([0.0, 2.0])),
+        np.array([True, False]),
+    ),
+    (
+        "jonespewsey_asym",
+        jonespewsey_asym,
+        (np.array([0.0, 0.0]), np.array([0.5, 0.5]), np.array([0.0, 0.0]), np.array([0.5, 1.2])),
+        np.array([True, False]),
+    ),
+    (
+        "inverse_batschelet",
+        inverse_batschelet,
+        (np.array([0.0, 0.0]), np.array([0.5, -0.5]), np.array([0.0, 0.0]), np.array([0.0, 0.0])),
+        np.array([True, False]),
+    ),
+    (
+        "wrapstable",
+        wrapstable,
+        (
+            np.array([0.0, 2 * np.pi + 0.1]),
+            np.array([1.0, 1.0]),
+            np.array([0.0, 0.0]),
+            np.array([1.0, 1.0]),
+        ),
+        np.array([True, False]),
+    ),
+    (
+        "katojones",
+        katojones,
+        (
+            np.array([0.0, 0.0]),
+            np.array([0.5, 1.1]),
+            np.array([0.2, 0.2]),
+            np.array([0.1, 0.1]),
+        ),
+        np.array([True, False]),
+    ),
+]
+
+
+@pytest.mark.parametrize("name, dist, params, expected", _ARGCHECK_CASES, ids=[c[0] for c in _ARGCHECK_CASES])
+def test_argcheck_vectorized_mask_all(name, dist, params, expected):
+    mask = dist._argcheck(*params)
+    assert isinstance(mask, np.ndarray), f"{name} should return an array mask"
+    assert mask.shape == expected.shape
+    assert mask.dtype == bool
+    np.testing.assert_array_equal(mask, expected)
+
+
+_PDF_VECTOR_CASES = [
+    ("triangular", triangular, (0.5, np.array([0.1, 0.2]))),
+    ("cardioid", cardioid, (0.25, np.array([0.0, 0.5]), np.array([0.1, 0.2]))),
+    ("cartwright", cartwright, (0.25, np.array([0.0, 0.2]), np.array([0.5, 0.6]))),
+    ("wrapnorm", wrapnorm, (0.25, np.array([0.0, 0.2]), np.array([0.3, 0.4]))),
+    ("wrapcauchy", wrapcauchy, (0.25, np.array([0.0, 0.2]), np.array([0.3, 0.4]))),
+    ("vonmises", vonmises, (0.25, np.array([0.0, 0.2]), np.array([1.0, 2.0]))),
+    (
+        "katojones",
+        katojones,
+        (0.25, np.array([0.0, 0.2]), np.array([0.5, 0.6]), np.array([0.2, 0.3]), np.array([0.1, 0.2])),
+    ),
+]
+
+
+@pytest.mark.parametrize("name, dist, args", _PDF_VECTOR_CASES, ids=[c[0] for c in _PDF_VECTOR_CASES])
+def test_pdf_vectorized_shape_parameters(name, dist, args):
+    vals = dist.pdf(*args)
+    shapes = [np.shape(arg) for arg in args[1:]]  # skip x
+    expected_shape = np.broadcast_shapes(*shapes) if shapes else ()
+    assert isinstance(vals, np.ndarray)
+    assert vals.shape == expected_shape
+    assert np.all(np.isfinite(vals)), f"{name} pdf returned non-finite values"
 
 
 REFERENCE_VALUES = [
