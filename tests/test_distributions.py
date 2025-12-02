@@ -231,6 +231,32 @@ def test_pdf_vectorized_shape_parameters(name, dist, args):
     assert np.all(np.isfinite(vals)), f"{name} pdf returned non-finite values"
 
 
+_SCALAR_ONLY_CALLS = [
+    ("vonmises_flattopped", lambda: vonmises_flattopped.pdf(0.1, mu=np.array([0.0, 0.1]), kappa=1.0, nu=0.1)),
+    ("jonespewsey", lambda: jonespewsey.pdf(0.1, mu=0.0, kappa=np.array([1.0, 1.1]), psi=0.1)),
+    (
+        "jonespewsey_sineskewed",
+        lambda: jonespewsey_sineskewed.pdf(0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, lmbd=0.1),
+    ),
+    (
+        "jonespewsey_asym",
+        lambda: jonespewsey_asym.pdf(0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, nu=0.2),
+    ),
+    (
+        "inverse_batschelet",
+        lambda: inverse_batschelet.pdf(0.1, xi=0.0, kappa=np.array([1.0, 1.1]), nu=0.2, lmbd=0.1),
+    ),
+    ("wrapstable", lambda: wrapstable.pdf(0.1, delta=np.array([0.0, 0.1]), alpha=1.0, beta=0.0, gamma=1.0)),
+    ("katojones_ppf", lambda: katojones.ppf(0.5, mu=np.array([0.0, 0.1]), gamma=0.5, rho=0.2, lam=0.1)),
+]
+
+
+@pytest.mark.parametrize("name, call", _SCALAR_ONLY_CALLS, ids=[c[0] for c in _SCALAR_ONLY_CALLS])
+def test_scalar_only_distributions_reject_arrays(name, call):
+    with pytest.raises(ValueError, match="scalar"):
+        call()
+
+
 REFERENCE_VALUES = [
     ReferenceValue(
         id="circularuniform-cdf",

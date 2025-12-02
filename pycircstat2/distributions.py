@@ -4657,7 +4657,10 @@ def _vmft_ensure_scalar(value, name):
     unique = np.unique(arr)
     if unique.size == 1:
         return float(unique[0])
-    raise ValueError(f"Flat-topped von Mises parameter '{name}' must be a scalar.")
+    raise ValueError(
+        f"Flat-topped von Mises parameter '{name}' must be scalar; "
+        "array/broadcasted parameters are not supported because tables are cached per parameter set."
+    )
 
 
 class jonespewsey_gen(CircularContinuous):
@@ -5297,7 +5300,10 @@ def _jp_ensure_scalar(value, name):
     unique = np.unique(arr)
     if unique.size == 1:
         return float(unique[0])
-    raise ValueError(f"Jones-Pewsey parameter '{name}' must be a scalar.")
+    raise ValueError(
+        f"Jones-Pewsey parameter '{name}' must be scalar; "
+        "vectorised parameters are not supported because normalization tables are cached per parameter."
+    )
 
 
 def _jp_kernel_base(phi, kappa, psi):
@@ -7430,7 +7436,10 @@ def _invbat_ensure_scalar(value, name):
     unique = np.unique(arr)
     if unique.size == 1:
         return float(unique[0])
-    raise ValueError(f"Inverse Batschelet parameter '{name}' must be a scalar.")
+    raise ValueError(
+        f"Inverse Batschelet parameter '{name}' must be scalar; "
+        "vectorised parameters are not supported because numeric grids are cached per parameter."
+    )
 
 
 def _invbat_grid_size(kappa, nu, lmbd):
@@ -8004,7 +8013,10 @@ class wrapstable_gen(CircularContinuous):
             return float(np.asarray(arr, dtype=float).reshape(-1)[0])
         first = float(arr.flat[0])
         if not np.allclose(arr, first):
-            raise ValueError("wrapstable parameters must be scalar-valued.")
+            raise ValueError(
+                "wrapstable parameters must be scalar; vectorised parameters are not supported "
+                "because Fourier series coefficients are cached per parameter set."
+            )
         return first
 
 
@@ -8100,7 +8112,10 @@ class katojones_gen(CircularContinuous):
             return float(np.asarray(arr, dtype=float).reshape(-1)[0])
         first = float(arr.flat[0])
         if not np.allclose(arr, first):
-            raise ValueError("katojones parameters must be scalar-valued.")
+            raise ValueError(
+                "katojones parameters must be scalar; vectorised parameters are not supported "
+                "because series expansions are cached per parameter set."
+            )
         return first
 
     def _argcheck(self, mu, gamma, rho, lam):
