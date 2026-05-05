@@ -3,8 +3,30 @@ import pandas as pd
 import pytest
 
 from pycircstat2 import load_data
-from pycircstat2.regression import CCRegression, CLRegression
+from pycircstat2.regression import CCRegression, CLRegression, LCRegression
 from pycircstat2.utils import A1inv
+
+
+_PEWSEY_LUNG_DEATHS = [
+    [3035, 2552, 2704, 2554, 2014, 1655, 1721, 1524, 1596, 2074, 2199, 2512],
+    [2933, 2889, 2938, 2497, 1870, 1726, 1607, 1545, 1396, 1787, 2076, 2837],
+    [2787, 3891, 3179, 2011, 1636, 1580, 1489, 1300, 1356, 1653, 2013, 2823],
+    [2996, 2523, 2540, 2520, 1994, 1641, 1691, 1479, 1696, 1877, 2032, 2484],
+    [2899, 2990, 2890, 2379, 1933, 1734, 1617, 1495, 1440, 1777, 1970, 2745],
+    [2841, 3535, 3010, 2091, 1667, 1589, 1518, 1349, 1392, 1619, 1954, 2633],
+]
+
+
+def _lung_dataframe(drop_feb_outliers: bool = True) -> pd.DataFrame:
+    """Pewsey, Neuhäuser & Ruxton (2014) §8.4.1 lung-disease deaths."""
+    y = np.array(_PEWSEY_LUNG_DEATHS, dtype=float).ravel()
+    month = np.tile(np.arange(1, 13), 6)
+    theta = (np.pi / 6) * month
+    df = pd.DataFrame({"y": y, "theta": theta, "month": month})
+    if drop_feb_outliers:
+        # Book sets Feb 1976 (index 25) and Feb 1979 (index 61) to NA.
+        df = df.drop(index=[25, 61]).reset_index(drop=True)
+    return df
 
 
 def test_cc_regression_against_r():
@@ -303,3 +325,120 @@ def test_cc_summary_label_widths(capsys):
     # Long labels like "cos(x1,k=4)" must appear intact (not truncated).
     assert "cos(x1,k=4)" in captured
     assert "sin(x1,k=4)" in captured
+
+
+# ----------------------------- LCRegression -------------------------------
+
+
+def test_lc_regression_against_pewsey_lung_disease():
+    """§8.4.1 reduced extended model: y ~ cos(θ) + sin(θ) + sin(2θ)."""
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m = LCRegression("y ~ cos(theta) + sin(theta) + sin(2*theta)", df)
+    coefs = m.result["coefficients"]
+    assert np.isclose(coefs["(Intercept)"], 2125.12, atol=1e-1)
+    assert np.isclose(coefs["cos(theta)"], 454.18, atol=1e-1)
+    assert np.isclose(coefs["sin(theta)"], 601.96, atol=1e-1)
+    assert np.isclose(coefs["sin(2 * theta)"], 108.69, atol=1e-1)
+    assert np.isclose(m.result["sigma"], 171.3, atol=1e-1)
+    assert np.isclose(m.result["r_squared"], 0.9093, atol=1e-3)
+
+
+def test_lc_marker_matches_explicit():
+    """harmonic(theta, k=K) must produce identical fit to the explicit form."""
+    rng = np.random.default_rng(0)
+    n = 240
+    theta = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    y = (
+        2.0
+        + 1.5 * np.cos(theta - 0.7)
+        + 0.6 * np.cos(2 * theta - 1.2)
+        + rng.normal(0, 0.2, n)
+    )
+    df = pd.DataFrame({"y": y, "theta": theta})
+
+    marker = LCRegression("y ~ harmonic(theta, k=2)", df)
+    explicit = LCRegression(
+        "y ~ cos(theta) + sin(theta) + cos(2*theta) + sin(2*theta)", df
+    )
+    np.testing.assert_allclose(
+        list(marker.result["coefficients"].values()),
+        list(explicit.result["coefficients"].values()),
+        atol=1e-10,
+    )
+    assert marker.expanded_formula == explicit.expanded_formula
+    np.testing.assert_allclose(
+        [h["amplitude"] for h in marker.result["harmonics"]],
+        [h["amplitude"] for h in explicit.result["harmonics"]],
+        atol=1e-10,
+    )
+
+
+def test_lc_amplitude_phase_recovery():
+    """Generated data with known γ₁ and φ₁ — recovered to good precision."""
+    rng = np.random.default_rng(1)
+    n = 1000
+    theta = rng.uniform(0, 2 * np.pi, n)
+    true_amp, true_phase = 2.5, 0.9
+    y = 5.0 + true_amp * np.cos(theta - true_phase) + rng.normal(0, 0.1, n)
+    df = pd.DataFrame({"y": y, "theta": theta})
+
+    m = LCRegression("y ~ harmonic(theta)", df)
+    h = m.result["harmonics"]
+    assert len(h) == 1
+    assert h[0]["k"] == 1
+    assert np.isclose(h[0]["amplitude"], true_amp, atol=0.05)
+    assert np.isclose(h[0]["phase"], true_phase, atol=0.05)
+
+
+def test_lc_marker_with_extra_covariate():
+    """harmonic(theta) + temperature: marker expands, covariate passes through."""
+    rng = np.random.default_rng(2)
+    n = 300
+    theta = rng.uniform(0, 2 * np.pi, n)
+    temperature = rng.normal(20, 5, n)
+    y = 1.0 + 2.0 * np.cos(theta - 0.4) + 0.3 * temperature + rng.normal(0, 0.2, n)
+    df = pd.DataFrame({"y": y, "theta": theta, "temperature": temperature})
+
+    m = LCRegression("y ~ harmonic(theta) + temperature", df)
+    coefs = m.result["coefficients"]
+    assert "temperature" in coefs
+    assert np.isclose(coefs["temperature"], 0.3, atol=0.05)
+    h = m.result["harmonics"][0]
+    assert np.isclose(h["amplitude"], 2.0, atol=0.05)
+
+
+def test_lc_predict_round_trip():
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m = LCRegression("y ~ harmonic(theta, k=2)", df)
+    pred = m.predict(df)
+    assert pred.shape == (len(df),)
+    np.testing.assert_allclose(pred, m.result["fitted"], atol=1e-10)
+
+
+def test_lc_skew_and_flat_not_implemented():
+    df = pd.DataFrame({"y": [1.0, 2.0, 3.0], "theta": [0.0, 1.0, 2.0]})
+    with pytest.raises(NotImplementedError, match="hea.nls"):
+        LCRegression("y ~ skew(theta)", df)
+    with pytest.raises(NotImplementedError, match="hea.nls"):
+        LCRegression("y ~ flat(theta)", df)
+
+
+def test_lc_formula_validation():
+    df = pd.DataFrame({"y": [1.0, 2.0, 3.0], "theta": [0.0, 1.0, 2.0]})
+    with pytest.raises(ValueError, match="'~'"):
+        LCRegression("not a formula", df)
+    with pytest.raises(ValueError, match="positive integer"):
+        LCRegression("y ~ harmonic(theta, k=0)", df)
+
+
+def test_lc_accepts_polars_data():
+    import polars as pl
+
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m_pd = LCRegression("y ~ harmonic(theta)", df)
+    m_pl = LCRegression("y ~ harmonic(theta)", pl.from_pandas(df))
+    np.testing.assert_allclose(
+        list(m_pd.result["coefficients"].values()),
+        list(m_pl.result["coefficients"].values()),
+        atol=1e-12,
+    )

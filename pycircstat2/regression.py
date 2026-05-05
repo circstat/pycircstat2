@@ -1,15 +1,18 @@
+import re
 import warnings
 from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import polars as pl
+from hea import lm as _hea_lm
 from scipy.linalg import lstsq
 from scipy.special import i0e
 from scipy.stats import chi2, norm
 
 from .utils import A1, A1inv, significance_code
 
-__all__ = ["CLRegression", "CCRegression"]
+__all__ = ["CLRegression", "CCRegression", "LCRegression"]
 
 
 def _safe_solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -953,3 +956,214 @@ class CCRegression:
         )
 
         print(f"\n{self.result['message']}\n")
+
+
+# Markers used by LCRegression's formula parser.
+_LC_HARMONIC_RE = re.compile(
+    r"harmonic\s*\(\s*([A-Za-z_]\w*)\s*(?:,\s*k\s*=\s*(\d+)\s*)?\)"
+)
+_LC_UNSUPPORTED_RE = re.compile(r"\b(skew|flat)\s*\(")
+# Coefficient-name pattern as emitted by hea: e.g. "cos(theta)", "sin(2 * theta)".
+_LC_TRIG_RE = re.compile(
+    r"^(cos|sin)\(\s*(?:(\d+)\s*\*\s*)?([A-Za-z_]\w*)\s*\)$"
+)
+
+
+class LCRegression:
+    """
+    Linear–Circular Regression.
+
+    Models a linear response Y as a function of a circular regressor θ
+    (in radians). Backed by ``hea.lm``.
+
+    Formula syntax
+    --------------
+    The right-hand side accepts either a marker that expands to a Fourier
+    basis, or fully explicit ``cos(...) / sin(...)`` terms (or both).
+
+    - ``"y ~ harmonic(theta)"`` — basic cosine model (Pewsey et al. 2014, §8.4.1)
+    - ``"y ~ harmonic(theta, k=K)"`` — extended model with K harmonics (§8.4.2)
+    - ``"y ~ cos(theta) + sin(theta) + cos(3*theta) + sin(3*theta)"`` —
+      fully explicit; useful for non-contiguous harmonic orders
+    - ``"y ~ harmonic(theta, k=2) + temperature"`` — mix marker with extra
+      linear covariates
+
+    Markers ``skew(theta)`` and ``flat(theta)`` are reserved for the
+    nonlinear models in §8.4.3 / §8.4.4 and currently raise
+    ``NotImplementedError`` (they need a nonlinear least-squares backend
+    that ``hea`` does not yet provide).
+
+    Parameters
+    ----------
+    formula : str
+        R-style formula. See above.
+    data : pandas.DataFrame or polars.DataFrame
+        Input data. Pandas inputs are converted to polars internally.
+
+    Attributes
+    ----------
+    formula : str
+        The original formula passed in.
+    expanded_formula : str
+        Formula after marker expansion, as actually fit by ``hea.lm``.
+    lm_fit : hea.lm
+        The underlying linear-model fit. Use it for diagnostics
+        (``.plot()``, ``.summary()``, ``.r_squared``, etc.).
+    result : dict
+        - coefficients : dict of {name: value} from the linear fit
+        - harmonics : list of dicts, one per matched ``cos(k·θ)/sin(k·θ)``
+          pair, each with ``variable``, ``k``, ``cos_coef``, ``sin_coef``,
+          ``amplitude``, ``phase``
+        - sigma, r_squared, aic, bic : scalars
+        - fitted, residuals : np.ndarray
+
+    References
+    ----------
+    Pewsey, A., Neuhäuser, M., Ruxton, G. D. (2014). *Circular Statistics
+    in R*. Oxford University Press, §8.4.
+    """
+
+    def __init__(
+        self,
+        formula: str,
+        data: Union[pd.DataFrame, "pl.DataFrame"],
+    ):
+        if not isinstance(formula, str) or "~" not in formula:
+            raise ValueError(
+                f"Formula must be a string containing '~'; got {formula!r}"
+            )
+
+        self.formula = formula
+        self.data = self._to_polars(data)
+        self.expanded_formula = self._expand_formula(formula)
+        self.lm_fit = _hea_lm(self.expanded_formula, self.data)
+        self.result = self._build_result()
+
+    @staticmethod
+    def _to_polars(data: Union[pd.DataFrame, "pl.DataFrame"]) -> "pl.DataFrame":
+        if isinstance(data, pl.DataFrame):
+            return data
+        if isinstance(data, pd.DataFrame):
+            return pl.from_pandas(data)
+        raise TypeError(
+            f"`data` must be a pandas or polars DataFrame; got {type(data).__name__}"
+        )
+
+    @staticmethod
+    def _expand_formula(formula: str) -> str:
+        lhs, _, rhs = formula.partition("~")
+        if _LC_UNSUPPORTED_RE.search(rhs):
+            raise NotImplementedError(
+                "skew() and flat() markers require a nonlinear least-squares "
+                "backend (hea.nls), which is not yet available."
+            )
+
+        def _expand(match: "re.Match[str]") -> str:
+            col = match.group(1)
+            k = int(match.group(2)) if match.group(2) else 1
+            if k < 1:
+                raise ValueError(f"harmonic(..., k={k}): k must be a positive integer.")
+            terms = []
+            for j in range(1, k + 1):
+                if j == 1:
+                    terms.append(f"cos({col}) + sin({col})")
+                else:
+                    terms.append(f"cos({j}*{col}) + sin({j}*{col})")
+            return " + ".join(terms)
+
+        expanded_rhs = _LC_HARMONIC_RE.sub(_expand, rhs)
+        return f"{lhs.strip()} ~ {expanded_rhs.strip()}"
+
+    def _build_result(self) -> dict:
+        bhat_df = self.lm_fit.bhat
+        coef_names = list(bhat_df.columns)
+        coef_values = list(bhat_df.row(0))
+        coefficients = dict(zip(coef_names, coef_values))
+
+        # Group cos/sin terms by (variable, multiplier).
+        groups: dict = {}
+        for name, value in coefficients.items():
+            m = _LC_TRIG_RE.match(name)
+            if not m:
+                continue
+            func, mult, var = m.groups()
+            k = int(mult) if mult else 1
+            slot = groups.setdefault((var, k), {})
+            slot[func] = (name, value)
+
+        harmonics = []
+        for (var, k), pair in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            cos_entry = pair.get("cos")
+            sin_entry = pair.get("sin")
+            cos_val = cos_entry[1] if cos_entry else None
+            sin_val = sin_entry[1] if sin_entry else None
+            if cos_val is not None and sin_val is not None:
+                amplitude = float(np.hypot(cos_val, sin_val))
+                phase = float(np.arctan2(sin_val, cos_val))
+            else:
+                amplitude = None
+                phase = None
+            harmonics.append(
+                {
+                    "variable": var,
+                    "k": k,
+                    "cos_coef": cos_val,
+                    "sin_coef": sin_val,
+                    "amplitude": amplitude,
+                    "phase": phase,
+                }
+            )
+
+        residuals = self.lm_fit.residuals
+        if isinstance(residuals, pl.DataFrame):
+            residuals = residuals.to_numpy().ravel()
+        fitted = self.lm_fit.yhat
+        if isinstance(fitted, pl.DataFrame):
+            fitted = fitted.to_numpy().ravel()
+
+        return {
+            "coefficients": coefficients,
+            "harmonics": harmonics,
+            "sigma": float(self.lm_fit.sigma),
+            "r_squared": float(self.lm_fit.r_squared),
+            "aic": float(self.lm_fit.AIC),
+            "bic": float(self.lm_fit.BIC),
+            "fitted": np.asarray(fitted, dtype=float),
+            "residuals": np.asarray(residuals, dtype=float),
+        }
+
+    def predict(
+        self, data: Union[pd.DataFrame, "pl.DataFrame"]
+    ) -> np.ndarray:
+        """Predict the linear response for new values of the regressors."""
+        new = self._to_polars(data)
+        out = self.lm_fit.predict(new=new)
+        if isinstance(out, pl.DataFrame):
+            out = out.to_numpy().ravel()
+        return np.asarray(out, dtype=float)
+
+    def summary(self) -> None:
+        """Print a summary of the fit (linear + harmonic decomposition)."""
+        print("\nLinear-Circular Regression\n")
+        print(f"Formula:   {self.formula}")
+        if self.expanded_formula != self.formula:
+            print(f"Expanded:  {self.expanded_formula}")
+        print()
+
+        print("Coefficients:")
+        for name, value in self.result["coefficients"].items():
+            print(f"  {name:<24s} {value: .6f}")
+
+        if self.result["harmonics"]:
+            print("\nHarmonic decomposition:")
+            print(f"  {'variable':<10s} {'k':>3s}  {'amplitude':>12s} {'phase (rad)':>14s}")
+            for h in self.result["harmonics"]:
+                amp = "n/a" if h["amplitude"] is None else f"{h['amplitude']:.6f}"
+                ph = "n/a" if h["phase"] is None else f"{h['phase']:.6f}"
+                print(f"  {h['variable']:<10s} {h['k']:>3d}  {amp:>12s} {ph:>14s}")
+
+        print("\nFit metrics:")
+        print(f"  sigma     = {self.result['sigma']:.6f}")
+        print(f"  R-squared = {self.result['r_squared']:.6f}")
+        print(f"  AIC       = {self.result['aic']:.6f}")
+        print(f"  BIC       = {self.result['bic']:.6f}\n")
