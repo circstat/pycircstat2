@@ -303,6 +303,59 @@ def test_formula_parser_rejects_malformed_formulas():
         CLRegression(formula="y ~ ", data=df)
 
 
+def test_cc_predict_round_trip_on_training_data():
+    df = load_data("milwaukee", source="jammalamadaka")
+    ctheta = np.deg2rad(df["theta"].values)
+    cpsi = np.deg2rad(df["psi"].values)
+    m = CCRegression(theta=ctheta, x=cpsi, order=2)
+    pred = m.predict(cpsi)
+    diff = np.angle(np.exp(1j * (pred - m.result["fitted"])))
+    assert np.max(np.abs(diff)) < 1e-10
+
+
+def test_cc_predict_rejects_wrong_feature_count():
+    rng = np.random.default_rng(0)
+    n = 30
+    theta = rng.uniform(0, 2 * np.pi, n)
+    x = rng.uniform(0, 2 * np.pi, (n, 2))
+    m = CCRegression(theta=theta, x=x, order=1)
+    with pytest.raises(ValueError, match="Expected 2"):
+        m.predict(np.ones(5))
+
+
+def test_cc_plot_single_feature_two_panels():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df = load_data("milwaukee", source="jammalamadaka")
+    ctheta = np.deg2rad(df["theta"].values)
+    cpsi = np.deg2rad(df["psi"].values)
+    m = CCRegression(theta=ctheta, x=cpsi, order=2)
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Fit overlay" in titles
+    assert "Residuals vs predictor" in titles
+    overlay_ax = next(ax for ax in fig.axes if ax.get_title() == "Fit overlay")
+    # y-axis should span [0, 4π] for the stacked-copy display.
+    ylo, yhi = overlay_ax.get_ylim()
+    assert ylo == 0.0 and np.isclose(yhi, 4 * np.pi)
+
+
+def test_cc_plot_multi_feature_fallback():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    rng = np.random.default_rng(0)
+    n = 80
+    x = rng.uniform(0, 2 * np.pi, (n, 2))
+    theta = np.mod(0.5 + 0.3 * np.sin(x[:, 0]) + 0.2 * np.cos(x[:, 1]), 2 * np.pi)
+    m = CCRegression(theta=theta, x=x, order=1)
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Residuals vs fitted" in titles
+    assert "Residual histogram" in titles
+
+
 def test_cc_summary_label_widths(capsys):
     rng = np.random.default_rng(0)
     n = 60

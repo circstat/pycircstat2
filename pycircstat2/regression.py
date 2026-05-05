@@ -789,30 +789,35 @@ class CCRegression:
         X = data[x_cols].to_numpy()
         return theta, X, x_cols
 
+    def _design_matrix(self, x: np.ndarray) -> np.ndarray:
+        """Harmonic design matrix [1 | cos(kx_j) | sin(kx_j)] for given x."""
+        if x.ndim == 1:
+            x = x[:, None]
+        n, n_features = x.shape
+        cos_terms, sin_terms = [], []
+        for j in range(n_features):
+            for k in range(1, self.order + 1):
+                cos_terms.append(np.cos(k * x[:, j]))
+                sin_terms.append(np.sin(k * x[:, j]))
+        return np.column_stack([np.ones(n)] + cos_terms + sin_terms)
+
     def _fit(self):
         n = self.x.shape[0]
         order = self.order
         n_features = self.x.shape[1]
 
-        # Create harmonic terms
-        cos_terms = []
-        sin_terms = []
+        # Track which (feature, harmonic) each design column corresponds to.
         cos_labels: List[Tuple[int, int]] = []
         sin_labels: List[Tuple[int, int]] = []
         for j in range(n_features):
-            x_col = self.x[:, j]
             for k in range(1, order + 1):
-                cos_terms.append(np.cos(k * x_col))
-                sin_terms.append(np.sin(k * x_col))
                 cos_labels.append((j, k))
                 sin_labels.append((j, k))
 
-        # Linear models for cos(theta) and sin(theta)
         Y_cos = np.cos(self.theta)
         Y_sin = np.sin(self.theta)
 
-        design_matrix = [np.ones(n)] + cos_terms + sin_terms
-        X = np.column_stack(design_matrix)
+        X = self._design_matrix(self.x)
         beta_cos, _, _, _ = lstsq(X, Y_cos)
         beta_sin, _, _, _ = lstsq(X, Y_sin)
 
@@ -899,6 +904,125 @@ class CCRegression:
             "kappa": kappa_residual,
             "message": message,
         }
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        """Predict the circular response at new predictor values.
+
+        Parameters
+        ----------
+        x : array-like, shape (n,) or (n, n_features)
+            New predictor values in radians. For multi-feature models the
+            second axis must match ``self.x.shape[1]``.
+
+        Returns
+        -------
+        np.ndarray, shape (n,)
+            Predicted angles wrapped to ``[0, 2π)``.
+        """
+        x_arr = np.asarray(x, dtype=float)
+        if x_arr.ndim == 1:
+            x_arr = x_arr[:, None]
+        if x_arr.shape[1] != self.x.shape[1]:
+            raise ValueError(
+                f"Expected {self.x.shape[1]} predictor column(s); received "
+                f"{x_arr.shape[1]}."
+            )
+        x_arr = np.mod(x_arr, 2 * np.pi)
+        design = self._design_matrix(x_arr)
+        cos_pred = design @ self.result["coefficients"]["cos"]
+        sin_pred = design @ self.result["coefficients"]["sin"]
+        return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
+
+    def plot(
+        self,
+        figsize: Optional[Tuple[float, float]] = None,
+        n_curve: int = 400,
+        axes=None,
+    ):
+        """Two-panel diagnostic figure.
+
+        For a single circular predictor, the left panel is a fit overlay
+        with both data and curve replicated at ``θ`` and ``θ + 2π`` (Pewsey
+        Fig 6.10 convention) so the wrap-around does not visually break the
+        relationship; the right panel shows the wrapped residuals against
+        the predictor.
+
+        For multiple circular predictors, the left panel shows residuals
+        vs the fitted angle and the right panel a residual histogram.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        import matplotlib.pyplot as plt
+
+        n_features = self.x.shape[1]
+
+        if axes is None:
+            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
+        else:
+            axes = list(axes)
+            if len(axes) != 2:
+                raise ValueError("`axes` must be a sequence of length 2.")
+            fig = axes[0].figure
+
+        if n_features == 1:
+            x_data = self.x[:, 0]
+            theta_data = self.theta
+            residuals = self.result["residuals"]
+            x_grid = np.linspace(0.0, 2 * np.pi, n_curve)
+            theta_pred = self.predict(x_grid)
+            # Break the curve where it wraps so plot() doesn't draw a
+            # vertical jump connecting 2π to 0.
+            theta_plot = theta_pred.astype(float).copy()
+            jumps = np.where(np.abs(np.diff(theta_pred)) > np.pi)[0]
+            theta_plot[jumps] = np.nan
+
+            ax = axes[0]
+            ax.plot(x_grid, theta_plot, color="C1", lw=2, label="fit")
+            ax.plot(x_grid, theta_plot + 2 * np.pi, color="C1", lw=2)
+            ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
+            ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
+            ax.set_xlim(0, 2 * np.pi)
+            ax.set_ylim(0, 4 * np.pi)
+            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+            ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
+            ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
+            ax.set_xlabel(self.feature_names[0])
+            ax.set_ylabel("θ")
+            ax.set_title("Fit overlay")
+            ax.legend(loc="best", frameon=False)
+
+            ax = axes[1]
+            ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+            ax.axhline(0.0, color="k", lw=0.5)
+            ax.set_xlim(0, 2 * np.pi)
+            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+            ax.set_xlabel(self.feature_names[0])
+            ax.set_ylabel("Residual (rad)")
+            ax.set_title("Residuals vs predictor")
+        else:
+            residuals = self.result["residuals"]
+            fitted = self.result["fitted"]
+
+            ax = axes[0]
+            ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+            ax.axhline(0.0, color="k", lw=0.5)
+            ax.set_xlabel("Fitted θ (rad)")
+            ax.set_ylabel("Residual (rad)")
+            ax.set_title("Residuals vs fitted")
+
+            ax = axes[1]
+            ax.hist(residuals, bins=20, color="C0", alpha=0.7, edgecolor="black")
+            ax.axvline(0.0, color="k", lw=0.5)
+            ax.set_xlabel("Residual (rad)")
+            ax.set_ylabel("Count")
+            ax.set_title("Residual histogram")
+
+        fig.tight_layout()
+        return fig
 
     def summary(self):
         """
