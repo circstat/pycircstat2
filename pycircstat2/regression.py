@@ -1037,6 +1037,7 @@ class LCRegression:
             )
 
         self.formula = formula
+        self.response = formula.split("~", 1)[0].strip()
         self.data = self._to_polars(data)
         self.expanded_formula = self._expand_formula(formula)
         self.lm_fit = _hea_lm(self.expanded_formula, self.data)
@@ -1237,3 +1238,123 @@ class LCRegression:
             "Phase in radians; SEs and CIs from the delta method on (cos, sin) "
             "coefficients.\n"
         )
+
+    def plot(
+        self,
+        figsize: Optional[Tuple[float, float]] = None,
+        n_curve: int = 200,
+        ci: bool = True,
+        pi: bool = False,
+        level: float = 0.95,
+        axes=None,
+    ):
+        """Two-panel diagnostic figure.
+
+        Left:  scatter (θ, y) with the fitted curve over the data's θ range,
+               optionally with confidence and/or prediction bands.
+        Right: residuals vs fitted values.
+
+        For models with extra non-circular covariates (e.g. ``y ~
+        harmonic(θ) + temperature``), the curve is drawn fixing those
+        covariates at their column means.
+
+        Parameters
+        ----------
+        figsize : tuple, optional
+            Matplotlib figure size; defaults to ``(11, 4.5)``.
+        n_curve : int
+            Number of θ points used to draw the fitted curve.
+        ci, pi : bool
+            Whether to shade a confidence band (``ci``) and/or prediction
+            band (``pi``) at the requested ``level``.
+        level : float
+            Coverage probability for the bands (default 0.95).
+        axes : sequence of matplotlib Axes, optional
+            Two pre-existing axes to draw into. If omitted, a fresh figure
+            is created.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        import matplotlib.pyplot as plt
+
+        if not self.result["harmonics"]:
+            raise ValueError(
+                "plot() requires at least one matched cos/sin pair "
+                "(harmonic decomposition)."
+            )
+
+        theta_var = self.result["harmonics"][0]["variable"]
+        theta_data = self.data[theta_var].to_numpy()
+        y_data = self.data[self.response].to_numpy()
+        fitted = self.result["fitted"]
+        residuals = self.result["residuals"]
+
+        # Build a θ grid spanning the data; hold any other covariates at their mean.
+        t_lo = float(min(theta_data.min(), 0.0))
+        t_hi = float(max(theta_data.max(), 2 * np.pi))
+        theta_grid = np.linspace(t_lo, t_hi, n_curve)
+        grid: dict = {theta_var: theta_grid}
+        for col in self.data.columns:
+            if col in (theta_var, self.response):
+                continue
+            series = self.data[col]
+            if series.dtype.is_numeric():
+                grid[col] = np.full(n_curve, float(series.mean()))
+            else:
+                # Hold non-numeric columns at their mode.
+                grid[col] = [series.mode()[0]] * n_curve
+        grid_df = pl.DataFrame(grid)
+
+        yhat_df = self.lm_fit.predict(grid_df)
+        yhat = np.asarray(yhat_df.to_numpy()).ravel()
+        alpha = 1.0 - level
+        ci_lo = ci_hi = pi_lo = pi_hi = None
+        if ci:
+            arr = self.lm_fit.compute_ci_yhat(yhat=yhat_df, Xnew=grid_df, alpha=alpha).to_numpy()
+            ci_lo, ci_hi = arr[:, 0], arr[:, 1]
+        if pi:
+            arr = self.lm_fit.compute_pi_yhat(yhat=yhat_df, Xnew=grid_df, alpha=alpha).to_numpy()
+            pi_lo, pi_hi = arr[:, 0], arr[:, 1]
+
+        if axes is None:
+            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 4.5))
+        else:
+            axes = list(axes)
+            if len(axes) != 2:
+                raise ValueError("`axes` must be a sequence of length 2.")
+            fig = axes[0].figure
+
+        ax = axes[0]
+        if pi_lo is not None:
+            ax.fill_between(
+                theta_grid, pi_lo, pi_hi,
+                color="C1", alpha=0.15, label=f"{int(level*100)}% PI",
+            )
+        if ci_lo is not None:
+            ax.fill_between(
+                theta_grid, ci_lo, ci_hi,
+                color="C1", alpha=0.30, label=f"{int(level*100)}% CI",
+            )
+        ax.plot(theta_grid, yhat, color="C1", lw=2, label="fit")
+        ax.scatter(theta_data, y_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
+        ax.set_xlabel(theta_var)
+        ax.set_ylabel(self.response)
+        ax.set_title("Fit overlay")
+        ax.legend(loc="best", frameon=False)
+
+        # If the grid covers a full 2π span, mark the canonical ticks.
+        if t_lo <= 0 and t_hi >= 2 * np.pi:
+            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+
+        ax = axes[1]
+        ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+        ax.axhline(0.0, color="k", lw=0.5)
+        ax.set_xlabel("Fitted")
+        ax.set_ylabel("Residual")
+        ax.set_title("Residuals vs fitted")
+
+        fig.tight_layout()
+        return fig

@@ -454,6 +454,52 @@ def test_lc_accepts_unicode_identifiers():
     assert all(h["variable"] == "θ" for h in m.result["harmonics"])
 
 
+def test_lc_plot_returns_figure_with_two_panels():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m = LCRegression("y ~ harmonic(theta, k=2)", df)
+    fig = m.plot(ci=True, pi=True)
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Fit overlay" in titles
+    assert "Residuals vs fitted" in titles
+    # Fit overlay axes should at least contain fit + data + CI + PI artists.
+    overlay_ax = next(ax for ax in fig.axes if ax.get_title() == "Fit overlay")
+    labels = [ln.get_label() for ln in overlay_ax.get_lines()]
+    assert "fit" in labels
+
+
+def test_lc_plot_with_extra_covariate_holds_at_mean():
+    """When extra covariates exist, the fit curve fixes them at the column mean."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    rng = np.random.default_rng(0)
+    n = 200
+    theta = rng.uniform(0, 2 * np.pi, n)
+    temp = rng.normal(20, 5, n)
+    y = 2 + 1.5 * np.cos(theta - 0.5) + 0.1 * temp + rng.normal(0, 0.2, n)
+    df = pd.DataFrame({"y": y, "theta": theta, "temp": temp})
+    m = LCRegression("y ~ harmonic(theta) + temp", df)
+    fig = m.plot(ci=False, pi=False)
+    overlay_ax = next(ax for ax in fig.axes if ax.get_title() == "Fit overlay")
+    fit_line = next(ln for ln in overlay_ax.get_lines() if ln.get_label() == "fit")
+    xs, ys = fit_line.get_xdata(), fit_line.get_ydata()
+    # At the curve midpoint of θ, the value should match the analytical
+    # "fit at theta=π, temp=mean" prediction within numerical tolerance.
+    coefs = m.result["coefficients"]
+    expected_at_pi = (
+        coefs["(Intercept)"]
+        + coefs["cos(theta)"] * np.cos(np.pi)
+        + coefs["sin(theta)"] * np.sin(np.pi)
+        + coefs["temp"] * float(temp.mean())
+    )
+    idx = np.argmin(np.abs(xs - np.pi))
+    # Tolerance reflects the grid spacing (200 points across [0, 2π]).
+    assert np.isclose(ys[idx], expected_at_pi, atol=0.05)
+
+
 def test_lc_summary_includes_lm_block_and_harmonic_table(capsys):
     df = _lung_dataframe(drop_feb_outliers=True)
     m = LCRegression("y ~ harmonic(theta, k=2)", df)
