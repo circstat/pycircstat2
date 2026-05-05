@@ -1,3 +1,4 @@
+import warnings
 from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -190,14 +191,6 @@ class CLRegression:
     def _A1(self, kappa: np.ndarray) -> np.ndarray:
         return i1(kappa) / i0(kappa)
 
-    def _A1inv(self, R: float) -> float:
-        if 0 <= R < 0.53:
-            return 2 * R + R**3 + (5 * R**5) / 6
-        elif R < 0.85:
-            return -0.4 + 1.39 * R + 0.43 / (1 - R)
-        else:
-            return 1 / (R**3 - 4 * R**2 + 3 * R)
-
     def _A1_prime(self, kappa: np.ndarray) -> np.ndarray:
         a1 = A1(kappa)
         return 1 - a1 / kappa - a1**2
@@ -270,14 +263,16 @@ class CLRegression:
                 S = np.sum(kappa * np.sin(raw_deviation))
                 C = np.sum(kappa * np.cos(raw_deviation))
                 mu = np.arctan2(S, C)
-                residuals = theta - mu
 
-                # Step 2: Update beta
+                # Step 2: Update beta — Fisher scoring step from current β.
+                # Score s(β) = Gᵀ (κ ⊙ sin(rdev − μ)); info I(β) = Gᵀ diag(κ A1(κ)) G.
+                # β_new solves I β_new = I β + s.
                 denom = 1 + (X @ beta) ** 2
                 G = 2 * X / denom[:, None]
                 weights_beta = kappa * self._A1(kappa)
                 XtWX_beta = G.T @ (weights_beta[:, None] * G)
-                rhs_beta = G.T @ (weights_beta * np.sin(residuals))
+                u_beta = kappa * np.sin(raw_deviation - mu)
+                rhs_beta = G.T @ u_beta + XtWX_beta @ beta
                 beta_new = _safe_solve(
                     XtWX_beta + 1e-8 * np.eye(X.shape[1]), rhs_beta
                 )
@@ -312,6 +307,13 @@ class CLRegression:
 
             beta, alpha, gamma = beta_new, alpha_new, gamma_new
             log_likelihood_old = log_likelihood
+        else:
+            warnings.warn(
+                f"CLRegression did not converge in {self.max_iter} iterations "
+                f"(last diff={diff:.2e}, tol={self.tol:.2e}).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         result = {
             "beta": beta,
@@ -486,6 +488,12 @@ class CLRegression:
         """
         if self.result is None:
             raise ValueError("Model must be fitted before making predictions.")
+
+        if self.model_type == "kappa":
+            raise ValueError(
+                "predict() requires a mean-direction model; "
+                "model_type='kappa' fits only the concentration."
+            )
 
         beta = self.result.get("beta")
         if beta is None or np.any(~np.isfinite(beta)):

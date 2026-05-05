@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from pycircstat2 import load_data
 from pycircstat2.regression import CCRegression, CLRegression
@@ -168,3 +169,60 @@ def test_cl_regression_against_r():
     assert np.isclose(
         result["log_likelihood"], expected_log_likelihood, atol=1e-2
     ), f"Expected log-likelihood: {expected_log_likelihood}, got: {result['log_likelihood']}"
+
+
+def _simulate_cl(seed: int = 0, n: int = 400):
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n, 1))
+    mu_true, beta_true, kappa_true = 0.7, np.array([0.9]), 5.0
+    eps = rng.vonmises(0, kappa_true, size=n)
+    theta = mu_true + 2 * np.arctan(X @ beta_true) + eps
+    return X, theta, mu_true, beta_true, kappa_true
+
+
+def test_mixed_matches_mean_when_kappa_is_constant():
+    """With constant true κ, mixed and mean should agree on β/μ to high precision."""
+    X, theta, _, _, _ = _simulate_cl()
+
+    m_mean = CLRegression(theta=theta, X=X, model_type="mean", tol=1e-10, max_iter=500)
+    m_mixed = CLRegression(theta=theta, X=X, model_type="mixed", tol=1e-10, max_iter=500)
+
+    np.testing.assert_allclose(
+        m_mixed.result["beta"], m_mean.result["beta"], atol=5e-3
+    )
+    np.testing.assert_allclose(m_mixed.result["mu"], m_mean.result["mu"], atol=5e-3)
+    # exp(α) should be near the mean model's scalar κ since γ should be ≈ 0
+    np.testing.assert_allclose(
+        np.exp(m_mixed.result["alpha"]), m_mean.result["kappa"], rtol=0.1
+    )
+    assert abs(m_mixed.result["gamma"][0]) < 0.1
+
+
+def test_mixed_recovers_true_parameters():
+    """Mixed model should recover the simulation parameters within sampling error."""
+    X, theta, mu_true, beta_true, kappa_true = _simulate_cl(seed=1, n=800)
+    m = CLRegression(theta=theta, X=X, model_type="mixed", tol=1e-10, max_iter=500)
+    np.testing.assert_allclose(m.result["beta"], beta_true, atol=0.15)
+    np.testing.assert_allclose(m.result["mu"], mu_true, atol=0.1)
+    np.testing.assert_allclose(np.exp(m.result["alpha"]), kappa_true, rtol=0.25)
+
+
+def test_kappa_model_fits_and_blocks_predict():
+    """Kappa-only model should fit; predict() should refuse since β is unused."""
+    X, theta, _, _, _ = _simulate_cl(seed=2, n=300)
+    m = CLRegression(theta=theta, X=X, model_type="kappa", tol=1e-8, max_iter=200)
+
+    # The fitted κ vector should be all positive and finite.
+    assert np.all(np.isfinite(m.result["kappa"]))
+    assert np.all(m.result["kappa"] > 0)
+
+    with pytest.raises(ValueError, match="model_type='kappa'"):
+        m.predict(X)
+
+
+def test_predict_mean_model_round_trip():
+    X, theta, _, _, _ = _simulate_cl(seed=3, n=200)
+    m = CLRegression(theta=theta, X=X, model_type="mean", tol=1e-10)
+    pred = m.predict(X)
+    assert pred.shape == theta.shape
+    assert np.all(np.isfinite(pred))
