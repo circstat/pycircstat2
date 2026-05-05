@@ -373,8 +373,6 @@ class CLRegression:
         n = len(theta)
         kappa = result["kappa"]
         beta = result["beta"]
-        gamma = result["gamma"]
-        alpha = result["alpha"]
 
         se_results = {}
 
