@@ -410,7 +410,8 @@ class CLRegression:
             se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
             se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
 
-            denom_mu = max(float(np.sum(kappa * A1(kappa))), 1e-12)
+            # Fisher (1993), eq. 6.82: σ̂_μ = (Σ κ̂_i A1(κ̂_i) − 1/2)^(−1/2).
+            denom_mu = max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12)
             se_mu = 1 / np.sqrt(denom_mu)
 
             se_kappa = self._delta_se_kappa(kappa, X1, cov_gamma_alpha)
@@ -442,7 +443,8 @@ class CLRegression:
             se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
             se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
 
-            denom_mu = max(float(np.sum(kappa * A1(kappa))), 1e-12)
+            # Fisher (1993), eq. 6.82: σ̂_μ = (Σ κ̂_i A1(κ̂_i) − 1/2)^(−1/2).
+            denom_mu = max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12)
             se_mu = 1 / np.sqrt(denom_mu)
             se_kappa = self._delta_se_kappa(kappa, X1, cov_gamma_alpha)
             se_results.update(
