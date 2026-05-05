@@ -4,6 +4,7 @@ import pytest
 
 from pycircstat2 import load_data
 from pycircstat2.regression import CCRegression, CLRegression
+from pycircstat2.utils import A1inv
 
 
 def test_cc_regression_against_r():
@@ -207,17 +208,17 @@ def test_mixed_recovers_true_parameters():
     np.testing.assert_allclose(np.exp(m.result["alpha"]), kappa_true, rtol=0.25)
 
 
-def test_kappa_model_fits_and_blocks_predict():
-    """Kappa-only model should fit; predict() should refuse since β is unused."""
+def test_kappa_model_fits_and_predicts_constant_mean():
+    """Kappa-only model: κ depends on X but conditional mean is constant μ."""
     X, theta, _, _, _ = _simulate_cl(seed=2, n=300)
     m = CLRegression(theta=theta, X=X, model_type="kappa", tol=1e-8, max_iter=200)
 
-    # The fitted κ vector should be all positive and finite.
     assert np.all(np.isfinite(m.result["kappa"]))
     assert np.all(m.result["kappa"] > 0)
 
-    with pytest.raises(ValueError, match="model_type='kappa'"):
-        m.predict(X)
+    pred = m.predict(X)
+    assert pred.shape == (X.shape[0],)
+    np.testing.assert_allclose(pred, m.result["mu"])
 
 
 def test_predict_mean_model_round_trip():
@@ -226,3 +227,79 @@ def test_predict_mean_model_round_trip():
     pred = m.predict(X)
     assert pred.shape == theta.shape
     assert np.all(np.isfinite(pred))
+
+
+def test_se_kappa_delta_method_shape_and_finiteness():
+    X, theta, _, _, _ = _simulate_cl(seed=4, n=300)
+    for model_type in ("kappa", "mixed"):
+        m = CLRegression(theta=theta, X=X, model_type=model_type, tol=1e-8, max_iter=300)
+        se = m.result["se_kappa"]
+        assert se.shape == (X.shape[0],)
+        assert np.all(np.isfinite(se))
+        assert np.all(se > 0)
+
+
+def test_a1inv_clamps_at_unit_radius():
+    # A1 maps κ≥0 to [0,1); A1inv at R≥1 must not explode.
+    assert np.isfinite(A1inv(1.0))
+    assert np.isfinite(A1inv(1.5))
+    assert A1inv(0.0) == 0.0
+
+
+def test_cc_regression_rejects_oversize_order():
+    rng = np.random.default_rng(0)
+    theta = rng.uniform(0, 2 * np.pi, 5)
+    x = rng.uniform(0, 2 * np.pi, 5)
+    with pytest.raises(ValueError, match="more than"):
+        CCRegression(theta=theta, x=x, order=5)
+
+
+def test_cc_regression_exposes_residual_kappa():
+    df = load_data("milwaukee", source="jammalamadaka")
+    ctheta = np.deg2rad(df["theta"].values)
+    cpsi = np.deg2rad(df["psi"].values)
+    m = CCRegression(theta=ctheta, x=cpsi, order=2)
+    assert "kappa" in m.result and "A_k" in m.result
+    assert np.isfinite(m.result["kappa"]) and m.result["kappa"] >= 0
+    assert -1 <= m.result["A_k"] <= 1
+
+
+def test_a1_stable_at_extreme_kappa():
+    from pycircstat2.utils import A1
+
+    # i0/i1 overflow around κ ≈ 710; A1 must remain finite via i0e/i1e.
+    for k in (700.0, 5_000.0, 1e6):
+        val = float(A1(k))
+        assert np.isfinite(val)
+        assert 0.0 < val < 1.0
+
+
+def test_log_likelihood_stable_at_high_concentration():
+    rng = np.random.default_rng(0)
+    n = 200
+    X = rng.normal(size=(n, 1))
+    theta = 0.5 + rng.vonmises(0, 50.0, n)
+    m = CLRegression(theta=theta, X=X, model_type="kappa", tol=1e-8, max_iter=300)
+    assert np.isfinite(m.result["log_likelihood"])
+    assert np.all(np.isfinite(m.result["kappa"]))
+
+
+def test_formula_parser_rejects_malformed_formulas():
+    df = pd.DataFrame({"y": [0.1, 0.2], "x": [1.0, 2.0]})
+    with pytest.raises(ValueError, match="exactly one '~'"):
+        CLRegression(formula="y ~ x ~ z", data=df)
+    with pytest.raises(ValueError, match="No predictors"):
+        CLRegression(formula="y ~ ", data=df)
+
+
+def test_cc_summary_label_widths(capsys):
+    rng = np.random.default_rng(0)
+    n = 60
+    theta = rng.uniform(0, 2 * np.pi, n)
+    x = rng.uniform(0, 2 * np.pi, n)
+    m = CCRegression(theta=theta, x=x, order=4)
+    m.summary()
+    captured = capsys.readouterr().out
+    # Long labels like "cos(x1,k=4)" must appear intact (not truncated).
+    assert "cos(x1,k=4)" in captured
+    assert "sin(x1,k=4)" in captured

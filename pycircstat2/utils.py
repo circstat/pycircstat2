@@ -4,7 +4,7 @@ from typing import Union
 
 import numpy as np
 import pandas as pd
-from scipy.special import i0, i1
+from scipy.special import i0e, i1e
 
 
 def data2rad(
@@ -231,9 +231,13 @@ def rotate_data(alpha: np.ndarray, angle: float, unit: str = "radian") -> np.nda
 
 
 def A1(kappa: np.ndarray) -> np.ndarray:
-    return i1(kappa) / i0(kappa)
+    # i1e(κ)/i0e(κ) = (i1(κ) e^-κ)/(i0(κ) e^-κ) — stable for large κ where i0/i1 overflow.
+    return i1e(kappa) / i0e(kappa)
 
 def A1inv(R: float) -> float:
+    # A1 maps kappa>=0 to [0, 1); clamp R to that range to avoid the
+    # singularity at R=1 in the high-concentration branch.
+    R = min(max(R, 0.0), 1.0 - 1e-12)
     if 0 <= R < 0.53:
         return 2 * R + R**3 + (5 * R**5) / 6
     elif R < 0.85:
