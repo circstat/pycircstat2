@@ -303,6 +303,54 @@ def test_formula_parser_rejects_malformed_formulas():
         CLRegression(formula="y ~ ", data=df)
 
 
+def test_cl_plot_mean_model_1d():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df = load_data("B20", source="fisher")
+    data = pd.DataFrame({"X": df["x"].values, "θ": np.deg2rad(df["θ"].values)})
+    m = CLRegression(formula="θ ~ X", data=data, model_type="mean")
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Fit overlay" in titles
+    assert "Residuals vs X" in titles
+    overlay = next(ax for ax in fig.axes if ax.get_title() == "Fit overlay")
+    ylo, yhi = overlay.get_ylim()
+    assert ylo == 0.0 and np.isclose(yhi, 4 * np.pi)
+
+
+def test_cl_plot_kappa_only_shows_kappa_curve():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df = load_data("B20", source="fisher")
+    data = pd.DataFrame({"X": df["x"].values, "θ": np.deg2rad(df["θ"].values)})
+    m = CLRegression(formula="θ ~ X", data=data, model_type="kappa")
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Fitted concentration" in titles
+    kappa_ax = next(ax for ax in fig.axes if ax.get_title() == "Fitted concentration")
+    # κ curve must be strictly positive.
+    line = kappa_ax.get_lines()[0]
+    ys = line.get_ydata()
+    assert np.all(ys > 0)
+
+
+def test_cl_plot_multi_feature_fallback():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    rng = np.random.default_rng(0)
+    n = 100
+    X = rng.normal(size=(n, 2))
+    theta = 0.7 + 2 * np.arctan(X @ np.array([0.5, -0.3])) + rng.vonmises(0, 5.0, n)
+    m = CLRegression(theta=theta, X=X, model_type="mean")
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Residuals vs fitted" in titles
+    assert "Residual histogram" in titles
+
+
 def test_cc_predict_round_trip_on_training_data():
     df = load_data("milwaukee", source="jammalamadaka")
     ctheta = np.deg2rad(df["theta"].values)

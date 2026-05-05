@@ -543,6 +543,125 @@ class CLRegression:
             raise ValueError("Model does not contain beta coefficients for prediction.")
         return mu + 2 * np.arctan(X_arr @ beta)
 
+    def _predict_kappa(self, X_arr: np.ndarray) -> np.ndarray:
+        """Per-observation κ_i = exp(α + X_iᵀγ) for kappa/mixed models."""
+        alpha = self.result["alpha"]
+        gamma = self.result["gamma"]
+        eta = alpha + X_arr @ gamma
+        return np.exp(np.clip(eta, -50.0, 50.0))
+
+    def plot(
+        self,
+        figsize: Optional[Tuple[float, float]] = None,
+        n_curve: int = 200,
+        axes=None,
+    ):
+        """Two-panel diagnostic figure.
+
+        Layout depends on ``model_type`` and the number of predictors:
+
+        - 1D X, ``model_type`` in ``{"mean", "mixed"}``: fit overlay
+          (data and curve replicated at θ and θ+2π) and residuals vs X.
+        - 1D X, ``model_type`` == ``"kappa"``: data scatter with the
+          constant μ line, plus fitted κ_i = exp(α + X_iᵀγ) on the right.
+        - Multi-D X: residuals vs fitted angle, plus residual histogram.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        import matplotlib.pyplot as plt
+
+        n_features = self.X.shape[1]
+        is_1d = n_features == 1
+
+        if axes is None:
+            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
+        else:
+            axes = list(axes)
+            if len(axes) != 2:
+                raise ValueError("`axes` must be a sequence of length 2.")
+            fig = axes[0].figure
+
+        if not is_1d:
+            self._plot_residual_diagnostic(axes)
+            fig.tight_layout()
+            return fig
+
+        x_data = self.X[:, 0]
+        theta_data = np.mod(self.theta, 2 * np.pi)
+        residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
+        feature_label = self.feature_names[0]
+
+        x_grid = np.linspace(x_data.min(), x_data.max(), n_curve)
+        x_grid_2d = x_grid[:, None]
+
+        ax = axes[0]
+        if self.model_type in ("mean", "mixed"):
+            mu = self.result["mu"]
+            beta = self.result["beta"]
+            curve = np.mod(mu + 2 * np.arctan(x_grid * beta[0]), 2 * np.pi)
+            curve_plot = curve.astype(float).copy()
+            jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
+            curve_plot[jumps] = np.nan
+            ax.plot(x_grid, curve_plot, color="C1", lw=2, label="fit")
+            ax.plot(x_grid, curve_plot + 2 * np.pi, color="C1", lw=2)
+        else:  # kappa-only: conditional mean is the constant μ.
+            mu = self.result["mu"]
+            ax.axhline(mu, color="C1", lw=2, label=f"μ = {mu:.3f}")
+            ax.axhline(mu + 2 * np.pi, color="C1", lw=2)
+
+        ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
+        ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
+        ax.set_ylim(0, 4 * np.pi)
+        ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
+        ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
+        ax.set_xlabel(feature_label)
+        ax.set_ylabel("θ")
+        ax.set_title("Fit overlay")
+        ax.legend(loc="best", frameon=False)
+
+        ax = axes[1]
+        if self.model_type == "kappa":
+            kappa_curve = self._predict_kappa(x_grid_2d)
+            ax.plot(x_grid, kappa_curve, color="C1", lw=2)
+            ax.set_ylabel("κ̂(X) = exp(α + Xγ)")
+            ax.set_title("Fitted concentration")
+        else:
+            ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+            ax.axhline(0.0, color="k", lw=0.5)
+            ax.set_ylabel("Residual (rad)")
+            ax.set_title("Residuals vs X")
+        ax.set_xlabel(feature_label)
+
+        fig.tight_layout()
+        return fig
+
+    def _fitted_mean(self) -> np.ndarray:
+        """Conditional mean angle at the training X (constant μ for kappa-only)."""
+        mu = self.result["mu"]
+        if self.model_type == "kappa":
+            return np.full(self.theta.shape, mu)
+        beta = self.result["beta"]
+        return mu + 2 * np.arctan(self.X @ beta)
+
+    def _plot_residual_diagnostic(self, axes) -> None:
+        residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
+        fitted = np.mod(self._fitted_mean(), 2 * np.pi)
+        ax = axes[0]
+        ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+        ax.axhline(0.0, color="k", lw=0.5)
+        ax.set_xlabel("Fitted θ (rad)")
+        ax.set_ylabel("Residual (rad)")
+        ax.set_title("Residuals vs fitted")
+
+        ax = axes[1]
+        ax.hist(residuals, bins=20, color="C0", alpha=0.7, edgecolor="black")
+        ax.axvline(0.0, color="k", lw=0.5)
+        ax.set_xlabel("Residual (rad)")
+        ax.set_ylabel("Count")
+        ax.set_title("Residual histogram")
+
     def summary(self):
         if self.result is None:
             raise ValueError("Model must be fitted before summarizing.")
