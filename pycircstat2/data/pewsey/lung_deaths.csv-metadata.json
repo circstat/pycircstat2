@@ -1,0 +1,25 @@
+{
+    "Description": "Monthly numbers of deaths attributed to lung disease in a given area, recorded over six consecutive years (1974-1979). Used in Pewsey, Neuhäuser & Ruxton (2014) to illustrate linear-circular regression with a periodic (annual) seasonal component. The February 1976 (3891) and February 1979 (3535) observations are typically treated as outliers and dropped before fitting the cosine regression model in §8.4.1-§8.4.2.",
+    "Source": "Hand et al. (1994) — A Handbook of Small Data Sets, Chapman & Hall.",
+    "Examples": "Pewsey, Neuhäuser & Ruxton (2014) §8.4.1-§8.4.4",
+    "Columns": {
+        "year": {
+            "name": "year",
+            "type": "integer",
+            "unit": "calendar year",
+            "description": "calendar year of observation (1974-1979)"
+        },
+        "month": {
+            "name": "month",
+            "type": "integer",
+            "unit": "month-of-year",
+            "description": "month index, 1=January through 12=December"
+        },
+        "deaths": {
+            "name": "deaths",
+            "type": "integer",
+            "unit": "count",
+            "description": "monthly number of deaths attributed to lung disease"
+        }
+    }
+}
