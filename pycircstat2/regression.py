@@ -89,15 +89,27 @@ class CLRegression:
     Methods
     -------
     summary()
-        Print a summary of the regression results.
-
+        Print the coefficient table, mean direction, concentration, and fit
+        metrics.
+    predict(X_new)
+        Predict mean direction at new X (constant μ for ``model_type='kappa'``).
+    predict_kappa(X_new)
+        Predict per-observation κ̂(X) for ``model_type`` in
+        ``{'kappa', 'mixed'}``.
+    plot(figsize=None, n_curve=200, axes=None)
+        Two-panel diagnostic figure (fit overlay / κ curve / residuals,
+        depending on ``model_type`` and dimensionality).
+    AIC(), BIC()
+        Information criteria for the fitted model.
 
     Notes
     -----
-    The 'mean' branch is ported from `lm.circular.cl` in the `circular` R
-    package (Agostinelli & Lund). The 'kappa' and 'mixed' branches extend
-    that framework to model the concentration as a log-linear function of
-    predictors and have no direct R counterpart.
+    The 'mean' branch is ported from ``lm.circular.cl`` in the ``circular``
+    R package (Agostinelli & Lund); SE formulas follow Fisher (1993)
+    eq. 6.62-6.64. The 'kappa' and 'mixed' branches extend that framework
+    to model the concentration as a log-linear function of predictors,
+    following Fisher (1993) §6.4.3-§6.4.4 (eq. 6.81, 6.82, 6.86, 6.87).
+    Per-observation SE for κ̂_i uses the delta method on (α̂, γ̂).
 
     References
     ----------
@@ -543,8 +555,40 @@ class CLRegression:
             raise ValueError("Model does not contain beta coefficients for prediction.")
         return mu + 2 * np.arctan(X_arr @ beta)
 
+    def predict_kappa(self, X_new) -> np.ndarray:
+        """Predict per-observation concentration κ_i = exp(α + X_iᵀγ).
+
+        Only meaningful for ``model_type`` in ``{"kappa", "mixed"}``; for the
+        ``"mean"`` model the concentration is a single scalar already in
+        ``self.result["kappa"]``.
+
+        Parameters
+        ----------
+        X_new : array-like, shape (n_samples, n_features) or (n_features,)
+            New predictor data.
+
+        Returns
+        -------
+        np.ndarray, shape (n_samples,)
+        """
+        if self.model_type == "mean":
+            raise ValueError(
+                "predict_kappa() is for model_type in {'kappa', 'mixed'}; "
+                "the 'mean' model has a scalar κ in result['kappa']."
+            )
+        X_arr = np.asarray(X_new, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr[:, None]
+        if X_arr.shape[1] != self.X.shape[1]:
+            raise ValueError(
+                f"Expected {self.X.shape[1]} predictors, received {X_arr.shape[1]}."
+            )
+        if not np.all(np.isfinite(X_arr)):
+            raise ValueError("`X_new` contains non-finite values.")
+        return self._predict_kappa(X_arr)
+
     def _predict_kappa(self, X_arr: np.ndarray) -> np.ndarray:
-        """Per-observation κ_i = exp(α + X_iᵀγ) for kappa/mixed models."""
+        """Internal: numpy-only κ̂(X) without input validation."""
         alpha = self.result["alpha"]
         gamma = self.result["gamma"]
         eta = alpha + X_arr @ gamma
@@ -590,7 +634,6 @@ class CLRegression:
 
         x_data = self.X[:, 0]
         theta_data = np.mod(self.theta, 2 * np.pi)
-        residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
         feature_label = self.feature_names[0]
 
         x_grid = np.linspace(x_data.min(), x_data.max(), n_curve)
@@ -628,6 +671,7 @@ class CLRegression:
             ax.set_ylabel("κ̂(X) = exp(α + Xγ)")
             ax.set_title("Fitted concentration")
         else:
+            residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
             ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
             ax.axhline(0.0, color="k", lw=0.5)
             ax.set_ylabel("Residual (rad)")
@@ -755,10 +799,9 @@ class CLRegression:
             for i, k in enumerate(kappa, start=1):
                 se_val = se_kappa[i - 1] if se_kappa is not None else float("nan")
                 print(f"    [{i}]    {k:>10.5f}    {se_val:>10.5f}")
-            if se_kappa is not None:
-                print(f"    Mean:    {np.mean(kappa):.5f} (SE: {np.mean(se_kappa):.5f})")
-            else:
-                print(f"    Mean:    {np.mean(kappa):.5f}")
+            # Per-obs κ_i are correlated (shared α, γ), so averaging individual
+            # SEs is not the SE of the mean — report only the point estimate.
+            print(f"    Mean:    {np.mean(kappa):.5f}")
         else:
             if se_kappa is not None:
                 print(f"    κ: {kappa:.5f} (SE: {se_kappa:.5f})")
@@ -818,12 +861,18 @@ class CCRegression:
     Methods
     -------
     summary()
-        Print a summary of the regression results.
-
+        Print the harmonic coefficient table, ρ, residual κ, and the test
+        of higher-order terms.
+    predict(x)
+        Predict the circular response at new ``x``.
+    plot(figsize=None, n_curve=200, axes=None)
+        Two-panel diagnostic figure (fit overlay for 1-D ``x``; residuals
+        vs fitted + histogram for multi-D).
 
     Notes
     -----
-    The implementation is ported from the `lm.circular.cc` in the `circular` R package.
+    The implementation is ported from the ``lm.circular.cc`` in the
+    ``circular`` R package (Agostinelli & Lund).
 
     References
     ----------
@@ -882,8 +931,11 @@ class CCRegression:
 
     @staticmethod
     def _validate_input(arr: np.ndarray) -> np.ndarray:
-        """
-        Validate input array and ensure it is in radians.
+        """Validate angular input and wrap to ``[0, 2π)``.
+
+        The model is 2π-periodic, so values are normalised modulo ``2π``.
+        Input is expected to be in radians; degrees would silently wrap to
+        the wrong range (e.g. 360° → 360 mod 2π ≈ 5.97 rad ≈ 342°).
         """
         arr_np = np.asarray(arr, dtype=float)
         if arr_np.ndim == 0:
@@ -1055,7 +1107,7 @@ class CCRegression:
     def plot(
         self,
         figsize: Optional[Tuple[float, float]] = None,
-        n_curve: int = 400,
+        n_curve: int = 200,
         axes=None,
     ):
         """Two-panel diagnostic figure.
@@ -1205,8 +1257,9 @@ class CCRegression:
 # `[^\W\d_]\w*` matches a Python-style identifier including Unicode letters
 # (e.g. Greek `θ`), while still forbidding a leading digit.
 _LC_IDENT = r"[^\W\d_]\w*"
+# Accept both `harmonic(theta, k=K)` and `harmonic(theta, K)`.
 _LC_HARMONIC_RE = re.compile(
-    rf"harmonic\s*\(\s*({_LC_IDENT})\s*(?:,\s*k\s*=\s*(\d+)\s*)?\)"
+    rf"harmonic\s*\(\s*({_LC_IDENT})\s*(?:,\s*(?:k\s*=\s*)?(\d+)\s*)?\)"
 )
 _LC_UNSUPPORTED_RE = re.compile(r"\b(skew|flat)\s*\(")
 # Coefficient-name pattern as emitted by hea: e.g. "cos(theta)", "sin(2 * theta)".
@@ -1259,9 +1312,17 @@ class LCRegression:
         - coefficients : dict of {name: value} from the linear fit
         - harmonics : list of dicts, one per matched ``cos(k·θ)/sin(k·θ)``
           pair, each with ``variable``, ``k``, ``cos_coef``, ``sin_coef``,
-          ``amplitude``, ``phase``
+          ``amplitude``, ``phase``, ``se_amplitude``, ``se_phase`` (the
+          last two via the delta method on the (cos, sin) covariance).
         - sigma, r_squared, aic, bic : scalars
         - fitted, residuals : np.ndarray
+
+    Notes
+    -----
+    The harmonic-pair detector recognises only **integer** multipliers
+    (e.g. ``cos(theta)``, ``cos(2*theta)``); a term like
+    ``cos(0.5*theta)`` is treated as a regular linear predictor and won't
+    appear in ``result['harmonics']``.
 
     References
     ----------
@@ -1437,23 +1498,20 @@ class LCRegression:
 
     def _print_harmonic_table(self) -> None:
         z = 1.959963984540054  # 0.975 quantile of N(0, 1)
+
+        def _fmt(value):
+            return "n/a" if value is None else f"{value:.4f}"
+
+        def _ci(value, se):
+            if value is None or se is None:
+                return "n/a"
+            return f"[{value - z * se:.4f}, {value + z * se:.4f}]"
+
         rows = []
         for h in self.result["harmonics"]:
-            amp = h["amplitude"]
-            ph = h["phase"]
-            se_a = h["se_amplitude"]
-            se_p = h["se_phase"]
+            amp, ph = h["amplitude"], h["phase"]
+            se_a, se_p = h["se_amplitude"], h["se_phase"]
             label = f"{h['variable']}, k={h['k']}"
-
-            def _fmt(value):
-                return "n/a" if value is None else f"{value:.4f}"
-
-            def _ci(value, se):
-                if value is None or se is None:
-                    return "n/a"
-                lo, hi = value - z * se, value + z * se
-                return f"[{lo:.4f}, {hi:.4f}]"
-
             rows.append(
                 (label, _fmt(amp), _fmt(se_a), _ci(amp, se_a), _fmt(ph), _fmt(se_p), _ci(ph, se_p))
             )

@@ -336,6 +336,61 @@ def test_cl_plot_kappa_only_shows_kappa_curve():
     assert np.all(ys > 0)
 
 
+def test_cl_predict_kappa_kappa_and_mixed():
+    rng = np.random.default_rng(0)
+    n = 200
+    X = rng.normal(size=(n, 1))
+    theta = 0.5 + rng.vonmises(0, 50.0, n)
+    for model_type in ("kappa", "mixed"):
+        m = CLRegression(theta=theta, X=X, model_type=model_type, tol=1e-8, max_iter=200)
+        kappa_pred = m.predict_kappa(np.array([0.0, 1.0, -1.0]))
+        assert kappa_pred.shape == (3,)
+        assert np.all(kappa_pred > 0) and np.all(np.isfinite(kappa_pred))
+        # κ at X=0 must equal exp(α̂).
+        np.testing.assert_allclose(
+            kappa_pred[0], np.exp(m.result["alpha"]), atol=1e-10
+        )
+
+
+def test_cl_predict_kappa_rejects_mean_model():
+    rng = np.random.default_rng(0)
+    n = 100
+    X = rng.normal(size=(n, 1))
+    theta = 0.5 + 2 * np.arctan(X[:, 0] * 0.3) + rng.vonmises(0, 5.0, n)
+    m = CLRegression(theta=theta, X=X, model_type="mean")
+    with pytest.raises(ValueError, match="model_type in"):
+        m.predict_kappa(np.array([0.0]))
+
+
+def test_lc_harmonic_positional_k():
+    """Both `harmonic(theta, k=2)` and `harmonic(theta, 2)` must work."""
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m_kw = LCRegression("y ~ harmonic(theta, k=2)", df)
+    m_pos = LCRegression("y ~ harmonic(theta, 2)", df)
+    assert m_kw.expanded_formula == m_pos.expanded_formula
+    np.testing.assert_allclose(
+        list(m_kw.result["coefficients"].values()),
+        list(m_pos.result["coefficients"].values()),
+        atol=1e-12,
+    )
+
+
+def test_cl_summary_does_not_print_mean_se(capsys):
+    """Per-obs SEs are correlated; averaging them is meaningless. Drop it."""
+    rng = np.random.default_rng(0)
+    n = 50
+    X = rng.normal(size=(n, 1))
+    theta = 0.5 + rng.vonmises(0, 5.0, n)
+    m = CLRegression(theta=theta, X=X, model_type="kappa")
+    m.summary()
+    out = capsys.readouterr().out
+    # Old format included "Mean: ... (SE: ...)"; new format drops the SE.
+    mean_lines = [ln for ln in out.splitlines() if ln.strip().startswith("Mean:")]
+    assert mean_lines, "summary should print a Mean kappa line"
+    for ln in mean_lines:
+        assert "SE" not in ln
+
+
 def test_cl_plot_multi_feature_fallback():
     import matplotlib
 
