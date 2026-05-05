@@ -8,7 +8,7 @@ import polars as pl
 from hea import lm as _hea_lm
 from scipy.linalg import lstsq
 from scipy.special import i0e
-from scipy.stats import chi2, norm
+from scipy.stats import chi2, norm, t as student_t
 
 from .utils import A1, A1inv, significance_code
 
@@ -1000,7 +1000,7 @@ class CCRegression:
         sin_fit = X @ beta_sin
         fitted = np.mod(np.arctan2(sin_fit, cos_fit), 2 * np.pi)
 
-        # Residuals
+        # Residuals (angular for diagnostics + raw OLS residuals on cos/sin)
         residuals = np.angle(np.exp(1j * (self.theta - fitted)))
         residual_cos = Y_cos - cos_fit
         residual_sin = Y_sin - sin_fit
@@ -1008,10 +1008,10 @@ class CCRegression:
         # Circular correlation coefficient
         rho = float(np.clip(np.sqrt(np.mean(cos_fit**2 + sin_fit**2)), 0.0, 1.0))
 
-        # OLS SEs for the cos/sin coefficients (separate regressions on
-        # cos θ and sin θ): SE(β̂) = sqrt(σ̂² diag((XᵀX)⁻¹)).
-        XtX = X.T @ X
-        XtX_inv = _safe_inverse(XtX)
+        # Per-coefficient OLS SEs for the cos/sin sub-models. Used by summary()
+        # to print a CL/LC-style coefficient table; not part of the R parity
+        # surface (lm.circular.cc returns only the coefficient matrix).
+        XtX_inv = _safe_inverse(X.T @ X)
         diag_inv = np.maximum(np.diag(XtX_inv), 0.0)
         df_resid = max(n - X.shape[1], 1)
         sigma2_cos = float(residual_cos @ residual_cos) / df_resid
@@ -1093,6 +1093,7 @@ class CCRegression:
                 "cos": se_beta_cos,
                 "sin": se_beta_sin,
             },
+            "df_resid": df_resid,
             "cos_labels": cos_labels,
             "sin_labels": sin_labels,
             "p_values": p_values,
@@ -1229,72 +1230,58 @@ class CCRegression:
         print(f"Mean Residual Cosine (A_k):             {self.result['A_k']:.5f}")
         print(f"Residual Concentration (kappa):         {self.result['kappa']:.5f}\n")
 
-        print("Coefficients:")
         cos_coeffs = self.result["coefficients"]["cos"]
         sin_coeffs = self.result["coefficients"]["sin"]
-        se_coeffs = self.result.get("se_coefficients", {})
-        se_cos = se_coeffs.get("cos")
-        se_sin = se_coeffs.get("sin")
+        se_cos = self.result["se_coefficients"]["cos"]
+        se_sin = self.result["se_coefficients"]["sin"]
+        df_resid = self.result["df_resid"]
         cos_labels = self.result.get("cos_labels", [])
         sin_labels = self.result.get("sin_labels", [])
 
-        # Build label strings up front so we can size the column to fit.
         intercept_label = "(Intercept)"
-        cos_label_strs = [
-            f"cos(x{f + 1},k={k})" for (f, k) in cos_labels
-        ]
-        sin_label_strs = [
-            f"sin(x{f + 1},k={k})" for (f, k) in sin_labels
-        ]
-        label_width = max(
-            12,
-            len(intercept_label),
-            *(len(s) for s in cos_label_strs + sin_label_strs),
-        )
+        cos_label_strs = [f"cos(x{f + 1},k={k})" for (f, k) in cos_labels]
+        sin_label_strs = [f"sin(x{f + 1},k={k})" for (f, k) in sin_labels]
+        row_labels = [intercept_label, *cos_label_strs, *sin_label_strs]
+        label_width = max(12, *(len(s) for s in row_labels))
 
-        col_w = 14
+        def _print_block(title: str, coefs: np.ndarray, ses: np.ndarray) -> None:
+            print(f"{title}:\n")
+            print(
+                f"{'':<{label_width}} {'Estimate':<12} {'Std. Error':<12} "
+                f"{'t value':<10} {'Pr(>|t|)':<12}"
+            )
+            for label, coef, se_val in zip(row_labels, coefs, ses):
+                t_val = coef / se_val if se_val else np.nan
+                if np.isnan(t_val):
+                    p_val = np.nan
+                else:
+                    p_val = float(2.0 * student_t.sf(np.abs(t_val), df=df_resid))
+                print(
+                    f"{label:<{label_width}} {coef:<12.5f} {se_val:<12.5f} "
+                    f"{t_val:<10.2f} {p_val:<12.5f}{significance_code(p_val)}"
+                )
+            print()
 
-        def _row(label: str, idx: int) -> str:
-            cells = [
-                f"{label:<{label_width}}",
-                f"{cos_coeffs[idx]:<{col_w}.5f}",
-                f"{(se_cos[idx] if se_cos is not None else float('nan')):<{col_w}.5f}",
-                f"{sin_coeffs[idx]:<{col_w}.5f}",
-                f"{(se_sin[idx] if se_sin is not None else float('nan')):<{col_w}.5f}",
-            ]
-            return " ".join(cells)
+        _print_block("Coefficients (Cosine Model)", cos_coeffs, se_cos)
+        _print_block("Coefficients (Sine Model)", sin_coeffs, se_sin)
 
-        # Headers
-        header = " ".join(
-            [
-                f"{'Harmonic':<{label_width}}",
-                f"{'Cosine Coeff':<{col_w}}",
-                f"{'SE(cos)':<{col_w}}",
-                f"{'Sine Coeff':<{col_w}}",
-                f"{'SE(sin)':<{col_w}}",
-            ]
-        )
-        print(header)
+        # Higher-order test (parity with R's lm.circular.cc): jointly tests
+        # whether the order+1 cos/sin pair adds explanatory power, separately
+        # for the cosine and sine sub-models.
+        p1, p2 = self.result["p_values"]
+        print("Higher-Order Terms Test:\n")
+        print(f"{'':<{label_width}} {'Pr(>χ²)':<12}")
+        print(f"{'cosine model':<{label_width}} {p1:<12.5f}{significance_code(p1)}")
+        print(f"{'sine model':<{label_width}} {p2:<12.5f}{significance_code(p2)}")
 
-        # Intercept
-        print(_row(intercept_label, 0))
-
-        # Cosine harmonics
-        offset = 1
-        for idx, label in enumerate(cos_label_strs):
-            print(_row(label, offset + idx))
-
-        # Sine harmonics
-        sine_offset = offset + len(cos_label_strs)
-        for idx, label in enumerate(sin_label_strs):
-            print(_row(label, sine_offset + idx))
-
-        print("\nP-values for Higher-Order Terms:")
+        print(f"\n{self.result['message']}")
         print(
-            f"p1: {self.result['p_values'][0]:.5f}, p2: {self.result['p_values'][1]:.5f}"
+            "\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1"
         )
-
-        print(f"\n{self.result['message']}\n")
+        print(
+            "Per-coefficient p-values use the t distribution; the higher-order "
+            "test uses χ² (Jammalamadaka & Sengupta 2001).\n"
+        )
 
 
 # Markers used by LCRegression's formula parser.
