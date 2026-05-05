@@ -7,25 +7,14 @@ from pycircstat2.regression import CCRegression, CLRegression, LCRegression
 from pycircstat2.utils import A1inv
 
 
-_PEWSEY_LUNG_DEATHS = [
-    [3035, 2552, 2704, 2554, 2014, 1655, 1721, 1524, 1596, 2074, 2199, 2512],
-    [2933, 2889, 2938, 2497, 1870, 1726, 1607, 1545, 1396, 1787, 2076, 2837],
-    [2787, 3891, 3179, 2011, 1636, 1580, 1489, 1300, 1356, 1653, 2013, 2823],
-    [2996, 2523, 2540, 2520, 1994, 1641, 1691, 1479, 1696, 1877, 2032, 2484],
-    [2899, 2990, 2890, 2379, 1933, 1734, 1617, 1495, 1440, 1777, 1970, 2745],
-    [2841, 3535, 3010, 2091, 1667, 1589, 1518, 1349, 1392, 1619, 1954, 2633],
-]
-
-
 def _lung_dataframe(drop_feb_outliers: bool = True) -> pd.DataFrame:
     """Pewsey, Neuhäuser & Ruxton (2014) §8.4.1 lung-disease deaths."""
-    y = np.array(_PEWSEY_LUNG_DEATHS, dtype=float).ravel()
-    month = np.tile(np.arange(1, 13), 6)
-    theta = (np.pi / 6) * month
-    df = pd.DataFrame({"y": y, "theta": theta, "month": month})
+    df = load_data("lung_deaths", source="pewsey").copy()
+    df["theta"] = (np.pi / 6) * df["month"].to_numpy()
+    df = df.rename(columns={"deaths": "y"})
     if drop_feb_outliers:
-        # Book sets Feb 1976 (index 25) and Feb 1979 (index 61) to NA.
-        df = df.drop(index=[25, 61]).reset_index(drop=True)
+        df = df[~((df["month"] == 2) & df["year"].isin([1976, 1979]))]
+        df = df.reset_index(drop=True)
     return df
 
 
