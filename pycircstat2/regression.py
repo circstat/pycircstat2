@@ -253,6 +253,11 @@ class CLRegression:
         diff = self.tol + 1
         log_likelihood_old = -np.inf
 
+        # Tiny ridge added to the normal-equation LHS to keep solves finite
+        # when XtX is near-singular. Hoisted out of the loop body.
+        ridge_X = 1e-8 * np.eye(X.shape[1])
+        ridge_X1 = 1e-8 * np.eye(X1.shape[1])
+
         for iter_count in range(self.max_iter):
             if self.model_type == "mean":
                 # Step 1: Compute mu and kappa
@@ -270,7 +275,7 @@ class CLRegression:
                 u = kappa * np.sin(raw_deviation - mu)
                 XtX = G.T @ G
                 rhs = G.T @ u + weight * XtX @ beta
-                mat = weight * XtX + 1e-8 * np.eye(X.shape[1])
+                mat = weight * XtX + ridge_X
                 beta_new = _safe_solve(mat, rhs)
                 alpha_new, gamma_new = alpha, gamma
 
@@ -288,15 +293,15 @@ class CLRegression:
 
                 # Step 2: Update gamma
                 a1_kappa = A1(kappa)
-                a1_prime = self._A1_prime(kappa)
-                if np.any(np.isclose(a1_prime, 0.0)):
-                    raise ValueError("Encountered zero derivative in concentration update.")
+                # Floor A1'(κ) to keep the IRLS step finite when some κ_i are
+                # very large (A1'(κ) → 0 as κ → ∞ ⇒ y_gamma blows up).
+                a1_prime = np.maximum(self._A1_prime(kappa), 1e-12)
                 residuals_gamma = np.cos(theta - mu) - a1_kappa
                 y_gamma = residuals_gamma / (a1_prime * kappa)
                 weights = (kappa**2) * a1_prime
                 XtWX = X1.T @ (weights[:, None] * X1)
                 XtWy = X1.T @ (weights * y_gamma)
-                update = _safe_solve(XtWX + 1e-8 * np.eye(X1.shape[1]), XtWy)
+                update = _safe_solve(XtWX + ridge_X1, XtWy)
                 alpha_new = alpha + update[0]
                 gamma_new = gamma + update[1:]
                 beta_new = beta
@@ -322,21 +327,17 @@ class CLRegression:
                 XtWX_beta = G.T @ (weights_beta[:, None] * G)
                 u_beta = kappa * np.sin(raw_deviation - mu)
                 rhs_beta = G.T @ u_beta + XtWX_beta @ beta
-                beta_new = _safe_solve(
-                    XtWX_beta + 1e-8 * np.eye(X.shape[1]), rhs_beta
-                )
+                beta_new = _safe_solve(XtWX_beta + ridge_X, rhs_beta)
 
                 # Step 3: Update gamma
                 a1_kappa = A1(kappa)
-                a1_prime = self._A1_prime(kappa)
-                if np.any(np.isclose(a1_prime, 0.0)):
-                    raise ValueError("Encountered zero derivative in concentration update.")
+                a1_prime = np.maximum(self._A1_prime(kappa), 1e-12)
                 residuals_gamma = np.cos(raw_deviation - mu) - a1_kappa
                 y_gamma = residuals_gamma / (a1_prime * kappa)
                 weights_gamma = (kappa**2) * a1_prime
                 XtWX = X1.T @ (weights_gamma[:, None] * X1)
                 XtWy = X1.T @ (weights_gamma * y_gamma)
-                update = _safe_solve(XtWX + 1e-8 * np.eye(X1.shape[1]), XtWy)
+                update = _safe_solve(XtWX + ridge_X1, XtWy)
                 alpha_new = alpha + update[0]
                 gamma_new = gamma + update[1:]
 
@@ -548,12 +549,12 @@ class CLRegression:
         mu = self.result["mu"]
         if self.model_type == "kappa":
             # Conditional mean is constant μ (β is not part of the model).
-            return np.full(X_arr.shape[0], mu)
+            return np.full(X_arr.shape[0], np.mod(mu, 2 * np.pi))
 
         beta = self.result.get("beta")
         if beta is None or np.any(~np.isfinite(beta)):
             raise ValueError("Model does not contain beta coefficients for prediction.")
-        return mu + 2 * np.arctan(X_arr @ beta)
+        return np.mod(mu + 2 * np.arctan(X_arr @ beta), 2 * np.pi)
 
     def predict_kappa(self, X_new) -> np.ndarray:
         """Predict per-observation concentration κ_i = exp(α + X_iᵀγ).
@@ -706,6 +707,12 @@ class CLRegression:
         ax.set_ylabel("Count")
         ax.set_title("Residual histogram")
 
+    @staticmethod
+    def _two_sided_p(t_value: float) -> float:
+        if np.isnan(t_value):
+            return np.nan
+        return float(2.0 * norm.sf(np.abs(t_value)))
+
     def summary(self):
         if self.result is None:
             raise ValueError("Model must be fitted before summarizing.")
@@ -736,11 +743,7 @@ class CLRegression:
             for i, coef in enumerate(self.result["beta"]):
                 se_val = se_beta[i]
                 t_value = coef / se_val if se_val else np.nan
-                p_value = (
-                    2 * (1 - norm.cdf(np.abs(t_value)))
-                    if not np.isnan(t_value)
-                    else np.nan
-                )
+                p_value = self._two_sided_p(t_value)
                 print(
                     f"β{i:<3} {coef:<12.5f} {se_val:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value):<3}"
                 )
@@ -761,22 +764,14 @@ class CLRegression:
             # Report alpha as the first coefficient
             alpha = self.result["alpha"]
             t_value_alpha = alpha / se_alpha if se_alpha else np.nan
-            p_value_alpha = (
-                2 * (1 - norm.cdf(np.abs(t_value_alpha)))
-                if not np.isnan(t_value_alpha)
-                else np.nan
-            )
+            p_value_alpha = self._two_sided_p(t_value_alpha)
             print(
                 f"α{'':<5} {alpha:<12.5f} {se_alpha:<12.5f} {t_value_alpha:<10.2f} {p_value_alpha:<12.5f}{significance_code(p_value_alpha)}"
             )
             for i, coef in enumerate(self.result["gamma"]):
                 se_val = se_gamma[i]
                 t_value = coef / se_val if se_val else np.nan
-                p_value = (
-                    2 * (1 - norm.cdf(np.abs(t_value)))
-                    if not np.isnan(t_value)
-                    else np.nan
-                )
+                p_value = self._two_sided_p(t_value)
                 print(
                     f"γ{i:<5} {coef:<12.5f} {se_val:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value)}"
                 )
@@ -942,6 +937,14 @@ class CCRegression:
             raise ValueError("Input must be at least one-dimensional.")
         if not np.all(np.isfinite(arr_np)):
             raise ValueError("Circular input contains non-finite values.")
+        if arr_np.size and float(np.max(np.abs(arr_np))) > 4 * np.pi:
+            warnings.warn(
+                "Circular input contains values with |x| > 4π; expected "
+                "radians. Degree-valued input will be silently wrapped "
+                "modulo 2π and produce incorrect results — use np.deg2rad.",
+                UserWarning,
+                stacklevel=3,
+            )
         return np.mod(arr_np, 2 * np.pi)
 
     def _parse_formula(
@@ -999,9 +1002,22 @@ class CCRegression:
 
         # Residuals
         residuals = np.angle(np.exp(1j * (self.theta - fitted)))
+        residual_cos = Y_cos - cos_fit
+        residual_sin = Y_sin - sin_fit
 
         # Circular correlation coefficient
         rho = float(np.clip(np.sqrt(np.mean(cos_fit**2 + sin_fit**2)), 0.0, 1.0))
+
+        # OLS SEs for the cos/sin coefficients (separate regressions on
+        # cos θ and sin θ): SE(β̂) = sqrt(σ̂² diag((XᵀX)⁻¹)).
+        XtX = X.T @ X
+        XtX_inv = _safe_inverse(XtX)
+        diag_inv = np.maximum(np.diag(XtX_inv), 0.0)
+        df_resid = max(n - X.shape[1], 1)
+        sigma2_cos = float(residual_cos @ residual_cos) / df_resid
+        sigma2_sin = float(residual_sin @ residual_sin) / df_resid
+        se_beta_cos = np.sqrt(sigma2_cos * diag_inv)
+        se_beta_sin = np.sqrt(sigma2_sin * diag_inv)
 
         # Test higher-order terms
         higher_order_cos = []
@@ -1017,26 +1033,22 @@ class CCRegression:
 
         # Projection matrix for the current model
         if W.size:
-            XtX = X.T @ X
-            M = X @ _safe_inverse(XtX) @ X.T
+            M = X @ XtX_inv @ X.T
             H = W.T @ (np.eye(n) - M) @ W
             H_inv = _safe_inverse(H)
             N = W @ H_inv @ W.T
 
-            residual_cos = Y_cos - X @ beta_cos
-            residual_sin = Y_sin - X @ beta_sin
-
-            denom_cos = float(residual_cos.T @ residual_cos)
-            denom_sin = float(residual_sin.T @ residual_sin)
+            denom_cos = float(residual_cos @ residual_cos)
+            denom_sin = float(residual_sin @ residual_sin)
             adj = max(n - (2 * order + 1), 1)
             T1 = (
                 adj
-                * float(residual_cos.T @ N @ residual_cos)
+                * float(residual_cos @ N @ residual_cos)
                 / max(denom_cos, 1e-12)
             )
             T2 = (
                 adj
-                * float(residual_sin.T @ N @ residual_sin)
+                * float(residual_sin @ N @ residual_sin)
                 / max(denom_sin, 1e-12)
             )
 
@@ -1058,6 +1070,15 @@ class CCRegression:
 
         # Residual concentration (R parity): A1inv of the mean cosine of residuals.
         A_k = float(np.mean(np.cos(residuals)))
+        if A_k < 0:
+            warnings.warn(
+                f"Mean residual cosine A_k={A_k:.4f} is negative — residuals "
+                "are systematically anti-aligned with the fitted direction. "
+                "κ has been clamped to 0; check for sign errors or model "
+                "misspecification.",
+                UserWarning,
+                stacklevel=3,
+            )
         kappa_residual = float(A1inv(A_k))
 
         return {
@@ -1067,6 +1088,10 @@ class CCRegression:
             "coefficients": {
                 "cos": beta_cos,
                 "sin": beta_sin,
+            },
+            "se_coefficients": {
+                "cos": se_beta_cos,
+                "sin": se_beta_sin,
             },
             "cos_labels": cos_labels,
             "sin_labels": sin_labels,
@@ -1201,11 +1226,15 @@ class CCRegression:
         """
         print("\nCircular-Circular Regression\n")
         print(f"Circular Correlation Coefficient (rho): {self.result['rho']:.5f}")
+        print(f"Mean Residual Cosine (A_k):             {self.result['A_k']:.5f}")
         print(f"Residual Concentration (kappa):         {self.result['kappa']:.5f}\n")
 
         print("Coefficients:")
         cos_coeffs = self.result["coefficients"]["cos"]
         sin_coeffs = self.result["coefficients"]["sin"]
+        se_coeffs = self.result.get("se_coefficients", {})
+        se_cos = se_coeffs.get("cos")
+        se_sin = se_coeffs.get("sin")
         cos_labels = self.result.get("cos_labels", [])
         sin_labels = self.result.get("sin_labels", [])
 
@@ -1223,27 +1252,42 @@ class CCRegression:
             *(len(s) for s in cos_label_strs + sin_label_strs),
         )
 
+        col_w = 14
+
+        def _row(label: str, idx: int) -> str:
+            cells = [
+                f"{label:<{label_width}}",
+                f"{cos_coeffs[idx]:<{col_w}.5f}",
+                f"{(se_cos[idx] if se_cos is not None else float('nan')):<{col_w}.5f}",
+                f"{sin_coeffs[idx]:<{col_w}.5f}",
+                f"{(se_sin[idx] if se_sin is not None else float('nan')):<{col_w}.5f}",
+            ]
+            return " ".join(cells)
+
         # Headers
-        print(f"{'Harmonic':<{label_width}} {'Cosine Coeff':<14} {'Sine Coeff':<14}")
+        header = " ".join(
+            [
+                f"{'Harmonic':<{label_width}}",
+                f"{'Cosine Coeff':<{col_w}}",
+                f"{'SE(cos)':<{col_w}}",
+                f"{'Sine Coeff':<{col_w}}",
+                f"{'SE(sin)':<{col_w}}",
+            ]
+        )
+        print(header)
 
         # Intercept
-        print(
-            f"{intercept_label:<{label_width}} {cos_coeffs[0]:<14.5f} {sin_coeffs[0]:<14.5f}"
-        )
+        print(_row(intercept_label, 0))
 
         # Cosine harmonics
         offset = 1
         for idx, label in enumerate(cos_label_strs):
-            print(
-                f"{label:<{label_width}} {cos_coeffs[offset + idx]:<14.5f} {sin_coeffs[offset + idx]:<14.5f}"
-            )
+            print(_row(label, offset + idx))
 
         # Sine harmonics
         sine_offset = offset + len(cos_label_strs)
         for idx, label in enumerate(sin_label_strs):
-            print(
-                f"{label:<{label_width}} {cos_coeffs[sine_offset + idx]:<14.5f} {sin_coeffs[sine_offset + idx]:<14.5f}"
-            )
+            print(_row(label, sine_offset + idx))
 
         print("\nP-values for Higher-Order Terms:")
         print(
@@ -1262,9 +1306,13 @@ _LC_HARMONIC_RE = re.compile(
     rf"harmonic\s*\(\s*({_LC_IDENT})\s*(?:,\s*(?:k\s*=\s*)?(\d+)\s*)?\)"
 )
 _LC_UNSUPPORTED_RE = re.compile(r"\b(skew|flat)\s*\(")
-# Coefficient-name pattern as emitted by hea: e.g. "cos(theta)", "sin(2 * theta)".
+# Coefficient-name pattern as emitted by hea: e.g. "cos(theta)",
+# "sin(2 * theta)", or "cos(theta * 2)" — multiplier may appear on either side.
 _LC_TRIG_RE = re.compile(
-    rf"^(cos|sin)\(\s*(?:(\d+)\s*\*\s*)?({_LC_IDENT})\s*\)$"
+    rf"^(cos|sin)\(\s*"
+    rf"(?:(?P<lmult>\d+)\s*\*\s*(?P<lvar>{_LC_IDENT})"
+    rf"|(?P<rvar>{_LC_IDENT})(?:\s*\*\s*(?P<rmult>\d+))?)"
+    rf"\s*\)$"
 )
 
 
@@ -1319,10 +1367,10 @@ class LCRegression:
 
     Notes
     -----
-    The harmonic-pair detector recognises only **integer** multipliers
-    (e.g. ``cos(theta)``, ``cos(2*theta)``); a term like
-    ``cos(0.5*theta)`` is treated as a regular linear predictor and won't
-    appear in ``result['harmonics']``.
+    The harmonic-pair detector recognises only **integer** multipliers,
+    written on either side of ``*`` (e.g. ``cos(theta)``, ``cos(2*theta)``,
+    ``cos(theta*2)``). A term like ``cos(0.5*theta)`` is treated as a regular
+    linear predictor and won't appear in ``result['harmonics']``.
 
     References
     ----------
@@ -1398,8 +1446,13 @@ class LCRegression:
             m = _LC_TRIG_RE.match(name)
             if not m:
                 continue
-            func, mult, var = m.groups()
-            k = int(mult) if mult else 1
+            func = m.group(1)
+            if m.group("lvar") is not None:
+                var = m.group("lvar")
+                k = int(m.group("lmult"))
+            else:
+                var = m.group("rvar")
+                k = int(m.group("rmult")) if m.group("rmult") else 1
             slot = groups.setdefault((var, k), {})
             slot[func] = (name, value)
 
@@ -1497,7 +1550,7 @@ class LCRegression:
             self._print_harmonic_table()
 
     def _print_harmonic_table(self) -> None:
-        z = 1.959963984540054  # 0.975 quantile of N(0, 1)
+        z = float(norm.ppf(0.975))
 
         def _fmt(value):
             return "n/a" if value is None else f"{value:.4f}"

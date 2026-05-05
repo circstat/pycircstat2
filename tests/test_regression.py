@@ -229,7 +229,7 @@ def test_kappa_model_fits_and_predicts_constant_mean():
 
     pred = m.predict(X)
     assert pred.shape == (X.shape[0],)
-    np.testing.assert_allclose(pred, m.result["mu"])
+    np.testing.assert_allclose(pred, np.mod(m.result["mu"], 2 * np.pi))
 
 
 def test_predict_mean_model_round_trip():
