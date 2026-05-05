@@ -580,7 +580,7 @@ def circ_median(
     if np.isclose(circ_r(alpha, w), 1.0, atol=1e-12):
         if verbose:
             print("All points coincide, returning the first point as median.")
-        return alpha[0]
+        return float(angmod(alpha[0]))
 
     # grouped data
     if not np.all(w == 1):
@@ -1284,11 +1284,8 @@ def circ_median_ci(
         if np.round(median, 5) in alpha.round(5):  # don't count the median per se
             idx_ub += 1
 
-        if idx_ub > n:
-            idx_ub = idx_ub - n
-
-        if idx_lb < 0:
-            idx_lb = n + idx_lb
+        idx_lb %= n
+        idx_ub %= n
 
         lower, upper = alpha[int(idx_lb)], alpha[int(idx_ub)]
 
