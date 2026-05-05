@@ -959,13 +959,16 @@ class CCRegression:
 
 
 # Markers used by LCRegression's formula parser.
+# `[^\W\d_]\w*` matches a Python-style identifier including Unicode letters
+# (e.g. Greek `θ`), while still forbidding a leading digit.
+_LC_IDENT = r"[^\W\d_]\w*"
 _LC_HARMONIC_RE = re.compile(
-    r"harmonic\s*\(\s*([A-Za-z_]\w*)\s*(?:,\s*k\s*=\s*(\d+)\s*)?\)"
+    rf"harmonic\s*\(\s*({_LC_IDENT})\s*(?:,\s*k\s*=\s*(\d+)\s*)?\)"
 )
 _LC_UNSUPPORTED_RE = re.compile(r"\b(skew|flat)\s*\(")
 # Coefficient-name pattern as emitted by hea: e.g. "cos(theta)", "sin(2 * theta)".
 _LC_TRIG_RE = re.compile(
-    r"^(cos|sin)\(\s*(?:(\d+)\s*\*\s*)?([A-Za-z_]\w*)\s*\)$"
+    rf"^(cos|sin)\(\s*(?:(\d+)\s*\*\s*)?({_LC_IDENT})\s*\)$"
 )
 
 
@@ -1080,6 +1083,10 @@ class LCRegression:
         coef_values = list(bhat_df.row(0))
         coefficients = dict(zip(coef_names, coef_values))
 
+        cov = np.asarray(self.lm_fit.V_bhat, dtype=float)
+        column_names = list(self.lm_fit.column_names)
+        name_to_idx = {n: i for i, n in enumerate(column_names)}
+
         # Group cos/sin terms by (variable, multiplier).
         groups: dict = {}
         for name, value in coefficients.items():
@@ -1097,12 +1104,32 @@ class LCRegression:
             sin_entry = pair.get("sin")
             cos_val = cos_entry[1] if cos_entry else None
             sin_val = sin_entry[1] if sin_entry else None
+
+            amplitude = phase = se_amp = se_phase = None
             if cos_val is not None and sin_val is not None:
                 amplitude = float(np.hypot(cos_val, sin_val))
                 phase = float(np.arctan2(sin_val, cos_val))
-            else:
-                amplitude = None
-                phase = None
+                # Delta-method SEs from the (c, s) covariance block.
+                ic = name_to_idx.get(cos_entry[0])
+                isn = name_to_idx.get(sin_entry[0])
+                if ic is not None and isn is not None and amplitude > 0:
+                    var_c = cov[ic, ic]
+                    var_s = cov[isn, isn]
+                    cov_cs = cov[ic, isn]
+                    r2 = amplitude ** 2
+                    var_amp = (
+                        cos_val ** 2 * var_c
+                        + 2 * cos_val * sin_val * cov_cs
+                        + sin_val ** 2 * var_s
+                    ) / r2
+                    var_phase = (
+                        sin_val ** 2 * var_c
+                        - 2 * cos_val * sin_val * cov_cs
+                        + cos_val ** 2 * var_s
+                    ) / (r2 ** 2)
+                    se_amp = float(np.sqrt(max(var_amp, 0.0)))
+                    se_phase = float(np.sqrt(max(var_phase, 0.0)))
+
             harmonics.append(
                 {
                     "variable": var,
@@ -1111,6 +1138,8 @@ class LCRegression:
                     "sin_coef": sin_val,
                     "amplitude": amplitude,
                     "phase": phase,
+                    "se_amplitude": se_amp,
+                    "se_phase": se_phase,
                 }
             )
 
@@ -1143,27 +1172,68 @@ class LCRegression:
         return np.asarray(out, dtype=float)
 
     def summary(self) -> None:
-        """Print a summary of the fit (linear + harmonic decomposition)."""
-        print("\nLinear-Circular Regression\n")
-        print(f"Formula:   {self.formula}")
+        """Print a full diagnostic summary.
+
+        Reuses ``hea.lm.summary()`` for the standard regression block
+        (residual quantiles, coefficient table with SEs/CIs/t/p, fit metrics)
+        and appends a harmonic-decomposition table with delta-method SEs and
+        95% CIs for each cos/sin amplitude and phase.
+        """
+        print("\nLinear-Circular Regression")
         if self.expanded_formula != self.formula:
-            print(f"Expanded:  {self.expanded_formula}")
+            print(f"User formula:     {self.formula}")
+            print(f"Expanded formula: {self.expanded_formula}")
         print()
 
-        print("Coefficients:")
-        for name, value in self.result["coefficients"].items():
-            print(f"  {name:<24s} {value: .6f}")
+        # hea.lm.summary() prints to stdout and returns None.
+        self.lm_fit.summary()
 
         if self.result["harmonics"]:
-            print("\nHarmonic decomposition:")
-            print(f"  {'variable':<10s} {'k':>3s}  {'amplitude':>12s} {'phase (rad)':>14s}")
-            for h in self.result["harmonics"]:
-                amp = "n/a" if h["amplitude"] is None else f"{h['amplitude']:.6f}"
-                ph = "n/a" if h["phase"] is None else f"{h['phase']:.6f}"
-                print(f"  {h['variable']:<10s} {h['k']:>3d}  {amp:>12s} {ph:>14s}")
+            self._print_harmonic_table()
 
-        print("\nFit metrics:")
-        print(f"  sigma     = {self.result['sigma']:.6f}")
-        print(f"  R-squared = {self.result['r_squared']:.6f}")
-        print(f"  AIC       = {self.result['aic']:.6f}")
-        print(f"  BIC       = {self.result['bic']:.6f}\n")
+    def _print_harmonic_table(self) -> None:
+        z = 1.959963984540054  # 0.975 quantile of N(0, 1)
+        rows = []
+        for h in self.result["harmonics"]:
+            amp = h["amplitude"]
+            ph = h["phase"]
+            se_a = h["se_amplitude"]
+            se_p = h["se_phase"]
+            label = f"{h['variable']}, k={h['k']}"
+
+            def _fmt(value):
+                return "n/a" if value is None else f"{value:.4f}"
+
+            def _ci(value, se):
+                if value is None or se is None:
+                    return "n/a"
+                lo, hi = value - z * se, value + z * se
+                return f"[{lo:.4f}, {hi:.4f}]"
+
+            rows.append(
+                (label, _fmt(amp), _fmt(se_a), _ci(amp, se_a), _fmt(ph), _fmt(se_p), _ci(ph, se_p))
+            )
+
+        headers = (
+            "term",
+            "amplitude",
+            "SE",
+            "CI[2.5%, 97.5%]",
+            "phase",
+            "SE",
+            "CI[2.5%, 97.5%]",
+        )
+        widths = [
+            max(len(h), max(len(r[i]) for r in rows)) for i, h in enumerate(headers)
+        ]
+
+        print("\nHarmonic decomposition:")
+        line = "  ".join(f"{h:<{w}s}" for h, w in zip(headers, widths))
+        print(line)
+        print("-" * len(line))
+        for r in rows:
+            print("  ".join(f"{c:<{w}s}" for c, w in zip(r, widths)))
+        print(
+            "Phase in radians; SEs and CIs from the delta method on (cos, sin) "
+            "coefficients.\n"
+        )

@@ -431,3 +431,39 @@ def test_lc_accepts_polars_data():
         list(m_pl.result["coefficients"].values()),
         atol=1e-12,
     )
+
+
+def test_lc_harmonic_se_and_ci_present():
+    """Delta-method SEs for amplitude/phase should be finite and positive."""
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m = LCRegression("y ~ harmonic(theta, k=2)", df)
+    for h in m.result["harmonics"]:
+        assert h["se_amplitude"] is not None and h["se_amplitude"] > 0
+        assert h["se_phase"] is not None and h["se_phase"] > 0
+        # Sanity: SE_amp should not exceed the amplitude itself by orders of magnitude.
+        assert h["se_amplitude"] < 10 * h["amplitude"]
+
+
+def test_lc_accepts_unicode_identifiers():
+    """Greek/Unicode column names should work in formulas (e.g. `θ`)."""
+    df = _lung_dataframe(drop_feb_outliers=True)
+    df_unicode = df.rename(columns={"theta": "θ"})
+    m = LCRegression("y ~ harmonic(θ, k=2)", df_unicode)
+    assert m.expanded_formula == "y ~ cos(θ) + sin(θ) + cos(2*θ) + sin(2*θ)"
+    assert np.isclose(m.result["r_squared"], 0.9094, atol=1e-3)
+    assert all(h["variable"] == "θ" for h in m.result["harmonics"])
+
+
+def test_lc_summary_includes_lm_block_and_harmonic_table(capsys):
+    df = _lung_dataframe(drop_feb_outliers=True)
+    m = LCRegression("y ~ harmonic(theta, k=2)", df)
+    m.summary()
+    out = capsys.readouterr().out
+    # hea.lm summary content
+    assert "Coefficients:" in out
+    assert "Pr(>|t|)" in out
+    assert "R-Squared" in out
+    # Our additions
+    assert "Harmonic decomposition" in out
+    assert "amplitude" in out
+    assert "phase" in out
