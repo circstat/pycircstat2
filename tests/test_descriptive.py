@@ -179,12 +179,17 @@ def test_circ_median_HL():
 
 
 def test_circ_median_HL_oracle():
-    # Oracle values cross-checked against R's `median.circular` applied to the
-    # pair-mean array — i.e., the algorithm Otieno (2002) Appendix E specifies
-    # (and what R's broken `medianHL.circular` would produce if the C-call
-    # argument were corrected). Our deviation tie tolerance (`_ANGLE_DECIMALS=8`)
-    # is matched to R's `1e-8`; when fed identical candidate arrays we agree to
-    # ~2e-9 rad.
+    # Oracle values cross-checked against a hand-assembled fixed version of
+    # Otieno's HL: pair means are computed per Appendix E (sipfunc/sipfunc2/
+    # sipfunc3), then R's *working* `median.circular` is applied to that array.
+    #
+    # We do NOT use R/circular's `medianHL.circular` as oracle — its C
+    # implementation has a bug (the last line of `MedianHLCircularRad` calls
+    # the deviation median on the original `x` instead of on the `meanOfPair`
+    # array it just built), so it returns the regular median, not HL.
+    #
+    # Our deviation tie tolerance (_ANGLE_DECIMALS=8) is matched to R's 1e-8;
+    # when fed identical candidate arrays the two agree to ~2e-9 rad.
 
     # Symmetric input: HL = symmetry center, exactly, all three variants.
     alpha = np.array([0.0, np.pi / 4, np.pi / 2])
