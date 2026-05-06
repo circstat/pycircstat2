@@ -5,6 +5,13 @@ from scipy.stats import chi2, norm
 
 from .utils import angmod, is_within_circular_range
 
+# Decimal places for rounding angular comparisons in median routines.
+# 5 decimals ≈ 1e-5 rad ≈ 6e-4° tolerance.
+_ANGLE_DECIMALS = 5
+
+# Switch to chunked pairwise mean deviation above this many points to bound memory.
+_MEAN_DEV_CHUNK_THRESHOLD = 10000
+
 
 def circ_r(
     alpha: Optional[np.ndarray] = None,
@@ -559,8 +566,9 @@ def circ_median(
     return_average: bool
         Return the average of the median
     average_method: str
-        - all: circular mean of all medians
-        - unique: circular mean of unique medians
+        - all: circular mean of all medians (repeated angles in `alpha` count
+          with their multiplicity, so a duplicated candidate is weighted more)
+        - unique: circular mean of unique median candidates
 
     Returns
     -------
@@ -594,7 +602,7 @@ def circ_median(
         elif method == "deviation":
             median = _circ_median_mean_deviation(alpha)
         elif method == "none" or method is None:
-            median = np.nan
+            return float(np.nan)
         else:
             raise ValueError(
                 f"Method `{method}` for `circ_median` is not supported.\nTry `deviation` or `count`"
@@ -619,6 +627,13 @@ def _circ_median_grouped(
     alpha: np.ndarray,
     w: np.ndarray,
 ) -> Union[float, np.ndarray]:
+    # `alpha` is expected to be the bin centers in increasing order, with `w[i]`
+    # the count for the bin centered at `alpha[i]`. `bin_size` is taken as the
+    # smallest forward difference, so an unsorted input would yield a
+    # nonsensical (possibly negative) bin size.
+    if np.any(np.diff(alpha) <= 0):
+        raise ValueError("`alpha` must be strictly increasing bin centers.")
+
     n = np.sum(w)  # sample size
     n_bins = len(alpha)  # number of intervals
     bin_size = np.diff(alpha).min()
@@ -626,7 +641,8 @@ def _circ_median_grouped(
     # median for grouped data operated on upper bound of bins
     alpha_ub = alpha + bin_size / 2
     alpha_rotated = angmod(alpha_ub[:, None] - alpha_ub)
-    right = np.logical_and(alpha_rotated >= 0.0, alpha_rotated <= np.round(np.pi, 5))
+    pi_round = np.round(np.pi, _ANGLE_DECIMALS)
+    right = np.logical_and(alpha_rotated >= 0.0, alpha_rotated <= pi_round)
     halfcircle_right = np.array(
         [np.sum(np.roll(w, -1)[right[:, i]]) for i in range(len(alpha))]
     )
@@ -640,9 +656,9 @@ def _circ_median_grouped(
         halfcircle_left = halfcircle_left + offset
 
     # find where half-freq located.
-    halffreq = np.round(n / 2, 5)
+    halffreq = np.round(n / 2, _ANGLE_DECIMALS)
     halfcircle_range = np.round(
-        np.vstack([halfcircle_left, np.roll(halfcircle_left, -1)]).T, 5
+        np.vstack([halfcircle_left, np.roll(halfcircle_left, -1)]).T, _ANGLE_DECIMALS
     )
     idx = np.where(
         np.logical_and(
@@ -678,15 +694,14 @@ def _circ_median_grouped(
 
 def _circ_median_count(alpha: np.ndarray) -> Union[float,np.ndarray]:
     n = len(alpha)
-    alpha_rotated = np.round(angmod((alpha[:, None] - alpha)), decimals=5)
+    alpha_rotated = np.round(angmod((alpha[:, None] - alpha)), decimals=_ANGLE_DECIMALS)
+    pi_round = np.round(np.pi, _ANGLE_DECIMALS)
 
     # count number of points on the right (0, 180), excluding the boundaries
-    right = np.logical_and(alpha_rotated > 0.0, alpha_rotated < np.round(np.pi, 5)).sum(
-        0
-    )
+    right = np.logical_and(alpha_rotated > 0.0, alpha_rotated < pi_round).sum(0)
     # count number of points on the boundaries
     exact = np.logical_or(
-        np.isclose(alpha_rotated, 0.0), np.isclose(alpha_rotated, np.round(np.pi, 5))
+        np.isclose(alpha_rotated, 0.0), np.isclose(alpha_rotated, pi_round)
     ).sum(0)
     # count number of points on the left (180, 360), excluding the boundaries
     left = n - right - 0.5 * exact
@@ -717,7 +732,7 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
     """
 
     # get pairwise circular mean deviation
-    if len(alpha) > 10000:
+    if len(alpha) > _MEAN_DEV_CHUNK_THRESHOLD:
         angdist = circ_mean_deviation_chunked(alpha, alpha)
     else:
         # get pairwise circular mean deviation
@@ -777,7 +792,7 @@ def circ_mean_deviation_chunked(
         stop = start + chunk_size
         beta_chunk = beta_arr[start:stop]
         angdist = np.pi - np.abs(np.pi - np.abs(alpha_arr - beta_chunk[:, None]))
-        chunk_mean = np.round(np.mean(angdist, axis=1), 5)
+        chunk_mean = np.round(np.mean(angdist, axis=1), _ANGLE_DECIMALS)
         result[start : start + beta_chunk.size] = chunk_mean
 
     return result
@@ -829,7 +844,7 @@ def circ_mean_deviation(
         np.abs(np.pi - np.abs(alpha_arr - beta_arr[:, None])),
         axis=1,
     )
-    return np.round(np.pi - mean_dist, 5)
+    return np.round(np.pi - mean_dist, _ANGLE_DECIMALS)
 
 
 def circ_mean_ci(
@@ -1274,10 +1289,11 @@ def circ_median_ci(
 
         offset = int(1 + np.floor(0.5 * np.sqrt(n) * z))  # fisher:eq(4.19)
 
-        # idx_median = np.where(alpha.round(5) < np.round(median, 5))[0][-1]
-        arr = np.where(alpha.round(5) < np.round(median, 5))[0]
+        arr = np.where(
+            alpha.round(_ANGLE_DECIMALS) < np.round(median, _ANGLE_DECIMALS)
+        )[0]
         if len(arr) == 0:
-            # That means median is smaller than alpha[0] (to 5 decimals).
+            # That means median is smaller than alpha[0] (to ANGLE_DECIMALS).
             # In a circular sense, the “closest index below” is alpha[-1].
             idx_median = len(alpha) - 1
         else:
