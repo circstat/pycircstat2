@@ -529,7 +529,7 @@ def circ_std(
 def circ_median(
     alpha: np.ndarray,
     w: Optional[np.ndarray] = None,
-    method: str = "deviation",
+    method: Optional[str] = "deviation",
     return_average: bool = True,
     average_method: str = "all",
     verbose: bool = False,
@@ -800,7 +800,7 @@ def circ_mean_deviation(
     Circular mean deviation.
 
     $$
-    \delta = \pi - \left| \pi - \left| \alpha - \beta \right| \right| / n
+    \delta = \pi - \frac{1}{n} \sum^{n}_{1}\left| \pi - \left| \alpha - \beta \right| \right|
     $$
 
     It is the mean angular distance from one data point to all others.
@@ -1246,7 +1246,8 @@ def circ_median_ci(
     Returns
     -------
     lower, upper, ci: tuple
-        confidence intervals and alpha-level
+        confidence intervals and alpha-level. For ``n <= 2`` the bounds are
+        ``(nan, nan)`` since Fisher's table starts at ``n = 3``.
 
     Note
     ----
@@ -1284,7 +1285,7 @@ def circ_median_ci(
 
         idx_lb = idx_median - offset + 1
         idx_ub = idx_median + offset
-        if np.round(median, 5) in alpha.round(5):  # don't count the median per se
+        if bool(np.any(np.isclose(alpha, median))):  # don't count the median per se
             idx_ub += 1
 
         idx_lb %= n

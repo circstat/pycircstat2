@@ -112,12 +112,12 @@ def test_circ_median():
     data_mallard = load_data("mallard", source="mardia")
     circ_mallard = Circular(data=data_mallard["θ"].values[:], w=data_mallard["w"].values[:])
     median = circ_median(
-        alpha=circ_mallard.alpha_ub,
+        alpha=circ_mallard.alpha,
         w=circ_mallard.w,
         return_average=True,
     )
 
-    np.testing.assert_approx_equal(np.rad2deg(median), 313.8, significant=2)
+    np.testing.assert_allclose(np.rad2deg(median), 313.8, atol=0.05)
 
     # edge case: all angles are the same
     # 1) all angles identical (any wrap-around)
