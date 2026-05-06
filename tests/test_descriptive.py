@@ -492,6 +492,45 @@ def test_circ_kappa_concentrated_returns_inf():
     # Sanity: away from r=1 we still get finite, positive κ.
     assert np.isfinite(circ_kappa(0.99)) and circ_kappa(0.99) > 0
 
+
+def test_circ_mean_ci_errors():
+    # Unsupported method
+    with pytest.raises(ValueError, match="not supported"):
+        circ_mean_ci(alpha=np.array([0.1, 0.2, 0.3]), method="banana")
+
+    # bootstrap / dispersion need alpha
+    with pytest.raises(ValueError, match="`alpha` is required"):
+        circ_mean_ci(method="bootstrap")
+    with pytest.raises(ValueError, match="`alpha` is required"):
+        circ_mean_ci(method="dispersion")
+
+
+def test_circ_mean_ci_bootstrap_seed_reproducible():
+    # `seed` parameter must produce reproducible results.
+    rng = np.random.default_rng(0)
+    alpha = np.deg2rad(120) + 0.5 * rng.standard_normal(15)
+    a = circ_mean_ci(alpha=alpha, method="bootstrap", B=200, seed=42)
+    b = circ_mean_ci(alpha=alpha, method="bootstrap", B=200, seed=42)
+    c = circ_mean_ci(alpha=alpha, method="bootstrap", B=200, seed=43)
+    assert a == b
+    assert a != c
+
+
+def test_circ_quantile_unsupported_type_raises():
+    alpha = np.deg2rad([10, 20, 30, 40, 50])
+    with pytest.raises(ValueError, match="Unsupported quantile"):
+        circ_quantile(alpha, type=5)
+
+
+def test_circ_var_unsorted_alpha_raises():
+    from pycircstat2.descriptive import circ_var
+    # Non-uniform `w` triggers the bin-size inference path; unsorted alpha
+    # would have produced a meaningless negative bin_size silently.
+    alpha = np.deg2rad([20, 60, 40])  # not sorted
+    w = np.array([1, 2, 3])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        circ_var(alpha=alpha, w=w)
+
 def test_circ_quantile():
     """Test `circ_quantile` with known input and compare with R output."""
 

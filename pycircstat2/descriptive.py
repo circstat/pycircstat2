@@ -394,7 +394,7 @@ def angular_var(
 
     References
     ----------
-    - Batschlet (1965, 1981), from Section 26.5 of Zar (2010)
+    - Batschelet (1965, 1981), from Section 26.5 of Zar (2010)
     """
 
     variance = circ_var(alpha=alpha, w=w, r=r, bin_size=bin_size)
@@ -484,6 +484,13 @@ def circ_var(
     if bin_size is None and w is not None and not np.all(w == w[0]):
         if alpha is None:
             raise ValueError("If `bin_size` is None but `w` is provided, `alpha` must be given.")
+        # `np.diff(alpha).min()` only makes sense as a bin width on sorted bin
+        # centers; an unsorted input would silently yield a negative bin_size.
+        if np.any(np.diff(alpha) <= 0):
+            raise ValueError(
+                "`alpha` must be strictly increasing bin centers when inferring "
+                "`bin_size`; pass `bin_size=` explicitly otherwise."
+            )
         bin_size = float(np.diff(alpha).min())
 
     # Correct `r` if binning is applied
@@ -913,6 +920,7 @@ def circ_mean_ci(
     ci: float = 0.95,
     method: str = "approximate",
     B: int = 2000,  # number of samples for bootstrap
+    seed: Optional[Union[int, np.random.Generator]] = None,
 ) -> tuple[float, float]:
     r"""
     Confidence interval of circular mean.
@@ -971,6 +979,9 @@ def circ_mean_ci(
         - dispersion: for n >= 25
     B: int
         Number of samples for bootstrap.
+    seed: int, ``np.random.Generator``, or None
+        Seed/Generator for reproducible bootstrap. Only used when
+        ``method="bootstrap"``.
 
     Returns
     -------
@@ -987,6 +998,16 @@ def circ_mean_ci(
 
 
 
+    if method not in ("approximate", "bootstrap", "dispersion"):
+        raise ValueError(
+            f"Method `{method}` for `circ_mean_ci` is not supported.\n"
+            "Try `dispersion`, `approximate` or `bootstrap`."
+        )
+    if method in ("bootstrap", "dispersion") and alpha is None:
+        raise ValueError(
+            f"`alpha` is required for `circ_mean_ci(method={method!r})`."
+        )
+
     #  n > 8, according to Ch 26.7 (Zar, 2010)
     if method == "approximate":
         (lb, ub) = _circ_mean_ci_approximate(
@@ -994,17 +1015,12 @@ def circ_mean_ci(
         )
 
     # n < 25, according to 4.4.4a (Fisher, 1993, P75)
-    elif method == "bootstrap" and alpha is not None:
-        (lb, ub) = _circ_mean_ci_bootstrap(alpha=alpha, B=B, ci=ci)
+    elif method == "bootstrap":
+        (lb, ub) = _circ_mean_ci_bootstrap(alpha=alpha, B=B, ci=ci, seed=seed)
 
     # n >= 25, according to 4.4.4b (Fisher, 1993, P75)
-    elif method == "dispersion" and alpha is not None:
+    else:  # method == "dispersion"
         (lb, ub) = _circ_mean_ci_dispersion(alpha=alpha, w=w, mean=mean, ci=ci)
-
-    else:
-        raise ValueError(
-            f"Method `{method}` for `circ_mean_ci` is not supported.\nTry `dispersion`, `approximate` or `bootstrap`"
-        )
 
     return float(angmod(lb)), float(angmod(ub))
 
@@ -1170,11 +1186,14 @@ def _circ_mean_ci_bootstrap(
     alpha: np.ndarray,
     B: int = 2000,
     ci: float = 0.95,
+    seed: Optional[Union[int, np.random.Generator]] = None,
 ) -> tuple[float, float]:
     """Implementation of Section 8.3 (Fisher, 1993, p.207)."""
 
     if B <= 0:
         raise ValueError("`B` must be a positive integer.")
+
+    rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
 
     alpha_arr = np.atleast_1d(np.asarray(alpha, dtype=float))
     if alpha_arr.ndim != 1 or alpha_arr.size == 0:
@@ -1221,7 +1240,7 @@ def _circ_mean_ci_bootstrap(
     v0 = np.array([[v11, v12], [v21, v22]], dtype=float)
 
     bootstrap_samples = np.asarray(
-        [_circ_mean_resample(alpha_arr, z0, v0) for _ in range(B)],
+        [_circ_mean_resample(alpha_arr, z0, v0, rng) for _ in range(B)],
         dtype=float,
     ).reshape(-1)
 
@@ -1235,13 +1254,13 @@ def _circ_mean_ci_bootstrap(
     return float(lb), float(ub)
 
 
-def _circ_mean_resample(alpha, z0, v0):
+def _circ_mean_resample(alpha, z0, v0, rng):
     """
     Implementation of Section 8.3.5 (Fisher, 1993, P210)
     """
 
     alpha_arr = np.asarray(alpha, dtype=float)
-    theta_samples = np.random.choice(alpha_arr, alpha_arr.size, replace=True)
+    theta_samples = rng.choice(alpha_arr, alpha_arr.size, replace=True)
     cos_theta = np.cos(theta_samples)
     sin_theta = np.sin(theta_samples)
 
@@ -1424,8 +1443,8 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
     $$
     \hat\kappa_{ML} =
     \begin{cases}
-     2r + r^3 + 5r^5/6, , & \text{if } r < 0.53  \\
-     -0.4 + 1.39 r + 0.43 / (1 - r) , & \text{if } 0.53 \le r < 0.85\\
+     2r + r^3 + 5r^5/6, & \text{if } r < 0.53  \\
+     -0.4 + 1.39 r + 0.43 / (1 - r), & \text{if } 0.53 \le r < 0.85\\
         1 / (r^3 - 4r^2 + 3r), & \text{if } r \ge 0.85
     \end{cases}
     $$
@@ -1530,7 +1549,8 @@ def circ_dist(
         )
 
     if metric == "center":
-        distances = np.angle(np.exp(1j * x) / np.exp(1j * y))
+        # Wrap (x - y) to (-π, π] without allocating two complex arrays.
+        distances = (x - y + np.pi) % (2 * np.pi) - np.pi
 
     elif metric == "geodesic":
         distances = np.pi - np.abs(np.pi - np.abs(x - y))
@@ -1825,7 +1845,8 @@ def circ_quantile(
     probs : float or np.ndarray, optional
         Probabilities at which to compute quantiles. Default is `[0, 0.25, 0.5, 0.75, 1.0]`.
     type : int, optional
-        Quantile algorithm type (default `7`, matches R’s default quantile type).
+        Quantile algorithm. Currently only ``7`` (linear interpolation, R's
+        default) and ``4`` (midpoint) are supported.
 
     Returns
     -------
@@ -1837,6 +1858,16 @@ def circ_quantile(
     - R's `quantile.circular` from the `circular` package.
     - Fisher (1993), Section 2.3.2.
     """
+
+    if type == 7:
+        np_method = "linear"
+    elif type == 4:
+        np_method = "midpoint"
+    else:
+        raise ValueError(
+            f"Unsupported quantile `type={type}`; only 7 (linear) and 4 "
+            "(midpoint) are implemented."
+        )
 
     # Convert to numpy array
     alpha = np.asarray(alpha)
@@ -1856,9 +1887,7 @@ def circ_quantile(
     )
 
     # Compute linear quantiles on transformed data
-    linear_quantiles = np.quantile(
-        shifted_alpha, probs, method="linear" if type == 7 else "midpoint"
-    )
+    linear_quantiles = np.quantile(shifted_alpha, probs, method=np_method)
 
     # Transform back to original circular space
     circular_quantiles = (linear_quantiles + circular_median) % (2 * np.pi)
