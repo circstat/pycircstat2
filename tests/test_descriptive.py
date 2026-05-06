@@ -129,6 +129,36 @@ def test_circ_median():
     bimodal = np.deg2rad([0, 0, 90, 90])
     assert np.isnan(circ_median(bimodal))
 
+    # 3) all-coincide early-exit must wrap into [0, 2π)
+    m = circ_median(np.array([7.0, 7.0, 7.0]))
+    assert 0.0 <= m < 2 * np.pi
+    np.testing.assert_allclose(m, 7.0 - 2 * np.pi, atol=1e-12)
+
+
+def test_circ_median_grouped_odd_bins():
+    # _circ_median_grouped previously used `np.roll(w, 2)` with the wrong sign,
+    # which gave correct answers only by coincidence for n_bins == 5.
+    # For n_bins=9 with all mass in bin 0 the old code returned 80° instead of 20°.
+
+    # Single-bin mass: median should be that bin's center.
+    for nb in [5, 7, 9, 11, 17]:
+        centers = np.array([(i + 0.5) * 2 * np.pi / nb for i in range(nb)])
+        w = np.zeros(nb, dtype=int)
+        w[0] = 10
+        m = circ_median(alpha=centers, w=w)
+        np.testing.assert_allclose(m, centers[0], atol=1e-9)
+
+    # Symmetric peaked distribution (1, 4, 1): median should be at the peak.
+    for nb, peak in [(5, 2), (7, 3), (9, 4), (11, 5)]:
+        centers = np.array([(i + 0.5) * 2 * np.pi / nb for i in range(nb)])
+        w = np.zeros(nb, dtype=int)
+        w[peak - 1] = 1
+        w[peak] = 4
+        w[peak + 1] = 1
+        m = circ_median(alpha=centers, w=w)
+        np.testing.assert_allclose(m, centers[peak], atol=1e-9)
+
+
 def test_circ_mean_deviation():
 
     d22 = load_data("B10", source="fisher")
@@ -227,6 +257,17 @@ def test_circ_median_ci():
     lb, ub, ci = circ_median_ci(median=float(c_ex3_s2.median), alpha=c_ex3_s2.alpha)
     np.testing.assert_approx_equal(np.rad2deg(lb.round(5)), 229.0, significant=3)
     np.testing.assert_approx_equal(np.rad2deg(ub.round(5)), 267.0, significant=3)
+
+
+def test_circ_median_ci_idx_wrap():
+    # Previously, when idx_ub computed to exactly n, the wrap guard
+    # `if idx_ub > n` did not trigger and `alpha[n]` raised IndexError.
+    # Sweep medians across a few sample sizes that expose the boundary.
+    for n in [16, 20, 25]:
+        alpha = np.linspace(0.0, np.pi, n)
+        for k in range(n):
+            lb, ub, ci = circ_median_ci(median=float(alpha[k]), alpha=alpha)
+            assert np.isfinite(lb) and np.isfinite(ub)
 
 
 def test_circ_mean_and_r_of_means():

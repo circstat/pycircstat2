@@ -633,8 +633,11 @@ def _circ_median_grouped(
     halfcircle_left = n - halfcircle_right
 
     if n_bins % 2 != 0:
-        offset = np.roll(w, 2) / 2  # remove half of the previous bin freq
-        halfcircle_left = halfcircle_left - offset
+        # The diameter from alpha_ub[i] cuts through bin (i + n_bins//2 + 1) mod n_bins.
+        # halfcircle_right counts that bin's full weight; only the half on its side
+        # of the cut belongs there, so add the missing half to halfcircle_left.
+        offset = np.roll(w, -(n_bins // 2 + 1)) / 2
+        halfcircle_left = halfcircle_left + offset
 
     # find where half-freq located.
     halffreq = np.round(n / 2, 5)
