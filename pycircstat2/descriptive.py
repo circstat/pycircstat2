@@ -584,11 +584,13 @@ def circ_median(
         w = np.ones_like(alpha)
 
     # edge cases for early exit
-    # if all points coincide, return the first point
+    # if all mass is at a single direction (r == 1), the median is that direction.
+    # Use the weighted resultant so this works for grouped data where the populated
+    # bin isn't necessarily alpha[0].
     if np.isclose(circ_r(alpha, w), 1.0, atol=1e-12):
         if verbose:
-            print("All points coincide, returning the first point as median.")
-        return float(angmod(alpha[0]))
+            print("All points coincide, returning the resultant direction as median.")
+        return float(circ_mean(alpha, w))
 
     # grouped data
     if not np.all(w == 1):

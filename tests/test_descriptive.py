@@ -134,6 +134,12 @@ def test_circ_median():
     assert 0.0 <= m < 2 * np.pi
     np.testing.assert_allclose(m, 7.0 - 2 * np.pi, atol=1e-12)
 
+    # 4) grouped data with all mass in one bin (not bin 0): early-exit must
+    #    return the populated bin's direction, not alpha[0].
+    centers = np.array([(i + 0.5) * 2 * np.pi / 5 for i in range(5)])
+    w = np.array([0, 0, 10, 0, 0])
+    np.testing.assert_allclose(circ_median(centers, w), centers[2], atol=1e-12)
+
 
 def test_circ_median_grouped_odd_bins():
     # _circ_median_grouped previously used `np.roll(w, 2)` with the wrong sign,
