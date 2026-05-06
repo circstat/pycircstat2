@@ -7,7 +7,8 @@
 | **Measures of Central Tendency**    |                       |                           |                    |               |                                       |
 | Circular Mean                       | `circ_mean`           | `mean(alpha)`             | `circ_mean(alpha)` | `circ.mean`   | `mean.circular`                       |
 | Circular Mean CI                    | `circ_mean_ci`        | `mean(alpha, ci=95)`      | `circ_confmean`    | -             | `mle.vonmises.bootstrap.ci`           |
-| Circular Median                     | `circ_median`         | `median`                  | `circ_median`      | -             | `median.circular`/`medianHL.circular` |
+| Circular Median (Fisher/Mardia)     | `circ_median` (method=`"deviation"`/`"count"`) [^median-grouped] | `median`                  | `circ_median`      | -             | `median.circular`                     |
+| Hodges-Lehmann Median               | `circ_median` (method=`"HL1"`/`"HL2"`/`"HL3"`) | -                         | -                  | -             | `medianHL.circular`[^medianHL-broken] |
 | Circular Median CI                  | `circ_median_ci`      | -                         | -                  | -             | -                                     |
 | Circular Quantile                   | `circ_quantile`       | -                         | -                  | -             | `quantile.circular`                   |
 | **Measures of Spread & Dispersion** |                       |                           |                    |               |                                       |
@@ -17,12 +18,14 @@
 | Circular Variance                   | `circ_var`            | `var`                     | `circ_var`         | `circ.disp`   | `var.circular`                        |
 | Circular Standard Deviation         | `circ_std`            | `std`                     | `circ_std`         | -             | `sd.circular`                         |
 | Circular Dispersion                 | `circ_dispersion`     | -                         | -                  | -             | -                                     |
+| Circular Range                      | `circ_range`          | -                         | -                  | `circ.range`  | `range.circular`                      |
+| Concentration Parameter (κ)         | `circ_kappa`          | `kappa`                   | `circ_kappa`       | `est.kappa`   | `A1inv`                               |
 | **Higher-Order Statistics**         |                       |                           |                    |               |                                       |
 | Circular Moment                     | `circ_moment`         | `moment`                  | `circ_moment`      | `tri.moment`  | `trigonometric.moment`                |
 | Circular Skewness                   | `circ_skewness`       | `skewness`                | `circ_skewness`    | -             | -                                     |
 | Circular Kurtosis                   | `circ_kurtosis`       | `kurtoisis`               | `circ_kurtosis`    | -             | -                                     |
 | **Distance & Pairwise Comparisons** |                       |                           |                    |               |                                       |
-| Mean deviation                      | `circ_mean_deviation` | -                         | -                  | -             | `meandeviation`                       |
+| Mean deviation [^mean-dev]          | `circ_mean_deviation` | -                         | -                  | -             | `meandeviation`                       |
 | Circular Distance                   | `circ_dist`           | `cdist`                   | `circ_dist`        | -             | -                                     |
 | Pairwise Circular Distance          | `circ_pairdist`       | `pairwise_cdiff`          | `circ_dist2`       | -             | `dist.circular`                       |
 
@@ -67,19 +70,20 @@
 
 | Feature             | H0         | PyCircStat2        | PyCircStat   | CircStat (MATLAB) | CircStats (R) | circular (R)       |
 |---------------------|------------|--------------------|--------------|-------------------|---------------|--------------------|
-| Kuiper’s Test       | $\rho = 0$ | `circ_kuiper_test` | `kupier`     | `circ_kuipertest` | `kuiper`      | `kuiper.test`      |
+| Kuiper’s Test       | $\rho = 0$ | `kuiper_test`      | `kuiper`     | `circ_kuipertest` | `kuiper`      | `kuiper.test`      |
 | Rao’s Spacing Test  | $\rho = 0$ | `rao_spacing_test` | `raospacing` | `circ_raotest`    | `rao.spacing` | `rao.spacing.test` |
 | Watson's Test       | $\rho = 0$ | `watson_test`      | -            | -                 | `watson`      | `watson.test`      |
 | Circular Range Test | $\rho = 0$ | `circ_range_test`  | -            | -                 | `circ_range`  | `range.circular`   |
 
 
 ### 3. Correlation & Regression
-| Feature                       | PyCircStat2    | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)              |
-|-------------------------------|----------------|------------|-------------------|---------------|---------------------------|
-| Circular-Circular Correlation | `circ_corrcc`  | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
-| Circular-Linear Correlation   | `circ_corrcl`  | `corrcl`   | `circ_corrcl`     | -             | -                         |
-| Circular-Circular Regression  | `CCRegression` | -          | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
-| Circular-Linear Regression    | `CLRegression` | -          | -                 | -             | `lm.circular(type="c-l")` |
+| Feature                                       | PyCircStat2    | PyCircStat | CircStat (MATLAB) | CircStats (R) | circular (R)              |
+|-----------------------------------------------|----------------|------------|-------------------|---------------|---------------------------|
+| Circular-Circular Correlation                 | `circ_corrcc`  | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
+| Circular-Linear Correlation                   | `circ_corrcl`  | `corrcl`   | `circ_corrcl`     | -             | -                         |
+| Circular-Circular Regression                  | `CCRegression` | -          | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
+| Circular-Linear Regression [^cl-resp]         | `CLRegression` | -          | -                 | -             | `lm.circular(type="c-l")` |
+| Linear-Circular Regression (harmonic) [^lc-resp] | `LCRegression` | -          | -                 | -             | -                         |
 
 
 
@@ -165,12 +169,26 @@ All circular distributions assume angles are on ``[0, 2π)``. Inputs are automat
 |                          | PPF    | `wrapstable.ppf`             | -          | -                 | -             | -                |
 |                          | RVS    | `wrapstable.rvs`             | -          | -                 | `rwrpstab`    | -                |
 |                          | Fit    | `wrapstable.fit`             | -          | -                 | -             | -                |
-| Asymmetric Trangular     | PDF    | -                            | -          | -                 | -             | `dasytriangular` |
+| Asymmetric Triangular    | PDF    | -                            | -          | -                 | -             | `dasytriangular` |
 | Projected Normal         | PDF    | -                            | -          | -                 | -             | `dpnorm`         |
 |                          | RVS    | -                            | -          | -                 | -             | `rpnorm`         |
 
 [^uniform]: $\rho=0$ stands for uniform distributed.
 [^median]: $\theta$ stands for median.
 [^F]: $F$ stands for distributions.
-[^one-way]: Yet anothr one-way ANOVA.
+[^one-way]: Yet another one-way ANOVA.
 [^two-way]: Two-way ANOVA.
+[^median-grouped]: For grouped data (non-uniform `w`), `circ_median` uses the
+  Mardia (1972) interpolation; the `method` argument is ignored on that path.
+[^medianHL-broken]: As of `circular` 0.5-2 (CRAN, 2025-09-24), `medianHL.circular`
+  builds the pair-mean array but its C primitive calls the deviation median on
+  the original `x` instead of on the pair-means, so HL1/HL2/HL3 all return the
+  regular `median.circular` value. See Otieno (2002) §3.4 for the intended
+  algorithm.
+[^mean-dev]: Different signatures: pycircstat2's `circ_mean_deviation(α, β)`
+  evaluates Fisher (1993) eq. 2.32 — `d(β) = π − (1/n)Σ|π−|αᵢ−β||` — at every
+  reference angle `β` (vector output). R's `meandeviation(x)` is the scalar
+  `d(median(x))`. Same formula, different evaluation points.
+[^cl-resp]: Circular response, linear predictor.
+[^lc-resp]: Linear response, circular predictor (harmonic regression à la
+  Pewsey et al. 2014, §8.4).
