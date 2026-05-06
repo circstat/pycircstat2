@@ -921,6 +921,7 @@ def circ_mean_ci(
     method: str = "approximate",
     B: int = 2000,  # number of samples for bootstrap
     seed: Optional[Union[int, np.random.Generator]] = None,
+    interval: str = "hdi",
 ) -> tuple[float, float]:
     r"""
     Confidence interval of circular mean.
@@ -982,6 +983,16 @@ def circ_mean_ci(
     seed: int, ``np.random.Generator``, or None
         Seed/Generator for reproducible bootstrap. Only used when
         ``method="bootstrap"``.
+    interval: str
+        How to summarise the bootstrap distribution into an interval. Only
+        used when ``method="bootstrap"``.
+
+        - ``"hdi"`` (default): Highest Density Interval — the shortest arc
+          containing ``ci`` of the bootstrap mass. Handles wrap-around
+          gracefully and is tighter for skewed bootstrap distributions.
+        - ``"percentile"``: Fisher (1993) §8.3.2 Stage 4 Technique 1 —
+          equal-tailed percentiles of the pivotal ``γ_b = μ̂*_b − θ̄``.
+          Matches the published bootstrap intervals in Fisher's tables.
 
     Returns
     -------
@@ -1016,7 +1027,9 @@ def circ_mean_ci(
 
     # n < 25, according to 4.4.4a (Fisher, 1993, P75)
     elif method == "bootstrap":
-        (lb, ub) = _circ_mean_ci_bootstrap(alpha=alpha, B=B, ci=ci, seed=seed)
+        (lb, ub) = _circ_mean_ci_bootstrap(
+            alpha=alpha, B=B, ci=ci, seed=seed, interval=interval,
+        )
 
     # n >= 25, according to 4.4.4b (Fisher, 1993, P75)
     else:  # method == "dispersion"
@@ -1187,11 +1200,17 @@ def _circ_mean_ci_bootstrap(
     B: int = 2000,
     ci: float = 0.95,
     seed: Optional[Union[int, np.random.Generator]] = None,
+    interval: str = "hdi",
 ) -> tuple[float, float]:
     """Implementation of Section 8.3 (Fisher, 1993, p.207)."""
 
     if B <= 0:
         raise ValueError("`B` must be a positive integer.")
+    if interval not in ("hdi", "percentile"):
+        raise ValueError(
+            f"Unknown bootstrap `interval={interval!r}`; expected "
+            "'hdi' or 'percentile'."
+        )
 
     rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
 
@@ -1245,8 +1264,18 @@ def _circ_mean_ci_bootstrap(
         dtype=float,
     ).reshape(-1)
 
-    # Use HDI instead of the percentile method
-    lb, ub = compute_hdi(bootstrap_samples, ci=ci)
+    if interval == "hdi":
+        lb, ub = compute_hdi(bootstrap_samples, ci=ci)
+    else:  # interval == "percentile" — Fisher §8.3.2 Stage 4 Technique 1
+        # γ_b = μ̂*_b − θ̄ wrapped to (−π, π]; sort and take ranks (l+1, m).
+        theta_bar = circ_mean(alpha_arr)
+        gamma = (bootstrap_samples - theta_bar + np.pi) % (2 * np.pi) - np.pi
+        gamma_sorted = np.sort(gamma)
+        l = int(np.floor(0.5 * B * (1 - ci) + 0.5))  # eq below 8.14
+        m = B - l
+        # Fisher's eq (8.14) is (θ̄ + γ_(l+1), θ̄ + γ_(m)) in 1-indexed notation.
+        lb = float(angmod(theta_bar + gamma_sorted[l]))
+        ub = float(angmod(theta_bar + gamma_sorted[m - 1]))
 
     mean_dir = circ_mean(bootstrap_samples)
     if not is_within_circular_range(mean_dir, lb, ub):

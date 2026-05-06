@@ -516,6 +516,31 @@ def test_circ_mean_ci_bootstrap_seed_reproducible():
     assert a != c
 
 
+def test_circ_mean_ci_bootstrap_interval():
+    # Default is HDI.
+    rng = np.random.default_rng(0)
+    alpha = np.deg2rad(120) + 0.4 * rng.standard_normal(20)
+    default = circ_mean_ci(alpha=alpha, method="bootstrap", B=400, seed=7)
+    hdi = circ_mean_ci(alpha=alpha, method="bootstrap", B=400, seed=7, interval="hdi")
+    assert default == hdi
+
+    # Percentile runs and is reproducible.
+    pct1 = circ_mean_ci(alpha=alpha, method="bootstrap", B=400, seed=7, interval="percentile")
+    pct2 = circ_mean_ci(alpha=alpha, method="bootstrap", B=400, seed=7, interval="percentile")
+    assert pct1 == pct2
+
+    # On approximately symmetric (well-concentrated) data, HDI and percentile
+    # should agree to within ~5° at this sample size / B.
+    diff_lb = np.abs(np.angle(np.exp(1j * (hdi[0] - pct1[0]))))
+    diff_ub = np.abs(np.angle(np.exp(1j * (hdi[1] - pct1[1]))))
+    assert diff_lb < np.deg2rad(5)
+    assert diff_ub < np.deg2rad(5)
+
+    # Unknown interval raises.
+    with pytest.raises(ValueError, match="interval="):
+        circ_mean_ci(alpha=alpha, method="bootstrap", B=200, interval="bca")
+
+
 def test_circ_quantile_unsupported_type_raises():
     alpha = np.deg2rad([10, 20, 30, 40, 50])
     with pytest.raises(ValueError, match="Unsupported quantile"):
