@@ -13,7 +13,7 @@ from pycircstat2.descriptive import (
     circ_mean_and_r_of_means,
     circ_mean_ci,
     circ_mean_deviation,
-    circ_mean_deviation_chuncked,
+    circ_mean_deviation_chunked,
     circ_median,
     circ_median_ci,
     circ_moment,
@@ -258,17 +258,17 @@ def test_circ_mean_deviation():
 
     np.testing.assert_allclose(
         circ_mean_deviation(d22s1, d22s1),
-        circ_mean_deviation_chuncked(d22s1, d22s1),
+        circ_mean_deviation_chunked(d22s1, d22s1),
     )
 
     np.testing.assert_allclose(
         circ_mean_deviation(d22s2, d22s2),
-        circ_mean_deviation_chuncked(d22s2, d22s2),
+        circ_mean_deviation_chunked(d22s2, d22s2),
     )
 
     np.testing.assert_allclose(
         circ_mean_deviation(d22s3, d22s3),
-        circ_mean_deviation_chuncked(d22s3, d22s3),
+        circ_mean_deviation_chunked(d22s3, d22s3),
     )
 
 
@@ -541,10 +541,22 @@ def test_circ_mean_ci_bootstrap_interval():
         circ_mean_ci(alpha=alpha, method="bootstrap", B=200, interval="bca")
 
 
-def test_circ_quantile_unsupported_type_raises():
+def test_circ_quantile_supported_types():
+    # All R types 1–9 should be accepted; type=10 should raise.
     alpha = np.deg2rad([10, 20, 30, 40, 50])
+    for t in range(1, 10):
+        circ_quantile(alpha, probs=0.5, type=t)
     with pytest.raises(ValueError, match="Unsupported quantile"):
-        circ_quantile(alpha, type=5)
+        circ_quantile(alpha, type=10)
+
+    # type=4 must agree with numpy's interpolated_inverted_cdf, not midpoint.
+    # (This was previously mismapped: type=4 → "midpoint" which is actually
+    # numpy's type=2.)
+    x = np.deg2rad(np.arange(0, 100, 10))
+    expected = np.quantile(x, 0.5, method="interpolated_inverted_cdf")
+    np.testing.assert_allclose(
+        circ_quantile(x, probs=0.5, type=4)[0], expected, atol=1e-12
+    )
 
 
 def test_circ_var_unsorted_alpha_raises():

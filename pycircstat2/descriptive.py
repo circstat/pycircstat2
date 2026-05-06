@@ -1,3 +1,4 @@
+import warnings
 from typing import Optional, Tuple, Union
 
 import numpy as np
@@ -862,12 +863,19 @@ def circ_mean_deviation_chunked(
     return result
 
 
-# Backwards compatibility: original misspelled export
+# Backwards compatibility: original misspelled export. Deprecated.
 def circ_mean_deviation_chuncked(
     alpha: Union[np.ndarray, float, int, list],
     beta: Union[np.ndarray, float, int, list],
     chunk_size: int = 1000,
 ) -> np.ndarray:
+    warnings.warn(
+        "`circ_mean_deviation_chuncked` is a misspelled alias and will be "
+        "removed in a future release; use `circ_mean_deviation_chunked` "
+        "instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return circ_mean_deviation_chunked(alpha, beta, chunk_size)
 
 
@@ -1284,7 +1292,12 @@ def _circ_mean_ci_bootstrap(
     return float(lb), float(ub)
 
 
-def _circ_mean_resample(alpha, z0, v0, rng):
+def _circ_mean_resample(
+    alpha: np.ndarray,
+    z0: np.ndarray,
+    v0: np.ndarray,
+    rng: np.random.Generator,
+) -> float:
     """
     Implementation of Section 8.3.5 (Fisher, 1993, P210)
     """
@@ -1789,6 +1802,7 @@ def nonparametric_density_estimation(
     alpha: np.ndarray,  # angles in radian
     h: float,  # smoothing parameters
     radius: float = 1,  # radius of the plotted circle
+    n_grid: int = 100,
 ) -> tuple:
     """Nonparametric density estimates with
     a quartic kernel function.
@@ -1801,12 +1815,15 @@ def nonparametric_density_estimation(
         Smoothing parameters
     radius: float
         radius of the plotted circle
+    n_grid: int
+        Number of grid points on ``[0, 2π]`` at which the density is
+        evaluated (default 100).
 
     Returns
     -------
-    x: np.ndarray (100, )
+    x: np.ndarray (n_grid, )
         grid
-    f: np.ndarray (100, )
+    f: np.ndarray (n_grid, )
         density
 
     Reference
@@ -1817,7 +1834,7 @@ def nonparametric_density_estimation(
     # vectorized version of step 3
     a = np.asarray(alpha, dtype=float)
     n = len(a)
-    x = np.linspace(0, 2 * np.pi, 100)
+    x = np.linspace(0, 2 * np.pi, n_grid)
     d = np.abs(x[:, None] - a)
     e = np.minimum(d, 2 * np.pi - d)
     e = np.minimum(e, h)
@@ -1876,8 +1893,9 @@ def circ_quantile(
     probs : float or np.ndarray, optional
         Probabilities at which to compute quantiles. Default is `[0, 0.25, 0.5, 0.75, 1.0]`.
     type : int, optional
-        Quantile algorithm. Currently only ``7`` (linear interpolation, R's
-        default) and ``4`` (midpoint) are supported.
+        Quantile algorithm in the Hyndman & Fan (1996) sense, matching R's
+        ``quantile()`` types 1–9. Default ``7`` (linear interpolation, R's
+        default).
 
     Returns
     -------
@@ -1888,17 +1906,27 @@ def circ_quantile(
     ----------
     - R's `quantile.circular` from the `circular` package.
     - Fisher (1993), Section 2.3.2.
+    - Hyndman, R. J. & Fan, Y. (1996). Sample quantiles in statistical
+      packages. *American Statistician*, 50, 361–365.
     """
 
-    if type == 7:
-        np_method = "linear"
-    elif type == 4:
-        np_method = "midpoint"
-    else:
+    # R quantile type → numpy method name. numpy supports all 9.
+    _NP_METHOD_BY_TYPE = {
+        1: "inverted_cdf",
+        2: "averaged_inverted_cdf",
+        3: "closest_observation",
+        4: "interpolated_inverted_cdf",
+        5: "hazen",
+        6: "weibull",
+        7: "linear",
+        8: "median_unbiased",
+        9: "normal_unbiased",
+    }
+    if type not in _NP_METHOD_BY_TYPE:
         raise ValueError(
-            f"Unsupported quantile `type={type}`; only 7 (linear) and 4 "
-            "(midpoint) are implemented."
+            f"Unsupported quantile `type={type}`; expected an integer in 1–9."
         )
+    np_method = _NP_METHOD_BY_TYPE[type]
 
     # Convert to numpy array
     alpha = np.asarray(alpha)
