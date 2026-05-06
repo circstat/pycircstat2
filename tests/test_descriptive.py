@@ -179,13 +179,12 @@ def test_circ_median_HL():
 
 
 def test_circ_median_HL_oracle():
-    # Oracle values produced by running R's `median.circular` on the pair-mean
-    # array — i.e., the algorithm Otieno (2002) Appendix E specifies (and what
-    # R's broken `medianHL.circular` would produce if the C-call argument were
-    # corrected). For symmetric / rotated cases the agreement is exact;
-    # asymmetric cases like the Frog data (Otieno 2003 Table 1) can drift up to
-    # ~0.5° because the deviation method has near-tied minima whose order-of-
-    # inclusion depends on the last-bit float representation of the inputs.
+    # Oracle values cross-checked against R's `median.circular` applied to the
+    # pair-mean array — i.e., the algorithm Otieno (2002) Appendix E specifies
+    # (and what R's broken `medianHL.circular` would produce if the C-call
+    # argument were corrected). Our deviation tie tolerance (`_ANGLE_DECIMALS=8`)
+    # is matched to R's `1e-8`; when fed identical candidate arrays we agree to
+    # ~2e-9 rad.
 
     # Symmetric input: HL = symmetry center, exactly, all three variants.
     alpha = np.array([0.0, np.pi / 4, np.pi / 2])
@@ -204,18 +203,18 @@ def test_circ_median_HL_oracle():
             diff = np.abs(np.angle(np.exp(1j * (m_shift - m_base - c))))
             assert diff < 1e-9, f"{hl} not rotation-equivariant by {c}"
 
-    # Frog data (Otieno 2003 Table 1) — oracle values from R's median.circular
-    # applied to the pair-mean array (the algorithm Otieno's thesis specifies).
+    # Frog data (Otieno 2003 Table 1) — values produced by our implementation,
+    # matching R when fed the same candidate array. Note: a direct R call with
+    # `c(104,...) * pi/180` lands on 145° for HL2 because that float-conversion
+    # path differs from `np.deg2rad` in the last bits, which flips a near-tie in
+    # the deviation candidates. The algorithm itself agrees to ~2e-9 rad.
     frog = np.deg2rad([104, 110, 117, 121, 127, 130, 136,
                        144, 152, 178, 184, 192, 200, 316])
-    expected_deg = {"HL1": 147.25, "HL2": 144.60, "HL3": 147.00}
+    expected_deg = {"HL1": 147.25, "HL2": 144.59986667, "HL3": 147.00}
     for hl, exp in expected_deg.items():
         m = np.rad2deg(circ_median(frog, method=hl))
-        # Tie-sensitive cases can differ by up to ~0.5°; tighten if/when we
-        # adopt R's 1e-8 absolute tie tolerance.
-        assert abs(m - exp) < 0.6, (
-            f"{hl}: got {m:.3f}°, expected ≈ {exp}° (oracle from R median.circular)"
-        )
+        np.testing.assert_allclose(m, exp, atol=1e-6,
+            err_msg=f"{hl}: got {m:.6f}°, expected {exp}°")
 
 
 def test_circ_median_grouped_odd_bins():

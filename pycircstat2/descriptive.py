@@ -6,8 +6,9 @@ from scipy.stats import chi2, norm
 from .utils import angmod, is_within_circular_range
 
 # Decimal places for rounding angular comparisons in median routines.
-# 5 decimals ≈ 1e-5 rad ≈ 6e-4° tolerance.
-_ANGLE_DECIMALS = 5
+# 8 decimals ≈ 5e-9 rad ≈ 3e-7° tolerance, matching the 1e-8 absolute tie
+# tolerance used by R's `median.circular`.
+_ANGLE_DECIMALS = 8
 
 # Switch to chunked pairwise mean deviation above this many points to bound memory.
 _MEAN_DEV_CHUNK_THRESHOLD = 10000
