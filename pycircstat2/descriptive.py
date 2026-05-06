@@ -99,8 +99,8 @@ def circ_mean(
     Cbar, Sbar = compute_C_and_S(alpha, w)
     r = circ_r(alpha, w, Cbar, Sbar)
 
-    # angular mean
-    if np.isclose(r, 0):
+    # angular mean (tolerance matches `circ_mean_and_r` for consistency)
+    if np.isclose(r, 0.0, atol=1e-12):
         m = np.nan
     else:
         m = np.arctan2(Sbar, Cbar)
@@ -1468,8 +1468,10 @@ def circ_kappa(r: float, n: Union[int, None] = None) -> float:
         if nom != 0:
             kappa = 1 / nom
         else:
-            # not sure how to handle this...
-            kappa = 1e-16
+            # nom = r(r-1)(r-3); on the support r ∈ [0, 1] the only way to land
+            # here is r == 1, i.e. all observations coincident. The MLE then
+            # diverges (κ → ∞ as r → 1).
+            kappa = np.inf
 
     # eq 4.41
     if n is not None:
@@ -1780,8 +1782,9 @@ def circ_range(alpha: np.ndarray) -> np.float64:
     """
     Compute the circular range of angular data.
 
-    The circular range is the difference between the maximum and minimum angles
-    in the dataset, adjusted for circular continuity.
+    The circular range is ``2π`` minus the largest gap between consecutive
+    sorted angles — equivalently, the angular extent of the smallest arc
+    containing every observation.
 
     Parameters
     ----------
@@ -1791,7 +1794,8 @@ def circ_range(alpha: np.ndarray) -> np.float64:
     Returns
     -------
     float
-        Circular range, a measure of clustering (higher = more clustered).
+        Circular range in radians, in ``[0, 2π)``. **Lower values indicate
+        tighter clustering**; values near ``2π`` indicate near-uniform spread.
 
     Reference
     ---------

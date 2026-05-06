@@ -6,7 +6,9 @@ from pycircstat2.descriptive import (
     angular_std,
     circ_dispersion,
     circ_dist,
+    circ_kappa,
     circ_kurtosis,
+    circ_mean,
     circ_mean_and_r,
     circ_mean_and_r_of_means,
     circ_mean_ci,
@@ -462,6 +464,33 @@ def test_circ_range():
 
     x = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.6, 36.0, 36.0, 36.0, 36.0, 36.0, 36.0, 72.0, 108.0, 108.0, 169.2, 324.0])
     np.testing.assert_approx_equal(circ_range(x), 4.584073, significant=2)
+
+    # Lower values mean tighter clustering (the docstring used to claim the
+    # opposite). Confirm the direction with two contrasting samples.
+    clustered = np.deg2rad([10, 12, 15, 18, 20])
+    spread = np.deg2rad([0, 90, 180, 270])
+    assert circ_range(clustered) < circ_range(spread)
+    np.testing.assert_allclose(circ_range(clustered), np.deg2rad(10), atol=1e-9)
+
+
+def test_circ_mean_zero_resultant_consistency():
+    # `circ_mean` and `circ_mean_and_r` should agree on whether r ≈ 0 means the
+    # mean is undefined. They previously used different tolerances (1e-8 vs
+    # 1e-12), so the same input could yield NaN from one and an angle from the
+    # other.
+    rng = np.random.default_rng(0)
+    alpha = np.deg2rad([0, 120, 240]) + rng.standard_normal(3) * 1e-10
+    m1 = circ_mean(alpha)
+    m2, _ = circ_mean_and_r(alpha)
+    assert np.isnan(m1) == np.isnan(m2)
+
+
+def test_circ_kappa_concentrated_returns_inf():
+    # All observations coincident → r = 1 → MLE diverges. Used to silently
+    # return 1e-16 (i.e. "uniform"), which is the opposite of the truth.
+    assert np.isinf(circ_kappa(1.0))
+    # Sanity: away from r=1 we still get finite, positive κ.
+    assert np.isfinite(circ_kappa(0.99)) and circ_kappa(0.99) > 0
 
 def test_circ_quantile():
     """Test `circ_quantile` with known input and compare with R output."""
