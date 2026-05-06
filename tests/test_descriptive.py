@@ -178,6 +178,46 @@ def test_circ_median_HL():
         circ_median(alpha, method="HL4")
 
 
+def test_circ_median_HL_oracle():
+    # Oracle values produced by running R's `median.circular` on the pair-mean
+    # array — i.e., the algorithm Otieno (2002) Appendix E specifies (and what
+    # R's broken `medianHL.circular` would produce if the C-call argument were
+    # corrected). For symmetric / rotated cases the agreement is exact;
+    # asymmetric cases like the Frog data (Otieno 2003 Table 1) can drift up to
+    # ~0.5° because the deviation method has near-tied minima whose order-of-
+    # inclusion depends on the last-bit float representation of the inputs.
+
+    # Symmetric input: HL = symmetry center, exactly, all three variants.
+    alpha = np.array([0.0, np.pi / 4, np.pi / 2])
+    for hl in ["HL1", "HL2", "HL3"]:
+        np.testing.assert_allclose(
+            circ_median(alpha, method=hl), np.pi / 4, atol=1e-9
+        )
+
+    # Rotation equivariance: HL(α + c) ≡ HL(α) + c (mod 2π).
+    rng = np.random.default_rng(7)
+    base = np.deg2rad(120) + 0.4 * rng.standard_normal(20)
+    for c in [0.3, 1.7, -0.9]:
+        for hl in ["HL1", "HL2", "HL3"]:
+            m_base = circ_median(base, method=hl)
+            m_shift = circ_median(base + c, method=hl)
+            diff = np.abs(np.angle(np.exp(1j * (m_shift - m_base - c))))
+            assert diff < 1e-9, f"{hl} not rotation-equivariant by {c}"
+
+    # Frog data (Otieno 2003 Table 1) — oracle values from R's median.circular
+    # applied to the pair-mean array (the algorithm Otieno's thesis specifies).
+    frog = np.deg2rad([104, 110, 117, 121, 127, 130, 136,
+                       144, 152, 178, 184, 192, 200, 316])
+    expected_deg = {"HL1": 147.25, "HL2": 144.60, "HL3": 147.00}
+    for hl, exp in expected_deg.items():
+        m = np.rad2deg(circ_median(frog, method=hl))
+        # Tie-sensitive cases can differ by up to ~0.5°; tighten if/when we
+        # adopt R's 1e-8 absolute tie tolerance.
+        assert abs(m - exp) < 0.6, (
+            f"{hl}: got {m:.3f}°, expected ≈ {exp}° (oracle from R median.circular)"
+        )
+
+
 def test_circ_median_grouped_odd_bins():
     # _circ_median_grouped previously used `np.roll(w, 2)` with the wrong sign,
     # which gave correct answers only by coincidence for n_bins == 5.
