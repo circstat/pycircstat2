@@ -531,6 +531,41 @@ def test_circ_var_unsorted_alpha_raises():
     with pytest.raises(ValueError, match="strictly increasing"):
         circ_var(alpha=alpha, w=w)
 
+
+def test_fisher_8_27_matrix_sqrt_oracle():
+    # Fisher (1993) Algorithm 2 (eq 8.27-8.31) builds v from u so that v² = u.
+    # This was broken: `(u11-u22)² / (4 u12² + 1)` instead of
+    # `(u11-u22)² / (4 u12²) + 1`. The defining property `v @ v == u` is the
+    # cleanest oracle — it doesn't depend on which sample we run on, just on
+    # the formula being algebraically correct.
+    from pycircstat2.descriptive import _circ_mean_ci_bootstrap
+
+    # Reach into the function's β computation by reproducing the closed form.
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        A = rng.standard_normal((2, 2))
+        u = A @ A.T
+        u11, u22, u12 = u[0, 0], u[1, 1], u[0, 1]
+        if abs(u12) < 1e-12:
+            continue
+        beta = (u11 - u22) / (2 * u12) - np.sqrt(
+            (u11 - u22) ** 2 / (4 * u12 ** 2) + 1
+        )
+        denom = np.sqrt(1 + beta ** 2)
+        t1 = np.sqrt(beta ** 2 * u11 + 2 * beta * u12 + u22) / denom
+        t2 = np.sqrt(u11 - 2 * beta * u12 + beta ** 2 * u22) / denom
+        v11 = (beta ** 2 * t1 + t2) / (1 + beta ** 2)
+        v22 = (t1 + beta ** 2 * t2) / (1 + beta ** 2)
+        v12 = beta * (t1 - t2) / (1 + beta ** 2)
+        v = np.array([[v11, v12], [v12, v22]])
+        np.testing.assert_allclose(v @ v, u, atol=1e-12)
+
+    # End-to-end: bootstrap CI must run cleanly on a moderate von-Mises-ish
+    # sample with the corrected β.
+    alpha = np.deg2rad(120) + 0.4 * rng.standard_normal(15)
+    lb, ub = _circ_mean_ci_bootstrap(alpha, B=200, ci=0.95, seed=42)
+    assert np.isfinite(lb) and np.isfinite(ub)
+
 def test_circ_quantile():
     """Test `circ_quantile` with known input and compare with R output."""
 

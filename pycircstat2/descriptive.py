@@ -1228,8 +1228,9 @@ def _circ_mean_ci_bootstrap(
     if np.isclose(u12, 0.0):
         beta_param = 0.0
     else:
-        discriminant = (u11 - u22) ** 2 / (4 * u12**2 + 1)
-        beta_param = (u11 - u22) / (2 * u12) - np.sqrt(discriminant)  # eq (8.27)
+        # Fisher (1993) eq (8.27): β = (u11-u22)/(2 u12) - sqrt((u11-u22)²/(4 u12²) + 1)
+        discriminant = (u11 - u22) ** 2 / (4 * u12**2) + 1
+        beta_param = (u11 - u22) / (2 * u12) - np.sqrt(discriminant)
 
     denom = np.sqrt(1 + beta_param**2)
     t1 = np.sqrt(np.clip(beta_param**2 * u11 + 2 * beta_param * u12 + u22, 0.0, None)) / denom
@@ -1277,8 +1278,9 @@ def _circ_mean_resample(alpha, z0, v0, rng):
     if np.isclose(u12, 0.0):
         beta_param = 0.0
     else:
-        discriminant = (u11 - u22) ** 2 / (4 * u12**2 + 1)
-        beta_param = (u11 - u22) / (2 * u12) - np.sqrt(discriminant)  # eq(8.27)
+        # Fisher (1993) eq (8.32): same β as eq (8.27).
+        discriminant = (u11 - u22) ** 2 / (4 * u12**2) + 1
+        beta_param = (u11 - u22) / (2 * u12) - np.sqrt(discriminant)
 
     denom = np.sqrt(1 + beta_param**2)
     denom1 = np.sqrt(
