@@ -141,6 +141,43 @@ def test_circ_median():
     np.testing.assert_allclose(circ_median(centers, w), centers[2], atol=1e-12)
 
 
+def test_circ_median_HL():
+    # Reference: Otieno (2002) thesis §3.4 + Appendix E.
+    # HL = circular median of pairwise circular means; HL1/HL2/HL3 differ in
+    # which pairs are used.
+
+    rng = np.random.default_rng(0)
+
+    # On unimodal von-Mises-ish data, HL1/HL2/HL3 should agree closely with each
+    # other and with the deviation method (within ~5° for n=50, κ≈10).
+    alpha = np.deg2rad(120) + 0.3 * rng.standard_normal(50)
+    alpha = alpha % (2 * np.pi)
+    m_dev = circ_median(alpha, method="deviation")
+    for hl in ["HL1", "HL2", "HL3"]:
+        m_hl = circ_median(alpha, method=hl)
+        diff = np.abs(np.angle(np.exp(1j * (m_hl - m_dev))))
+        assert diff < np.deg2rad(5), f"{hl} too far from deviation median"
+
+    # HL2 and HL3 share the same support (HL1 pair-means + observations); HL3
+    # just doubles the HL1 pair-means. For sharply concentrated data the inner
+    # deviation-method median lands on the same dense cluster.
+    sharp = np.deg2rad(45) + 0.05 * rng.standard_normal(20)
+    m2 = circ_median(sharp, method="HL2")
+    m3 = circ_median(sharp, method="HL3")
+    np.testing.assert_allclose(m2, m3, atol=np.deg2rad(2))
+
+    # Antipodal pair (0, π) must be dropped, not crash. With only an antipodal
+    # pair, HL1's candidate set vanishes → NaN. HL2/HL3 still have the
+    # observations, which form a 2-point uniform set → also NaN by deviation
+    # method's uniform check. Just assert no exception.
+    for hl in ["HL1", "HL2", "HL3"]:
+        circ_median(np.array([0.0, np.pi]), method=hl)
+
+    # Unsupported method raises.
+    with pytest.raises(ValueError):
+        circ_median(alpha, method="HL4")
+
+
 def test_circ_median_grouped_odd_bins():
     # _circ_median_grouped previously used `np.roll(w, 2)` with the wrong sign,
     # which gave correct answers only by coincidence for n_bins == 5.

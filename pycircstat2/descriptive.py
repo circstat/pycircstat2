@@ -544,10 +544,13 @@ def circ_median(
     r"""
     Circular median.
 
-    Two ways to compute the circular median for ungrouped data (Fisher, 1993):
+    For ungrouped data, the supported methods are (Fisher, 1993; Otieno, 2002):
 
-    - `deviation`: find the angle that has the minimal mean deviation.
-    - `count`: find the angle that has the equally devide the number of points on the right and left of it.
+    - `deviation`: angle with minimal circular mean deviation.
+    - `count`: angle that splits the sample equally on either side.
+    - `HL1`, `HL2`, `HL3`: Hodges-Lehmann estimates — the deviation-method
+      median of pairwise circular means, with HL1/HL2/HL3 differing in which
+      pairs are used (no self-pairs / with self-pairs / all ordered pairs).
 
     For grouped data, we use the method described in Mardia (1972).
 
@@ -558,11 +561,9 @@ def circ_median(
     w: np.array (n,) or None
         Frequencies or weights
     method: str
-        - For ungrouped data, there are two ways
-        - To compute the medians:
-            - deviation
-            - count
-        - Set to `none` to return np.nan.
+        - For ungrouped data: ``deviation`` (default), ``count``, ``HL1``,
+          ``HL2``, or ``HL3``.
+        - Set to ``none`` (or ``None``) to return ``np.nan``.
     return_average: bool
         Return the average of the median
     average_method: str
@@ -578,6 +579,9 @@ def circ_median(
     ----------
     - For ungrouped data: Section 2.3.2 of Fisher (1993)
     - For grouped data: Mardia (1972)
+    - For HL1/HL2/HL3: Otieno, B. S. (2002), "An Alternative Estimate of
+      Preferred Direction for Circular Data", PhD thesis, Virginia Tech,
+      §3.4 and Appendix E.
     """
 
     if w is None:
@@ -603,11 +607,14 @@ def circ_median(
         # find the angle that has the minimal mean deviation
         elif method == "deviation":
             median = _circ_median_mean_deviation(alpha)
+        elif method in ("HL1", "HL2", "HL3"):
+            median = _circ_median_HL(alpha, method)
         elif method == "none" or method is None:
             return float(np.nan)
         else:
             raise ValueError(
-                f"Method `{method}` for `circ_median` is not supported.\nTry `deviation` or `count`"
+                f"Method `{method}` for `circ_median` is not supported.\n"
+                "Try `deviation`, `count`, `HL1`, `HL2`, or `HL3`."
             )
 
     if return_average:
@@ -753,6 +760,53 @@ def _circ_median_mean_deviation(alpha: np.ndarray) -> Union[float,np.ndarray]:
         median = alpha[idx_candidates]
 
     return median
+
+
+def _circ_median_HL(
+    alpha: np.ndarray,
+    method: str,
+) -> Union[float, np.ndarray]:
+    """
+    Hodges-Lehmann circular median (Otieno, 2002).
+
+    The HL estimate is the circular median of pairwise circular means. The three
+    variants differ in which pairs are used (Otieno thesis §3.4, Appendix E):
+
+    - ``HL1``: pairs ``(i, j)`` with ``i < j`` — ``n(n-1)/2`` means.
+    - ``HL2``: HL1 plus the observations themselves (self-pairs) — ``n(n+1)/2``
+      means. This is the canonical Hodges-Lehmann choice.
+    - ``HL3``: HL1 ∪ HL2, equivalent to all ``n²`` ordered pairs — HL1 means
+      counted twice plus each observation once.
+
+    Pairs whose circular mean is undefined (antipodal: ``sinα+sinβ ≈ 0`` and
+    ``cosα+cosβ ≈ 0``) are dropped.
+
+    The inner median over the pair-mean array is the Fisher/Mardia deviation
+    method, matching ``cmedM`` in Otieno's reference S-Plus code (Appendix E.9).
+    """
+    n = len(alpha)
+    sin_a = np.sin(alpha)
+    cos_a = np.cos(alpha)
+
+    i_idx, j_idx = np.triu_indices(n, k=1)
+    sin_sum = sin_a[i_idx] + sin_a[j_idx]
+    cos_sum = cos_a[i_idx] + cos_a[j_idx]
+    valid = np.hypot(sin_sum, cos_sum) > 10 ** (-_ANGLE_DECIMALS)
+    pair_means = np.arctan2(sin_sum[valid], cos_sum[valid])
+
+    if method == "HL1":
+        candidates = pair_means
+    elif method == "HL2":
+        candidates = np.concatenate([pair_means, alpha])
+    elif method == "HL3":
+        candidates = np.concatenate([pair_means, pair_means, alpha])
+    else:
+        raise ValueError(f"Unknown HL method: {method!r}")
+
+    if candidates.size == 0:
+        return float(np.nan)
+
+    return _circ_median_mean_deviation(angmod(candidates))
 
 
 def circ_mean_deviation_chunked(
