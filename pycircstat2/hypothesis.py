@@ -391,6 +391,40 @@ def _coerce_circular_samples(samples: Sequence[Any]) -> list[_CircularSample]:
     return normalized
 
 
+def _coerce_sample_arrays(samples: Sequence[Any]) -> list[np.ndarray]:
+    """Coerce a sequence of samples into a list of 1-D float angle arrays.
+
+    Lightweight counterpart to ``_coerce_circular_samples`` for tests that need
+    only the raw angles (no weights or resultants). Each sample may be an
+    array-like (``np.ndarray``, list, ...) or a ``Circular`` object; the latter
+    is unwrapped to its ``alpha``. Plain arrays/lists are the canonical input —
+    ``Circular`` support is a convenience.
+    """
+    if not isinstance(samples, Sequence) or len(samples) == 0:
+        raise ValueError("`samples` must be a non-empty sequence of array-like samples.")
+
+    try:
+        from .base import Circular
+    except Exception:  # pragma: no cover - defensive import guard
+        Circular = None  # type: ignore
+
+    arrays: list[np.ndarray] = []
+    for sample in samples:
+        if Circular is not None and isinstance(sample, Circular):  # type: ignore[arg-type]
+            arr = np.asarray(sample.alpha, dtype=float)
+        else:
+            arr = np.asarray(sample, dtype=float)
+        if arr.ndim != 1:
+            raise ValueError("Each sample must be a one-dimensional array of angles.")
+        if arr.size == 0:
+            raise ValueError("Each sample must contain at least one observation.")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Angles must be finite.")
+        arrays.append(arr)
+
+    return arrays
+
+
 def rayleigh_test(
     alpha: Optional[np.ndarray] = None,
     w: Optional[np.ndarray] = None,
@@ -841,8 +875,10 @@ def omnibus_test(
 
     denom = n - 2 * m
     if denom <= 0:
-        logp = -np.inf
-        pval = 0.0
+        # m ≈ n/2: the data is maximally uniform and the analytic p-value
+        # (valid only for m well below n/2) degenerates to 0. There is no
+        # evidence against uniformity here, so do not reject.
+        pval = 1.0
         A = np.inf
     else:
         logp = (
@@ -1313,7 +1349,7 @@ def wallraff_test(
 
 
 def circ_anova(
-    samples: list[np.ndarray],
+    samples: Sequence[Any],
     method: str = "F-test",
     kappa: Optional[float] = None,
     f_mod: bool = True,
@@ -1327,8 +1363,9 @@ def circ_anova(
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        List of arrays, where each array contains circular data (angles in radians) for a group.
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     method : str, optional
         The test statistic to use. Options:
         - `"F-test"` (default): High-concentration F-test (Stephens 1972).
@@ -1353,6 +1390,7 @@ def circ_anova(
     """
 
     # Number of groups
+    samples = _coerce_sample_arrays(samples)
     k = len(samples)
     if k < 2:
         raise ValueError("At least two groups are required for ANOVA.")
@@ -2113,7 +2151,7 @@ def concentration_test(
 
 
 def rao_homogeneity_test(
-    samples: list,
+    samples: Sequence[Any],
     alpha: float = 0.05,
     verbose: bool = False,
 ) -> RaoHomogeneityTestResult:
@@ -2125,8 +2163,9 @@ def rao_homogeneity_test(
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        A list where each entry is a vector of angular values (in radians).
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     alpha : float, optional
         Significance level for the hypothesis test. Default is 0.05.
     verbose : bool, optional
@@ -2142,12 +2181,11 @@ def rao_homogeneity_test(
     Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
     Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
     """
-    if not isinstance(samples, list) or not all(
-        isinstance(s, np.ndarray) for s in samples
-    ):
-        raise ValueError("Input must be a list of numpy arrays.")
+    samples = _coerce_sample_arrays(samples)
 
     k = len(samples)  # Number of samples
+    if k < 2:
+        raise ValueError("At least two groups are required for the test.")
     n = np.array([len(s) for s in samples])  # Sample sizes
 
     # Compute mean cosine and sine values for each sample
@@ -2520,7 +2558,7 @@ def harrison_kanji_test(
     return result
 
 
-def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualKappaTestResult:
+def equal_kappa_test(samples: Sequence[Any], verbose: bool = False) -> EqualKappaTestResult:
     """
     Test for Homogeneity of Concentration Parameters (κ) in Circular Data.
 
@@ -2529,8 +2567,9 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        List of circular data arrays (angles in radians) for different groups.
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     verbose : bool, optional
         If `True`, prints the test summary.
 
@@ -2554,13 +2593,10 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
     """
 
     # Number of groups
-    k = len(samples)
+    arrays = _coerce_sample_arrays(samples)
+    k = len(arrays)
     if k < 2:
         raise ValueError("At least two groups are required for the test.")
-
-    arrays = [np.asarray(group, dtype=float) for group in samples]
-    if any(arr.size == 0 for arr in arrays):
-        raise ValueError("Each group must contain at least one observation.")
 
     # Sample sizes
     ns = np.array([arr.size for arr in arrays])
@@ -2644,7 +2680,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
 
 
 def common_median_test(
-    samples: list[np.ndarray],
+    samples: Sequence[Any],
     alpha: float = 0.05,
     verbose: bool = False,
 ) -> CommonMedianTestResult:
@@ -2656,8 +2692,9 @@ def common_median_test(
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        List of circular data arrays (angles in radians) for different groups.
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     alpha : float, optional
         Significance level for deciding whether to reject the null hypothesis (default 0.05).
     verbose : bool, optional
@@ -2678,13 +2715,10 @@ def common_median_test(
     if not (0 < alpha < 1):
         raise ValueError("`alpha` must be between 0 and 1.")
 
-    k = len(samples)
+    arrays = _coerce_sample_arrays(samples)
+    k = len(arrays)
     if k < 2:
         raise ValueError("At least two groups are required for the test.")
-
-    arrays = [np.asarray(group, dtype=float) for group in samples]
-    if any(arr.size == 0 for arr in arrays):
-        raise ValueError("Each group must contain at least one observation.")
 
     # Sample sizes
     ns = np.array([arr.size for arr in arrays])

@@ -14,6 +14,7 @@ from pycircstat2.hypothesis import (
     circ_range_test,
     common_median_test,
     concentration_test,
+    equal_kappa_test,
     harrison_kanji_test,
     kuiper_test,
     omnibus_test,
@@ -848,3 +849,59 @@ def test_equal_median_small_sample():
     result = common_median_test([alpha1, alpha2])
     assert result.reject is False
     assert not np.isnan(result.common_median)
+
+
+def test_omnibus_evenly_spaced_not_rejected():
+    """Maximally uniform data (m ≈ n/2) drives the analytic formula's
+    denominator to zero; the test must not spuriously reject uniformity."""
+    alpha = np.linspace(0.0, 2 * np.pi, 8, endpoint=False)
+    result = omnibus_test(alpha)
+    assert result.pval == 1.0
+
+
+def test_multisample_input_standards():
+    """circ_anova / rao_homogeneity_test / equal_kappa_test / common_median_test
+    must accept np.ndarray, list-of-lists, and Circular objects interchangeably."""
+    rng = np.random.default_rng(0)
+    groups = [
+        rng.vonmises(0.0, 3, 40),
+        rng.vonmises(0.5, 3, 40),
+        rng.vonmises(1.0, 3, 40),
+    ]
+    as_lists = [g.tolist() for g in groups]
+    as_circular = [Circular(g, unit="radian") for g in groups]
+
+    for fn in (
+        lambda s: circ_anova(s).statistic,
+        lambda s: rao_homogeneity_test(s).H_polar,
+        lambda s: equal_kappa_test(s).statistic,
+        lambda s: common_median_test(s).statistic,
+    ):
+        ref = fn(groups)
+        np.testing.assert_allclose(fn(as_lists), ref, rtol=1e-12)
+        np.testing.assert_allclose(fn(as_circular), ref, rtol=1e-12)
+
+
+def test_watson_u2_test_unsorted_input():
+    """watson_u2_test must not depend on the input ordering of the angles."""
+    a = np.array([0.1, 2.0, 1.0, 3.0, 0.5])
+    b = np.array([2.5, 0.2, 1.5, 2.8, 0.8])
+    unsorted = watson_u2_test([a, b]).U2
+    ordered = watson_u2_test([np.sort(a), np.sort(b)]).U2
+    np.testing.assert_allclose(unsorted, ordered, rtol=1e-12)
+
+
+def test_wallraff_test_grouped_matches_expanded():
+    """Weighted/grouped samples must rank-split by total weight, matching the
+    equivalent weight-expanded plain arrays."""
+    ang = np.deg2rad(np.array([10.0, 30.0, 50.0, 70.0, 90.0]))
+    w1 = np.array([2, 3, 1, 1, 1])
+    w2 = np.array([1, 1, 2, 2, 1])
+    grouped = wallraff_test(
+        samples=[Circular(ang, w=w1, unit="radian"), Circular(ang, w=w2, unit="radian")],
+        angle=0.0,
+    ).U
+    expanded = wallraff_test(
+        samples=[np.repeat(ang, w1), np.repeat(ang, w2)], angle=0.0
+    ).U
+    np.testing.assert_allclose(grouped, expanded, rtol=1e-12)
