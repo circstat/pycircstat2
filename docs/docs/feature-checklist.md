@@ -37,7 +37,7 @@
 |-----------------------------|-------------------------------------|---------------------|------------|-------------------|---------------|-----------------|
 | **Mean Direction**          |                                     |                     |            |                   |               |                 |
 | Rayleigh Test               | $\rho=0$ [^uniform]                 | `rayleigh_test`     | `rayleigh` | `circ_rtest`      | `r.test`      | `rayleigh.test` |
-| V-Test                      | $\rho=0$                            | `V_test`            | `vtest`    | `circ_vtest`      | `v0.test`     | -               |
+| V-Test                      | $\rho=0$                            | `V_test`            | `vtest`    | `circ_vtest`      | `v0.test`     | `rayleigh.test(., mu=)`[^vtest-circular] |
 | One-sample Test             | $\tilde\mu=μ_0$                     | `one_sample_test`   | `mtest`    | `circ_mtest`      | -             | -               |
 | Change Point Test           | no change point                     | `change_point_test` | -          | -                 | `change.pt`   | `change.point`  |
 | **Median Direction**        |                                     |                     |            |                   |               |                 |
@@ -61,6 +61,7 @@
 | Equal Kappa Test                | $\kappa_1 = \dots = \kappa_n$                 | `equal_kappa_test`           | -                 | -                 | -                 | `equal.kappa.test`     |
 | **Distribution Homogeneity**    |                                               |                              |                   |                   |                   |                        |
 | Watson's U2 Test                | $F_1 = F_2$ [^F]                              | `watson_u2_test`             | -                 | -                 | `watson.two`      | `watson.two.test`      |
+| Two-sample Kuiper Test[^kuiper-2samp] | $F_1 = F_2$                             | -                            | `kuiper`          | `circ_kuipertest` | -                 | -                      |
 | Wallraff Test                   | $F_1 = F_2$                                   | `wallraff_test`              | -                 | -                 | -                 | `wallraff.test`        |
 | Wheeler-Watson Test             | $F_1 = F_2$                                   | `wheeler_watson_test`        | -                 | -                 | -                 | `watson.wheeler.test`  |
 | Angular Randomization Test      | $F_1 = F_2$                                   | `angular_randomisation_test` | -                 | -                 | -                 | -                      |
@@ -70,9 +71,10 @@
 
 | Feature             | H0         | PyCircStat2        | PyCircStat   | CircStat (MATLAB) | CircStats (R) | circular (R)       |
 |---------------------|------------|--------------------|--------------|-------------------|---------------|--------------------|
-| Kuiper’s Test       | $\rho = 0$ | `kuiper_test`      | `kuiper`     | `circ_kuipertest` | `kuiper`      | `kuiper.test`      |
+| Kuiper’s Test (one-sample)[^kuiper-1samp] | $\rho = 0$ | `kuiper_test`      | -            | -                 | `kuiper`      | `kuiper.test`      |
 | Rao’s Spacing Test  | $\rho = 0$ | `rao_spacing_test` | `raospacing` | `circ_raotest`    | `rao.spacing` | `rao.spacing.test` |
 | Watson's Test       | $\rho = 0$ | `watson_test`      | -            | -                 | `watson`      | `watson.test`      |
+| Watson's Test (von Mises GoF)[^vm-gof] | von Mises | -                  | -            | -                 | `watson(dist="vm")` | `watson.test(dist="vonmises")` |
 | Circular Range Test | $\rho = 0$ | `circ_range_test`  | -            | -                 | `circ_range`  | `range.circular`   |
 
 
@@ -192,3 +194,19 @@ All circular distributions assume angles are on ``[0, 2π)``. Inputs are automat
 [^cl-resp]: Circular response, linear predictor.
 [^lc-resp]: Linear response, circular predictor (harmonic regression à la
   Pewsey et al. 2014, §8.4).
+[^vtest-circular]: `circular`'s `rayleigh.test(x, mu = θ)` *is* the V-test: with
+  `mu` supplied it computes the modified Rayleigh statistic
+  `z₀ = √(2n)·mean(cos(x − θ))` and `p = 1 − Φ(z₀)`. Only the no-`mu` call is the
+  ordinary Rayleigh test. (Verified in `circular`'s `rayleigh.test.R`.)
+[^kuiper-1samp]: This row is the **one-sample** Kuiper test of uniformity (GoF vs the
+  circular uniform). PyCircStat's `kuiper` and MATLAB CircStat's `circ_kuipertest`
+  are **two-sample** tests (`H0: F₁ = F₂`) and belong in *Distribution Homogeneity*
+  below — they are not one-sample GoF tests, despite sharing the Kuiper name.
+[^kuiper-2samp]: The **two-sample** Kuiper test, the circular analogue of the
+  two-sample Kolmogorov–Smirnov test (`H0: the two samples share a distribution`;
+  sensitive to differences in location *or* dispersion). Distinct from the
+  one-sample Kuiper GoF in the goodness-of-fit section.
+[^vm-gof]: Goodness-of-fit against a **von Mises** null (not uniformity): estimate κ
+  by ML, probability-integral-transform the data through the fitted von Mises CDF,
+  then apply Watson's U². `circular`'s `watson.test(dist = "vonmises")` and CircStats'
+  `watson(dist = "vm")` both do this; the other packages test uniformity only.
