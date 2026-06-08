@@ -478,6 +478,9 @@ class ChangePointTestResult(TestResult):
     tmax: float
     k_t: int
     tave: float
+    pval_r: Optional[float] = None  # permutation p-value for rmax (mean-direction change)
+    pval_t: Optional[float] = None  # permutation p-value for tmax (concentration change)
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -2747,21 +2750,33 @@ def rao_homogeneity_test(
     return result
 
 
-def change_point_test(alpha: np.ndarray, verbose: bool = False) -> ChangePointTestResult:
+def change_point_test(
+    alpha: np.ndarray,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> ChangePointTestResult:
     """
     Perform a change point test for mean direction, concentration, or both.
 
     Parameters
     ----------
     alpha : np.ndarray
-        Vector of angular measurements in radians.
+        Vector of angular measurements in radians (in sequence order).
+    n_resamples : int, optional
+        If ``>= 1``, permutation p-values for the rmax and tmax statistics are
+        estimated from that many random reorderings of the sequence (exchangeable
+        under H0 of no change point). Default ``0`` → no p-values.
+    seed : SeedLike, optional
+        Seed for the permutation RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If ``True``, prints test details and summary statistics.
 
     Returns
     -------
     ChangePointTestResult
-        Dataclass containing the change point statistics.
+        Dataclass containing the change-point statistics and (when requested) the
+        permutation p-values ``pval_r`` (mean direction) and ``pval_t`` (concentration).
 
     References
     ----------
@@ -2798,42 +2813,58 @@ def change_point_test(alpha: np.ndarray, verbose: bool = False) -> ChangePointTe
     if n < 4:
         raise ValueError("Sample size must be at least 4 for change point test.")
 
-    rho = est_rho(alpha)
+    def _stats(a: np.ndarray) -> tuple:
+        rho = est_rho(a)
+        R1, R2, V = np.zeros(n), np.zeros(n), np.zeros(n)
+        for k in range(1, n):
+            R1[k - 1] = est_rho(a[:k]) * k
+            R2[k - 1] = est_rho(a[k:]) * (n - k)
+            if 2 <= k <= (n - 2):
+                V[k - 1] = (k / n) * phi(R1[k - 1] / k) + ((n - k) / n) * phi(R2[k - 1] / (n - k))
+        R1[-1] = rho * n
+        R2[-1] = 0
+        R_diff = R1 + R2 - rho * n
+        # ``n >= 4`` is guaranteed by the guard above.
+        Vt = V[1 : n - 2]
+        return (
+            float(rho),
+            float(np.max(R_diff)),
+            int(np.argmax(R_diff)),
+            float(np.mean(R_diff)),
+            float(np.max(Vt)),
+            int(np.argmax(Vt)) + 1,
+            float(np.mean(Vt)),
+        )
 
-    R1, R2, V = np.zeros(n), np.zeros(n), np.zeros(n)
+    rho, rmax, k_r, rave, tmax, k_t, tave = _stats(alpha)
 
-    for k in range(1, n):
-        R1[k - 1] = est_rho(alpha[:k]) * k
-        R2[k - 1] = est_rho(alpha[k:]) * (n - k)
-
-        if 2 <= k <= (n - 2):
-            V[k - 1] = (k / n) * phi(R1[k - 1] / k) + ((n - k) / n) * phi(
-                R2[k - 1] / (n - k)
-            )
-
-    R1[-1] = rho * n
-    R2[-1] = 0
-
-    R_diff = R1 + R2 - rho * n
-    rmax = np.max(R_diff)
-    k_r = np.argmax(R_diff)
-    rave = np.mean(R_diff)
-
-    # ``n >= 4`` is guaranteed by the guard above.
-    V = V[1 : n - 2]
-    tmax = np.max(V)
-    k_t = np.argmax(V) + 1
-    tave = np.mean(V)
+    pval_r = pval_t = None
+    if n_resamples >= 1:
+        # Under H0 (no change point) the sequence is exchangeable; permute the order
+        # and count reorderings whose max statistic is at least the observed one.
+        rng = _init_rng(seed)
+        cnt_r = cnt_t = 1  # count the observed statistic itself
+        for _ in range(n_resamples):
+            perm = _stats(rng.permutation(alpha))
+            if perm[1] >= rmax:
+                cnt_r += 1
+            if perm[4] >= tmax:
+                cnt_t += 1
+        pval_r = cnt_r / (n_resamples + 1)
+        pval_t = cnt_t / (n_resamples + 1)
 
     result = ChangePointTestResult(
         n=int(n),
-        rho=float(rho),
-        rmax=float(rmax),
-        k_r=int(k_r),
-        rave=float(rave),
-        tmax=float(tmax),
-        k_t=int(k_t),
-        tave=float(tave),
+        rho=rho,
+        rmax=rmax,
+        k_r=k_r,
+        rave=rave,
+        tmax=tmax,
+        k_t=k_t,
+        tave=tave,
+        pval_r=pval_r,
+        pval_t=pval_t,
+        n_resamples=n_resamples,
     )
 
     if verbose:
@@ -2844,9 +2875,11 @@ def change_point_test(alpha: np.ndarray, verbose: bool = False) -> ChangePointTe
         print("")
         print(f"Sample size: {result.n}")
         print(f"Overall resultant length (ρ): {result.rho:.5f}")
-        print(f"Max R statistic: {result.rmax:.5f} at k = {result.k_r}")
+        r_p = f" (p = {result.pval_r:.4f})" if result.pval_r is not None else ""
+        t_p = f" (p = {result.pval_t:.4f})" if result.pval_t is not None else ""
+        print(f"Max R statistic: {result.rmax:.5f} at k = {result.k_r}{r_p}")
         print(f"Average R statistic: {result.rave:.5f}")
-        print(f"Max T statistic: {result.tmax:.5f} at k = {result.k_t}")
+        print(f"Max T statistic: {result.tmax:.5f} at k = {result.k_t}{t_p}")
         print(f"Average T statistic: {result.tave:.5f}")
 
     return result

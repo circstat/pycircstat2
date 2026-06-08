@@ -1359,3 +1359,28 @@ def test_mc_uniform_pvalues():
     p_int = omnibus_test(d8.alpha, n_resamples=500, seed=3).pval
     p_gen = omnibus_test(d8.alpha, n_resamples=500, seed=np.random.default_rng(3)).pval
     assert p_int == p_gen
+
+
+def test_change_point_permutation_pvalues():
+    """change_point_test(n_resamples>0) adds permutation p-values: rmax flags a
+    mean-direction change, tmax a concentration change; homogeneous data is not flagged."""
+    rng = np.random.default_rng(0)
+    mean_change = np.concatenate([rng.vonmises(0, 5, 15), rng.vonmises(np.pi, 5, 15)])
+    conc_change = np.concatenate([rng.vonmises(0, 12, 15), rng.vonmises(0, 0.4, 15)])
+    homog = rng.vonmises(0, 5, 30)
+
+    mc = change_point_test(mean_change, n_resamples=1999, seed=1)
+    assert mc.n_resamples == 1999
+    assert mc.pval_r < 0.05  # mean direction changed
+
+    cc = change_point_test(conc_change, n_resamples=1999, seed=1)
+    assert cc.pval_t < 0.05  # concentration changed (likelihood statistic)
+
+    hm = change_point_test(homog, n_resamples=1999, seed=1)
+    assert hm.pval_r > 0.05 and hm.pval_t > 0.05
+
+    # default = statistics only, no p-values; determinism
+    assert change_point_test(homog).pval_r is None
+    a = change_point_test(mean_change, n_resamples=300, seed=7)
+    b = change_point_test(mean_change, n_resamples=300, seed=np.random.default_rng(7))
+    assert a.pval_r == b.pval_r and a.pval_t == b.pval_t
