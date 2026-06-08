@@ -274,6 +274,8 @@ class WheelerWatsonTestResult(TestResult):
     W: float
     pval: float
     df: int
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -393,6 +395,8 @@ class ConcentrationTestResult(TestResult):
     pval: float
     df1: int
     df2: int
+    method: str = "asymptotic"  # "asymptotic" (F-test) | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -1344,6 +1348,8 @@ def watson_u2_test(
 
 def wheeler_watson_test(
     samples: Sequence[Any],
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> WheelerWatsonTestResult:
     """The Wheeler and Watson Two/Multi-Sample Test.
@@ -1358,13 +1364,23 @@ def wheeler_watson_test(
     samples: sequence
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
+    n_resamples: int
+        If ``0`` (default), the p-value uses the χ² approximation. If ``>= 1``, it is
+        estimated from that many label randomizations of the uniform scores
+        (recommended when any group has fewer than ~10 observations;
+        Pewsey et al. 2013, §7.5.3).
+
+    seed: SeedLike
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
+
     verbose: bool
         Print formatted results.
 
     Returns
     -------
     WheelerWatsonTestResult
-        Dataclass containing the W statistic, degrees of freedom, and p-value.
+        Dataclass containing the W statistic, degrees of freedom, p-value, ``method``
+        ("asymptotic"|"randomization"), and ``n_resamples``.
 
     Reference
     ---------
@@ -1372,43 +1388,46 @@ def wheeler_watson_test(
 
     Note
     ----
-    The current implementation doesn't consider ties in the data.
-    Can be improved with P144, Pewsey et al. (2013)
+    Ties are handled via midranks (Pewsey et al. 2013, P144).
     """
     normalized = _coerce_circular_samples(samples)
-
-    def get_circrank(alpha: np.ndarray, sample: _CircularSample, N: int) -> np.ndarray:
-        expanded = sample.expand()
-        rank_of_direction = (
-            np.squeeze([np.where(np.isclose(alpha, value))[0] for value in expanded]) + 1
-        )
-        return 2 * np.pi / N * rank_of_direction
-
-    N = sum(sample.n for sample in normalized)
-    expanded_samples = [sample.expand() for sample in normalized]
-    a, _ = np.unique(np.hstack(expanded_samples), return_counts=True)
-
-    circ_ranks = [get_circrank(a, sample, N) for sample in normalized]
-
-    k = len(circ_ranks)
-
-    if k == 2:
-        C = np.sum(np.cos(circ_ranks[0]))
-        S = np.sum(np.sin(circ_ranks[0]))
-        W = 2 * (N - 1) * (C**2 + S**2) / np.prod([sample.n for sample in normalized])
-    elif k >= 3:
-        W = 0.0
-        for i in range(k):
-            circ_rank = circ_ranks[i]
-            C = np.sum(np.cos(circ_rank))
-            S = np.sum(np.sin(circ_rank))
-            W += (C**2 + S**2) / normalized[i].n
-        W *= 2.0
-    else:
+    k = len(normalized)
+    if k < 2:
         raise ValueError("At least two samples are required for the Wheeler-Watson test.")
 
+    expanded_samples = [sample.expand() for sample in normalized]
+    ns = [e.size for e in expanded_samples]
+    N = sum(ns)
+
+    # Uniform (circular-rank) scores for the pooled sample; midranks handle ties.
+    pooled = np.concatenate(expanded_samples)
+    beta = 2 * np.pi * rankdata(pooled, method="average") / N
+    scores = np.column_stack([np.cos(beta), np.sin(beta)])  # one [cos, sin] row per obs
+    split_at = np.cumsum(ns)[:-1]
+    score_groups = np.split(scores, split_at)
+
+    def _wg(groups: list[np.ndarray]) -> float:
+        # 2 * Σ_k (C_k² + S_k²) / n_k. For k=2 this is a positive multiple of the
+        # special statistic `W` below, so the randomization p-value is unaffected.
+        return 2.0 * sum(
+            (g[:, 0].sum() ** 2 + g[:, 1].sum() ** 2) / g.shape[0] for g in groups
+        )
+
+    if k == 2:
+        C = score_groups[0][:, 0].sum()
+        S = score_groups[0][:, 1].sum()
+        W = 2 * (N - 1) * (C**2 + S**2) / (ns[0] * ns[1])
+    else:
+        W = _wg(score_groups)
+
     df = 2 * (k - 1)
-    pval = float(chi2.sf(W, df=df))
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        pval = _randomization_pval(_wg, scores, ns, _wg(score_groups), n_resamples, rng)
+        method = "randomization"
+    else:
+        pval = float(chi2.sf(W, df=df))
+        method = "asymptotic"
 
     if verbose:
         print("The Wheeler and Watson Two/Multi-Sample Test")
@@ -1417,9 +1436,11 @@ def wheeler_watson_test(
         print("HA: All samples are not from populations with the same angle.")
         print("")
         print(f"Test Statistics: {W:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WheelerWatsonTestResult(W=float(W), pval=pval, df=df)
+    return WheelerWatsonTestResult(
+        W=float(W), pval=pval, df=df, method=method, n_resamples=n_resamples
+    )
 
 
 def wallraff_test(
@@ -2210,13 +2231,12 @@ def binomial_test(
 def concentration_test(
     alpha1: np.ndarray,
     alpha2: np.ndarray,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> ConcentrationTestResult:
     """
-    Parametric two-sample test for concentration equality in circular data.
-
-    This test determines whether two von Mises-type samples have different
-    concentration parameters (i.e., different dispersions).
+    Two-sample test for concentration (dispersion) equality in circular data.
 
     - **H0**: The two samples have the same concentration parameter.
     - **H1**: The two samples have different concentration parameters.
@@ -2227,23 +2247,29 @@ def concentration_test(
         First sample of circular data (radians).
     alpha2 : np.ndarray
         Second sample of circular data (radians).
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from Batschelet's parametric F-test
+        (ported from MATLAB CircStat ``circ_ktest``; assumes von Mises samples with
+        combined r̄ > 0.7). If ``>= 1``, a distribution-free permutation p-value is
+        used instead: the deviations of each observation from its group mean are
+        pooled and randomly reassigned to the two groups, and the two-sided ratio
+        ``max(F, 1/F)`` is recomputed on each permutation (Pewsey et al. 2013, §7.4.3).
+        Recommended when the von Mises / high-concentration assumptions fail.
+    seed : SeedLike, optional
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If ``True``, prints test details and results.
 
     Returns
     -------
     ConcentrationTestResult
-        Dataclass with the F statistic, p-value, and associated degrees of freedom.
-
-    Notes
-    -----
-    - This test assumes that both samples follow von Mises distributions.
-    - The **resultant vector length** of the combined samples should be greater than 0.7 for validity.
-    - Based on Batschelet (1980), Section 6.9, p. 122-124.
+        Dataclass with the F statistic, p-value, degrees of freedom, ``method``
+        ("asymptotic"|"randomization"), and ``n_resamples``.
 
     References
     ----------
-    Batschelet, E. (1980). Circular Statistics in Biology. Academic Press.
+    Batschelet, E. (1980). Circular Statistics in Biology, Section 6.9, p. 122-124.
+    Pewsey, Neuhäuser & Ruxton (2013), §7.4.3 (randomization version).
     """
     # Ensure inputs are numpy arrays
     alpha1 = np.asarray(alpha1, dtype=float)
@@ -2258,11 +2284,10 @@ def concentration_test(
     R1 = n1 * circ_r(alpha1)
     R2 = n2 * circ_r(alpha2)
 
-    # Compute mean resultant length of combined samples
+    # The parametric F-test assumes a high combined concentration; the randomization
+    # version is precisely the remedy when that fails, so only warn for the F-test.
     rbar = (R1 + R2) / (n1 + n2)
-
-    # Warn if rbar is too low
-    if rbar < 0.7:
+    if n_resamples < 1 and rbar < 0.7:
         warnings.warn(
             "The resultant vector length should exceed 0.7 for the concentration test to be reliable.",
             RuntimeWarning,
@@ -2278,17 +2303,41 @@ def concentration_test(
         raise ValueError("Degenerate data: cannot compute concentration test statistic.")
     f_stat = numerator / denominator
 
-    # Compute p-value (adjusting for F-stat symmetry)
-    if f_stat >= 1:
-        pval = 2 * f.sf(f_stat, df1, df2)
+    if n_resamples >= 1:
+        def _kratio(groups: list[np.ndarray]) -> float:
+            g0, g1 = groups
+            num = (n2 - 1) * (n1 - n1 * circ_r(g0))
+            den = (n1 - 1) * (n2 - n2 * circ_r(g1))
+            if den <= 0 or num <= 0:
+                return np.inf  # degenerate split -> treat as extreme
+            ratio = num / den
+            return max(ratio, 1.0 / ratio)
+
+        # Pool the within-group deviations (location removed) and permute them.
+        dev = np.concatenate([
+            angmod(alpha1 - circ_mean(alpha1), bounds=[-np.pi, np.pi]),
+            angmod(alpha2 - circ_mean(alpha2), bounds=[-np.pi, np.pi]),
+        ])
+        rng = _init_rng(seed)
+        pval = _randomization_pval(
+            _kratio, dev, [n1, n2], _kratio([dev[:n1], dev[n1:]]), n_resamples, rng
+        )
+        method = "randomization"
     else:
-        pval = 2 * f.sf(1 / f_stat, df2, df1)
+        # Two-sided parametric p-value (adjusting for F-stat symmetry).
+        if f_stat >= 1:
+            pval = float(min(2 * f.sf(f_stat, df1, df2), 1.0))
+        else:
+            pval = float(min(2 * f.sf(1 / f_stat, df2, df1), 1.0))
+        method = "asymptotic"
 
     result = ConcentrationTestResult(
         f_stat=float(f_stat),
-        pval=float(min(pval, 1.0)),
+        pval=float(pval),
         df1=int(df1),
         df2=int(df2),
+        method=method,
+        n_resamples=n_resamples if method == "randomization" else 0,
     )
 
     if verbose:

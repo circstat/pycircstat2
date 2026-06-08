@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -1205,3 +1207,53 @@ def test_watson_u2_randomization():
     p_int = watson_u2_test([s1, s3], n_resamples=500, seed=3).pval
     p_gen = watson_u2_test([s1, s3], n_resamples=500, seed=np.random.default_rng(3)).pval
     assert p_int == p_gen
+
+
+def test_wheeler_watson_randomization_with_ties():
+    """wheeler_watson_test now handles tied data via midranks, and its randomization
+    p-value tracks the χ² approximation (Pewsey et al. 2013, §7.5.3; data = B10)."""
+    df = load_data("B10", source="fisher")  # ant data, 3 groups, contains ties
+    groups = [np.deg2rad(df[df["set"] == s]["θ"].values.astype(float)) for s in (1, 2, 3)]
+
+    asy = wheeler_watson_test(groups)  # previously crashed on ties
+    rnd = wheeler_watson_test(groups, n_resamples=9999, seed=1)
+    assert rnd.method == "randomization" and rnd.n_resamples == 9999
+    assert 0.10 < rnd.pval < 0.17  # book ≈ 0.1407; χ² approximation ≈ 0.13
+    assert abs(rnd.pval - asy.pval) < 0.03  # randomization tracks the approximation
+
+    p_int = wheeler_watson_test(groups, n_resamples=500, seed=4).pval
+    p_gen = wheeler_watson_test(groups, n_resamples=500, seed=np.random.default_rng(4)).pval
+    assert p_int == p_gen
+
+    rng = np.random.default_rng(0)
+    sep = [rng.vonmises(m, 6, 25) for m in (0.0, 1.8, 3.4)]  # separated -> reject
+    assert wheeler_watson_test(sep, n_resamples=2000, seed=1).pval < 0.05
+
+
+def test_concentration_randomization():
+    """concentration_test randomization is distribution-free: it rejects clearly
+    different concentrations and not equal ones (Pewsey et al. 2013, §7.4.3)."""
+    rng = np.random.default_rng(42)
+    same1 = vonmises.rvs(mu=0, kappa=5, size=60, random_state=rng)
+    same2 = vonmises.rvs(mu=0, kappa=5, size=60, random_state=rng)
+    diff1 = vonmises.rvs(mu=0, kappa=8, size=60, random_state=rng)
+    diff2 = vonmises.rvs(mu=0, kappa=1.5, size=60, random_state=rng)
+
+    assert concentration_test(same1, same2).method == "asymptotic"  # default = F-test
+
+    eq = concentration_test(same1, same2, n_resamples=9999, seed=1)
+    ne = concentration_test(diff1, diff2, n_resamples=9999, seed=1)
+    assert eq.method == "randomization" and eq.n_resamples == 9999
+    assert eq.pval > 0.05
+    assert ne.pval < 0.05
+
+    p_int = concentration_test(diff1, diff2, n_resamples=500, seed=3).pval
+    p_gen = concentration_test(diff1, diff2, n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p_int == p_gen
+
+    # randomization on dispersed data must not emit the rbar<0.7 warning
+    u1 = rng.uniform(0, 2 * np.pi, 50)
+    u2 = rng.uniform(0, 2 * np.pi, 50)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        concentration_test(u1, u2, n_resamples=200, seed=1)
