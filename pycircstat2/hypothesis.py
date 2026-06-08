@@ -466,6 +466,8 @@ class RaoHomogeneityTestResult(TestResult):
     H_disp: float
     pval_disp: float
     reject_disp: bool
+    method: str = "asymptotic"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -2629,59 +2631,21 @@ def concentration_test(
     return result
 
 
-def rao_homogeneity_test(
-    samples: Sequence[Any],
-    alpha: float = 0.05,
-    verbose: bool = False,
-) -> RaoHomogeneityTestResult:
+def _rao_homogeneity_stats(groups: Sequence[np.ndarray]) -> tuple[float, float]:
+    """Rao's two homogeneity statistics ``(H_polar, H_disp)`` for a list of groups.
+
+    ``H_polar`` tests equality of mean directions, ``H_disp`` equality of dispersions
+    (Rao 1967; Jammalamadaka & SenGupta 2001, §7.6.1). Note: both are functions of the
+    per-group cos/sin means, so they are frame-dependent (not rotation invariant).
     """
-    Perform Rao's test for homogeneity on multiple samples of angular data.
+    n = np.array([len(s) for s in groups])
+    cos_means = np.array([np.mean(np.cos(s)) for s in groups])
+    sin_means = np.array([np.mean(np.sin(s)) for s in groups])
+    # Sample (co)variances with ddof=1 to match R's var()/cov().
+    var_cos = np.array([np.var(np.cos(s), ddof=1) for s in groups])
+    var_sin = np.array([np.var(np.sin(s), ddof=1) for s in groups])
+    cov_cos_sin = np.array([np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in groups])
 
-    - **Test 1**: Equality of Mean Directions (Polar Vectors)
-    - **Test 2**: Equality of Dispersions
-
-    Parameters
-    ----------
-    samples : sequence
-        A sequence (one entry per group) of `Circular` objects or one-dimensional
-        array-like radian samples.
-    alpha : float, optional
-        Significance level for the hypothesis test. Default is 0.05.
-    verbose : bool, optional
-        If ``True``, prints test details and decisions.
-
-    Returns
-    -------
-    RaoHomogeneityTestResult
-        Dataclass containing test statistics, p-values, and rejection flags.
-
-    References
-    ----------
-    Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
-    Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
-    """
-    samples = _coerce_sample_arrays(samples)
-
-    k = len(samples)  # Number of samples
-    if k < 2:
-        raise ValueError("At least two groups are required for the test.")
-    n = np.array([len(s) for s in samples])  # Sample sizes
-
-    # Compute mean cosine and sine values for each sample
-    cos_means = np.array([np.mean(np.cos(s)) for s in samples])
-    sin_means = np.array([np.mean(np.sin(s)) for s in samples])
-
-    # Compute variances
-    # Compute sample variances (use ddof=1 to match R)
-    var_cos = np.array([np.var(np.cos(s), ddof=1) for s in samples])
-    var_sin = np.array([np.var(np.sin(s), ddof=1) for s in samples])
-
-    # Compute covariance (use ddof=1 to match R's var(x, y))
-    cov_cos_sin = np.array(
-        [np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in samples]
-    )
-
-    # Compute test statistics
     s_polar = (
         1
         / n
@@ -2707,19 +2671,88 @@ def rao_homogeneity_test(
         )
     )
     H_disp = np.sum(U**2 / s_disp) - (np.sum(U / s_disp) ** 2) / np.sum(1 / s_disp)
+    return float(H_polar), float(H_disp)
 
-    # Compute p-values
+
+def rao_homogeneity_test(
+    samples: Sequence[Any],
+    alpha: float = 0.05,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> RaoHomogeneityTestResult:
+    """
+    Perform Rao's test for homogeneity on multiple samples of angular data.
+
+    - **Test 1**: Equality of Mean Directions (Polar Vectors)
+    - **Test 2**: Equality of Dispersions
+
+    Parameters
+    ----------
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
+    alpha : float, optional
+        Significance level for the hypothesis test. Default is 0.05.
+    n_resamples : int, optional
+        If ``0`` (default), p-values come from Rao's large-sample χ² approximation.
+        If ``>= 1``, that many randomization (permutation) resamples are used instead:
+        under the homogeneity null the pooled angles are exchangeable, so they are
+        permuted into the original group sizes and both statistics recomputed. This
+        frees both tests from the large-sample assumption (Rao 1967 is explicitly a
+        *large-sample* test); the trade-off is that the permutation reads the two
+        statistics under a single joint "identically distributed" null.
+    seed : int or numpy.random.Generator, optional
+        Seed (or generator) for the randomization path. Default is 2046.
+    verbose : bool, optional
+        If ``True``, prints test details and decisions.
+
+    Returns
+    -------
+    RaoHomogeneityTestResult
+        Dataclass containing test statistics, p-values, and rejection flags.
+
+    References
+    ----------
+    Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
+    Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
+    """
+    samples = _coerce_sample_arrays(samples)
+
+    k = len(samples)  # Number of samples
+    if k < 2:
+        raise ValueError("At least two groups are required for the test.")
+    n = np.array([len(s) for s in samples])  # Sample sizes
+    if np.any(n < 2):
+        raise ValueError("Each group must contain at least two observations.")
+
+    H_polar, H_disp = _rao_homogeneity_stats(samples)
+
     df = k - 1  # Degrees of freedom
-    pval_polar = chi2.sf(H_polar, df)
-    pval_disp = chi2.sf(H_disp, df)
-
-    # Determine critical values
-    crit_polar = chi2.ppf(1 - alpha, df)
-    crit_disp = chi2.ppf(1 - alpha, df)
+    if n_resamples >= 1:
+        # Under the homogeneity null (groups identically distributed) the pooled angles
+        # are exchangeable; permute them into the group sizes and recompute both stats.
+        pooled = np.concatenate(samples)
+        split_at = np.cumsum(n)[:-1]
+        rng = _init_rng(seed)
+        cnt_p = cnt_d = 1  # count the observed statistics themselves
+        for _ in range(n_resamples):
+            hp, hd = _rao_homogeneity_stats(np.split(rng.permutation(pooled), split_at))
+            if hp >= H_polar:
+                cnt_p += 1
+            if hd >= H_disp:
+                cnt_d += 1
+        pval_polar = cnt_p / (n_resamples + 1)
+        pval_disp = cnt_d / (n_resamples + 1)
+        method = "randomization"
+    else:
+        pval_polar = float(chi2.sf(H_polar, df))
+        pval_disp = float(chi2.sf(H_disp, df))
+        method = "asymptotic"
 
     # Test decisions
-    reject_polar = H_polar > crit_polar
-    reject_disp = H_disp > crit_disp
+    reject_polar = pval_polar < alpha
+    reject_disp = pval_disp < alpha
 
     result = RaoHomogeneityTestResult(
         H_polar=float(H_polar),
@@ -2728,6 +2761,8 @@ def rao_homogeneity_test(
         H_disp=float(H_disp),
         pval_disp=float(pval_disp),
         reject_disp=bool(reject_disp),
+        method=method,
+        n_resamples=n_resamples if method == "randomization" else 0,
     )
 
     if verbose:
@@ -2735,6 +2770,8 @@ def rao_homogeneity_test(
         print("----------------------")
         print("Test 1 H0: All groups share the same mean direction.")
         print("Test 2 H0: All groups share the same dispersion.")
+        print(f"P-value method: {result.method}", end="")
+        print(f" ({result.n_resamples} resamples)" if result.method == "randomization" else "")
         print("")
         print(
             f"Mean directions: H = {result.H_polar:.5f}, "

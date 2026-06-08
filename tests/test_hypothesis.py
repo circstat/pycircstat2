@@ -508,6 +508,36 @@ def test_rao_homogeneity_different_dispersion():
     assert results.pval_disp < 0.05, f"Expected rejection but got p={results.pval_disp}"
 
 
+def test_rao_homogeneity_randomization():
+    """rao_homogeneity_test(n_resamples>0) gives permutation p-values that isolate each
+    effect: a mean shift flags only H_polar, a dispersion change only H_disp."""
+    def mk(seeds, mus, kappas, size=50):
+        return [
+            vonmises.rvs(mu=m, kappa=k, size=size, random_state=np.random.default_rng(s))
+            for s, m, k in zip(seeds, mus, kappas)
+        ]
+
+    identical = mk([101, 102, 103], [0, 0, 0], [2, 2, 2])
+    diff_mean = mk([201, 202, 203], [0, np.pi / 4, np.pi / 2], [2, 2, 2])
+    diff_disp = mk([301, 302, 303], [0, 0, 0], [5, 2, 1])
+
+    r_id = rao_homogeneity_test(identical, n_resamples=1999, seed=7)
+    assert r_id.method == "randomization" and r_id.n_resamples == 1999
+    assert r_id.pval_polar > 0.05 and r_id.pval_disp > 0.05
+
+    r_mean = rao_homogeneity_test(diff_mean, n_resamples=1999, seed=7)
+    assert r_mean.pval_polar < 0.05 < r_mean.pval_disp  # only mean direction flagged
+
+    r_disp = rao_homogeneity_test(diff_disp, n_resamples=1999, seed=7)
+    assert r_disp.pval_disp < 0.05 < r_disp.pval_polar  # only dispersion flagged
+
+    # default = asymptotic; determinism of the randomization path
+    assert rao_homogeneity_test(identical).method == "asymptotic"
+    a = rao_homogeneity_test(diff_mean, n_resamples=300, seed=11)
+    b = rao_homogeneity_test(diff_mean, n_resamples=300, seed=np.random.default_rng(11))
+    assert a.pval_polar == b.pval_polar and a.pval_disp == b.pval_disp
+
+
 def test_rao_homogeneity_small_samples():
     """Test with very small sample sizes (should handle without error)."""
     seeds = [401, 402, 403]
