@@ -306,6 +306,32 @@ def test_watson_test():
     result = watson_test(alpha=c_pigeon.alpha, n_resamples=9999)
     np.testing.assert_approx_equal(result.U2, 0.137, significant=3)
     assert result.pval > 0.10
+    assert result.dist == "uniform" and result.mu is None
+
+
+def test_watson_test_vonmises_gof():
+    """watson_test(dist='vonmises') is a parametric-bootstrap GoF: it accepts von Mises
+    data, rejects a non–von Mises (wrapped Cauchy) alternative, and reports fitted μ, κ."""
+    from pycircstat2.distributions import wrapcauchy
+
+    rng = np.random.default_rng(0)
+    vm = np.asarray(vonmises.rvs(mu=0.7, kappa=2.0, size=60, random_state=rng))
+    wc = np.asarray(wrapcauchy.rvs(mu=0.7, rho=0.7, size=60, random_state=rng))
+
+    r_vm = watson_test(vm, dist="vonmises", n_resamples=999, seed=3)
+    assert r_vm.method == "parametric_bootstrap"
+    assert r_vm.dist == "vonmises" and r_vm.mu is not None and r_vm.kappa is not None
+    assert r_vm.pval > 0.05  # von Mises data: do not reject
+
+    r_wc = watson_test(wc, dist="vonmises", n_resamples=999, seed=3)
+    assert r_wc.pval < 0.05  # wrapped Cauchy: reject von Mises fit
+
+    # no closed-form p-value for the von Mises null; determinism on the bootstrap path
+    with pytest.raises(ValueError):
+        watson_test(vm, dist="vonmises", n_resamples=0)
+    p_gen = watson_test(vm, dist="vonmises", n_resamples=300,
+                        seed=np.random.default_rng(11)).pval
+    assert watson_test(vm, dist="vonmises", n_resamples=300, seed=11).pval == p_gen
 
 
 def test_angular_randomisation_test():

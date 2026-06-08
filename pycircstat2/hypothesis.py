@@ -6,7 +6,7 @@ from typing import Any, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 from scipy.special import comb, i0, iv
-from scipy.stats import chi2, f, norm, rankdata, vonmises, wilcoxon
+from scipy.stats import chi2, f, norm, rankdata, wilcoxon
 
 from .descriptive import (
     circ_dist,
@@ -19,6 +19,7 @@ from .descriptive import (
     circ_r,
     circ_range,
 )
+from .distributions import vonmises
 from .utils import (
     A1inv,
     angmod,
@@ -404,8 +405,11 @@ class KuiperTestResult(TestResult):
 class WatsonTestResult(TestResult):
     U2: float
     pval: float
-    method: str  # "asymptotic" | "monte_carlo"
+    method: str  # "asymptotic" | "monte_carlo" | "parametric_bootstrap"
     n_resamples: int
+    dist: str = "uniform"  # null tested: "uniform" | "vonmises"
+    mu: Optional[float] = None  # fitted mean direction (von Mises GoF only)
+    kappa: Optional[float] = None  # fitted concentration (von Mises GoF only)
 
     @property
     def mode(self) -> str:
@@ -2257,8 +2261,23 @@ def kuiper_test(
     return KuiperTestResult(V=float(Vo), pval=float(pval), method=method, n_resamples=n_resamples)
 
 
+def _watson_u2_unit(z: np.ndarray) -> float:
+    """Watson's U² for uniformity of PIT values ``z`` on [0,1) (sorted internally).
+
+    ``U² = Σ (z_(i) − (2i−1)/(2n))² − n (z̄ − ½)² + 1/(12n)``. With ``z`` the
+    probability-integral transform of the data through the hypothesised CDF
+    (``α/2π`` for the uniform null, or the fitted von Mises CDF for the von Mises
+    goodness-of-fit), this is the one-sample Watson statistic.
+    """
+    z = np.sort(np.asarray(z, dtype=float))
+    n = z.size
+    i = np.arange(1, n + 1, dtype=float)
+    return float(np.sum((z - (2 * i - 1) / (2 * n)) ** 2) - n * (z.mean() - 0.5) ** 2 + 1 / (12 * n))
+
+
 def watson_test(
     alpha: np.ndarray,
+    dist: str = "uniform",
     n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
@@ -2266,12 +2285,14 @@ def watson_test(
     n_simulation: Optional[int] = None,
 ) -> WatsonTestResult:
     """
-    Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
+    Watson's one-sample U² goodness-of-fit test.
 
-    - H0: The sample data come from a population distributed uniformly around the circle.
-    - H1: The sample data do not come from a population distributed uniformly around the circle.
+    - H0: The sample is drawn from the null distribution (``dist``).
+    - H1: The sample is not drawn from the null distribution.
 
-    This method is for ungrouped data.
+    With ``dist="uniform"`` (default) this tests circular uniformity; with
+    ``dist="vonmises"`` it tests goodness-of-fit to a von Mises distribution
+    (parameters estimated from the data). This method is for ungrouped data.
 
     Parameters
     ----------
@@ -2279,9 +2300,14 @@ def watson_test(
     alpha: np.array
         Angles in radian.
 
+    dist: str
+        Null distribution to test against: ``"uniform"`` (default) or ``"vonmises"``.
+
     n_resamples: int
-        If ``0``, the p-value is the asymptotic series approximation. If ``>= 1``
-        (default 9999), it is estimated from that many Monte-Carlo uniform samples.
+        For ``dist="uniform"``: ``0`` gives the asymptotic series p-value, ``>= 1``
+        (default 9999) a Monte-Carlo p-value from that many uniform samples. For
+        ``dist="vonmises"``: the number of parametric-bootstrap resamples (refitting
+        μ, κ on each); must be ``>= 1`` (there is no closed-form p-value).
 
     seed: SeedLike
         Seed used to initialize the random number generator for the Monte-Carlo
@@ -2311,6 +2337,9 @@ def watson_test(
     kuiper_test(); rao_spacing_test()
     """
 
+    if dist not in ("uniform", "vonmises"):
+        raise ValueError("`dist` must be 'uniform' or 'vonmises'.")
+
     n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=True)
     if n_resamples < 0:
         raise ValueError("`n_resamples` must be a non-negative integer.")
@@ -2318,43 +2347,74 @@ def watson_test(
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
-
-    def compute_U2(sample):
-        ordered = np.sort(sample)
-        n = ordered.size
-        indices = np.arange(1, n + 1, dtype=float)
-
-        u = ordered / (2 * np.pi)
-        U2 = np.sum(((u - (indices - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (12 * n)
-        return float(U2)
-
     n = alpha.size
-    U2o = compute_U2(alpha)
 
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if n_resamples == 0:
-        method = "asymptotic"
-        m = np.arange(1, 51)
-        pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
+    if dist == "uniform":
+        # PIT under the uniform null is simply α / 2π.
+        U2o = _watson_u2_unit(alpha / (2 * np.pi))
+        if n_resamples == 0:
+            method = "asymptotic"
+            m = np.arange(1, 51)
+            pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
+        else:
+            method = "monte_carlo"
+            rng = _init_rng(seed)
+            uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_resamples))
+            U2s = np.array(
+                [_watson_u2_unit(uniforms[:, i] / (2 * np.pi)) for i in range(n_resamples)]
+            )
+            pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_resamples + 1))
+        mu = kappa = None
     else:
-        method = "monte_carlo"
+        # von Mises GoF: PIT through the ML-fitted von Mises CDF, then a parametric
+        # bootstrap (refit μ, κ on each simulated sample) — the null distribution of
+        # U² depends on the unknown κ, so the parameters must be re-estimated each time.
+        if n_resamples < 1:
+            raise ValueError(
+                "von Mises goodness-of-fit has no closed-form p-value; use n_resamples >= 1."
+            )
+        mu = float(circ_mean(alpha))
+        kappa = float(circ_kappa(circ_r(alpha)))
+        U2o = _watson_u2_unit(np.asarray(vonmises(mu=mu, kappa=kappa).cdf(alpha)))
         rng = _init_rng(seed)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_resamples))
-        x = np.sort(uniforms, axis=0)
-        U2s = np.array([compute_U2(x[:, i]) for i in range(n_resamples)])
-        pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_resamples + 1))
+        null = vonmises(mu=mu, kappa=kappa)
+        count = 1  # the observed statistic counts itself
+        for _ in range(n_resamples):
+            sim = np.asarray(null.rvs(size=n, random_state=rng))
+            mb = float(circ_mean(sim))
+            kb = float(circ_kappa(circ_r(sim)))
+            if _watson_u2_unit(np.asarray(vonmises(mu=mb, kappa=kb).cdf(sim))) >= U2o:
+                count += 1
+        pval = float(count / (n_resamples + 1))
+        method = "parametric_bootstrap"
 
     if verbose:
-        print("Watson's One-Sample U2 Test of Circular Uniformity")
-        print("--------------------------------------------------")
-        print("H0: The sample is drawn from a circularly uniform distribution.")
-        print("HA: The sample is not drawn from a circularly uniform distribution.")
+        if dist == "uniform":
+            print("Watson's One-Sample U2 Test of Circular Uniformity")
+            print("--------------------------------------------------")
+            print("H0: The sample is drawn from a circularly uniform distribution.")
+            print("HA: The sample is not drawn from a circularly uniform distribution.")
+        else:
+            print("Watson's U2 Goodness-of-Fit Test for the von Mises Distribution")
+            print("--------------------------------------------------------------")
+            print("H0: The sample is drawn from a von Mises distribution.")
+            print("HA: The sample is not drawn from a von Mises distribution.")
+            print(f"Fitted parameters: mu = {mu:.4f}, kappa = {kappa:.4f}")
         print("")
         print(f"Test Statistic: {U2o:.4f}")
         print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WatsonTestResult(U2=float(U2o), pval=float(pval), method=method, n_resamples=n_resamples)
+    return WatsonTestResult(
+        U2=float(U2o),
+        pval=float(pval),
+        method=method,
+        n_resamples=n_resamples,
+        dist=dist,
+        mu=mu,
+        kappa=kappa,
+    )
 
 
 def rao_spacing_test(
@@ -2450,7 +2510,7 @@ def rao_spacing_test(
 
     Uo = compute_U(expanded_alpha)
     if w is not None:  # noncontinuous / grouped data
-        vm_dist = vonmises(kappa=kappa)
+        vm_dist = vonmises(mu=0.0, kappa=kappa)
         uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n_resamples, n))
         snapped = np.floor(uniforms * m / (2 * np.pi)) * (2 * np.pi / m)
         noise = vm_dist.rvs(size=(n_resamples, n), random_state=rng)

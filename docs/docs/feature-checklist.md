@@ -74,7 +74,7 @@
 | Kuiper’s Test (one-sample)[^kuiper-1samp] | $\rho = 0$ | `kuiper_test`      | -            | -                 | `kuiper`      | `kuiper.test`      |
 | Rao’s Spacing Test  | $\rho = 0$ | `rao_spacing_test` | `raospacing` | `circ_raotest`    | `rao.spacing` | `rao.spacing.test` |
 | Watson's Test       | $\rho = 0$ | `watson_test`      | -            | -                 | `watson`      | `watson.test`      |
-| Watson's Test (von Mises GoF)[^vm-gof] | von Mises | -                  | -            | -                 | `watson(dist="vm")` | `watson.test(dist="vonmises")` |
+| Watson's Test (von Mises GoF)[^vm-gof] | von Mises | `watson_test(dist="vonmises")` | -            | -                 | `watson(dist="vm")` | `watson.test(dist="vonmises")` |
 | Circular Range Test | $\rho = 0$ | `circ_range_test`  | -            | -                 | `circ_range`  | `range.circular`   |
 
 
