@@ -61,7 +61,7 @@
 | Equal Kappa Test                | $\kappa_1 = \dots = \kappa_n$                 | `equal_kappa_test`           | -                 | -                 | -                 | `equal.kappa.test`     |
 | **Distribution Homogeneity**    |                                               |                              |                   |                   |                   |                        |
 | Watson's U2 Test                | $F_1 = F_2$ [^F]                              | `watson_u2_test`             | -                 | -                 | `watson.two`      | `watson.two.test`      |
-| Two-sample Kuiper Test[^kuiper-2samp] | $F_1 = F_2$                             | -                            | `kuiper`          | `circ_kuipertest` | -                 | -                      |
+| Two-sample Kuiper Test[^kuiper-2samp] | $F_1 = F_2$                             | `kuiper_two_test`            | `kuiper`          | `circ_kuipertest` | -                 | -                      |
 | Wallraff Test                   | $F_1 = F_2$                                   | `wallraff_test`              | -                 | -                 | -                 | `wallraff.test`        |
 | Wheeler-Watson Test             | $F_1 = F_2$                                   | `wheeler_watson_test`        | -                 | -                 | -                 | `watson.wheeler.test`  |
 | Angular Randomization Test      | $F_1 = F_2$                                   | `angular_randomisation_test` | -                 | -                 | -                 | -                      |

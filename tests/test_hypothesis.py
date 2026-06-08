@@ -28,6 +28,7 @@ from pycircstat2.hypothesis import (
     wallraff_test,
     watson_test,
     watson_u2_test,
+    kuiper_two_test,
     watson_williams_test,
     wheeler_watson_test,
 )
@@ -211,6 +212,44 @@ def test_watson_u2_test():
     array_result = watson_u2_test([expanded0, expanded1])
     np.testing.assert_allclose(array_result.U2, result.U2, rtol=1e-6)
     np.testing.assert_allclose(array_result.pval, result.pval, rtol=1e-6)
+
+
+def test_kuiper_two_test():
+    """Two-sample Kuiper test: direction, dispersion sensitivity, rotation-invariance,
+    grouped-data support, and asymptotic/randomization determinism."""
+    rng = np.random.default_rng(0)
+    a = vonmises.rvs(mu=0.0, kappa=3.0, size=40, random_state=rng)
+    same = vonmises.rvs(mu=0.0, kappa=3.0, size=40, random_state=rng)
+    loc_shift = vonmises.rvs(mu=1.2, kappa=3.0, size=40, random_state=rng)
+    disp_change = vonmises.rvs(mu=0.0, kappa=0.4, size=40, random_state=rng)
+
+    assert kuiper_two_test([a, same]).pval > 0.05
+    assert kuiper_two_test([a, loc_shift]).pval < 0.05  # location difference
+    assert kuiper_two_test([a, disp_change]).pval < 0.05  # dispersion difference
+
+    r = kuiper_two_test([a, loc_shift])
+    assert r.method == "asymptotic" and r.n_resamples == 0
+
+    # statistic is invariant to a common rotation (Kuiper's defining property)
+    shift = 2.0
+    v_rot = kuiper_two_test(
+        [(a + shift) % (2 * np.pi), (loc_shift + shift) % (2 * np.pi)]
+    ).V
+    np.testing.assert_allclose(r.V, v_rot, atol=1e-9)
+
+    # grouped data expand consistently with raw angles
+    d = load_data("D12", source="zar")
+    c0 = Circular(data=d[d["sample"] == 1]["θ"].values[:])
+    c1 = Circular(data=d[d["sample"] == 2]["θ"].values[:])
+    np.testing.assert_allclose(
+        kuiper_two_test([c0, c1]).V, kuiper_two_test([c0.alpha, c1.alpha]).V, rtol=1e-9
+    )
+
+    # randomization path: determinism (int seed == Generator)
+    rr = kuiper_two_test([a, loc_shift], n_resamples=999, seed=3)
+    assert rr.method == "randomization" and rr.n_resamples == 999
+    p_gen = kuiper_two_test([a, loc_shift], n_resamples=999, seed=np.random.default_rng(3)).pval
+    assert rr.pval == p_gen
 
 
 def test_wheeler_watson_test():

@@ -37,6 +37,7 @@ __all__ = [
     "symmetry_test",
     "watson_williams_test",
     "watson_u2_test",
+    "kuiper_two_test",
     "wheeler_watson_test",
     "wallraff_test",
     "circ_anova",
@@ -320,6 +321,14 @@ class WatsonWilliamsTestResult(TestResult):
 @dataclass(frozen=True)
 class WatsonU2TestResult(TestResult):
     U2: float
+    pval: float
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
+
+
+@dataclass(frozen=True)
+class KuiperTwoTestResult(TestResult):
+    V: float  # two-sample Kuiper statistic D+ + D-
     pval: float
     method: str = "asymptotic"  # "asymptotic" | "randomization"
     n_resamples: int = 0
@@ -1563,6 +1572,127 @@ def watson_u2_test(
         print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
     return WatsonU2TestResult(U2=float(U2), pval=float(pval), method=method, n_resamples=n_resamples)
+
+
+def _kuiper_pkp(lam: float) -> float:
+    """Survival function of the modified two-sample Kuiper statistic.
+
+    ``Q(λ) = 2 Σ_{j>=1} (4 j² λ² − 1) e^{−2 j² λ²}`` (Stephens 1965; Numerical Recipes
+    ``probkp``), where ``λ`` is the sample-size-corrected statistic. Returns 1.0 for
+    small ``λ`` (the series does not converge below the meaningful range). Reproduces
+    the tabulated Kuiper critical values (λ=1.747 → 0.05, λ=2.001 → 0.01, …).
+    """
+    if lam <= 0:
+        return 1.0
+    a2 = -2.0 * lam * lam
+    total = 0.0
+    termbf = 0.0
+    for j in range(1, 101):
+        term = 2.0 * (4.0 * j * j * lam * lam - 1.0) * np.exp(a2 * j * j)
+        total += term
+        if abs(term) <= 1e-3 * termbf or abs(term) <= 1e-8 * total:
+            return float(min(max(total, 0.0), 1.0))
+        termbf = abs(term)
+    return 1.0
+
+
+def _kuiper_two_statistic(s0: np.ndarray, s1: np.ndarray) -> float:
+    """Two-sample Kuiper statistic ``V = D⁺ + D⁻`` from the empirical CDFs.
+
+    Exact (no resolution binning) and ties-aware via ``searchsorted`` on the pooled
+    points: ``V = max(F0 − F1) − min(F0 − F1)``. Because both CDFs reach 1 the
+    difference is periodic on the circle, so ``V`` is invariant to the choice of
+    origin — the defining property of Kuiper's statistic vs. Kolmogorov–Smirnov.
+    """
+    s0 = np.sort(np.asarray(s0, dtype=float))
+    s1 = np.sort(np.asarray(s1, dtype=float))
+    n0, n1 = s0.size, s1.size
+    a = np.unique(np.concatenate([s0, s1]))
+    d = np.searchsorted(s0, a, side="right") / n0 - np.searchsorted(s1, a, side="right") / n1
+    return float(d.max() - d.min())
+
+
+def kuiper_two_test(
+    samples: Sequence[Any],
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> KuiperTwoTestResult:
+    """Two-sample Kuiper test — the circular analogue of the two-sample
+    Kolmogorov–Smirnov test.
+
+    - H0: The two samples come from the same population (F₁ = F₂).
+    - H1: The two distributions differ — in mean direction, dispersion, or any
+      other respect.
+
+    Unlike Watson's U² (sensitive mainly to differences in location and dispersion),
+    the Kuiper statistic ``V = D⁺ + D⁻`` responds to any difference between the two
+    empirical CDFs and is invariant to the choice of origin on the circle.
+
+    Parameters
+    ----------
+    samples : sequence
+        Exactly two entries, each a `Circular` object or a one-dimensional
+        array-like of radian angles (grouped data are expanded by frequency).
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from the large-sample asymptotic
+        distribution of the modified statistic (Stephens 1965). If ``>= 1``, that
+        many label-randomization resamples are used instead (pool the two samples,
+        permute into the original sizes, recompute ``V``); recommended for small
+        samples.
+    seed : int or numpy.random.Generator, optional
+        Seed (or generator) for the randomization path. Default is 2046.
+    verbose : bool, optional
+        If ``True``, prints the test summary.
+
+    Returns
+    -------
+    KuiperTwoTestResult
+        Dataclass with ``V``, ``pval``, ``method`` and ``n_resamples``.
+
+    References
+    ----------
+    - Kuiper, N.H. (1960). Tests concerning random points on a circle.
+    - Stephens, M.A. (1965). The goodness-of-fit statistic Vₙ: distribution and
+      significance points. Biometrika 52.
+    - Batschelet (1981), p. 112.
+    """
+
+    normalized = _coerce_circular_samples(samples)
+    if len(normalized) != 2:
+        raise ValueError("`kuiper_two_test` requires exactly two samples.")
+
+    s0, s1 = normalized[0].expand(), normalized[1].expand()
+    n, m = s0.size, s1.size
+    V = _kuiper_two_statistic(s0, s1)
+
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        pval = _randomization_pval(
+            lambda groups: _kuiper_two_statistic(groups[0], groups[1]),
+            np.concatenate([s0, s1]),
+            [n, m],
+            V,
+            n_resamples,
+            rng,
+        )
+        method = "randomization"
+    else:
+        en = np.sqrt(n * m / (n + m))
+        pval = _kuiper_pkp((en + 0.155 + 0.24 / en) * V)
+        method = "asymptotic"
+
+    if verbose:
+        print("Two-sample Kuiper Test")
+        print("----------------------")
+        print("H0: The two samples are drawn from the same distribution.")
+        print("HA: The two distributions differ.")
+        print("")
+        print(f"Sample sizes: n1 = {n}, n2 = {m}")
+        print(f"Test statistic (V = D+ + D-): {V:.5f}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
+
+    return KuiperTwoTestResult(V=float(V), pval=float(pval), method=method, n_resamples=n_resamples)
 
 
 def wheeler_watson_test(
