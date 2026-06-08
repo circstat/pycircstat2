@@ -869,6 +869,13 @@ def V_test(
     n: int or None
         Sample size. Needed if `alpha` is None.
 
+    n_resamples: int
+        If ``0`` (default), the p-value is the closed-form normal approximation. If
+        ``>= 1``, it is estimated from that many Monte-Carlo uniform samples.
+
+    seed: SeedLike
+        Seed (or generator) for the Monte-Carlo p-value. Default 2046.
+
     verbose: bool
         Print formatted results.
 
@@ -876,7 +883,8 @@ def V_test(
     -------
     VTestResult
         Dataclass containing the test statistic `V`, the normalized statistic `u`,
-        and the p-value.
+        the p-value, ``method`` (``"asymptotic"`` for the normal approximation, or
+        ``"monte_carlo"`` when ``n_resamples >= 1``), and ``n_resamples``.
 
     Reference
     ---------
@@ -1130,6 +1138,13 @@ def omnibus_test(
     scale: int
         Scale factor for the number of lines to be tested.
 
+    n_resamples: int
+        If ``0`` (default), the p-value is Hodges–Ajne's closed-form approximation.
+        If ``>= 1``, it is estimated from that many Monte-Carlo uniform samples.
+
+    seed: SeedLike
+        Seed (or generator) for the Monte-Carlo p-value. Default 2046.
+
     verbose: bool
         Print formatted results.
 
@@ -1137,7 +1152,9 @@ def omnibus_test(
     -------
     OmnibusTestResult
         Dataclass containing the test statistic `A`, the corresponding p-value,
-        and the minimum count `m`.
+        the minimum count `m`, ``method`` (``"asymptotic"`` for the closed-form
+        approximation, or ``"monte_carlo"`` when ``n_resamples >= 1``), and
+        ``n_resamples``.
 
     Reference
     ---------
@@ -2322,7 +2339,10 @@ def watson_test(
     -------
     WatsonTestResult
         Dataclass containing the Watson U² statistic, p-value, ``method``
-        ("asymptotic"|"monte_carlo"), and ``n_resamples``.
+        (``"asymptotic"`` or ``"monte_carlo"`` for the uniform null;
+        ``"parametric_bootstrap"`` for ``dist="vonmises"``), ``n_resamples``, the
+        ``dist`` tested, and — for the von Mises GoF — the fitted ``mu``/``kappa``
+        (``None`` for the uniform null).
 
     Note
     ----
@@ -2557,13 +2577,21 @@ def circ_range_test(
     ----------
     alpha : np.ndarray
         Angles in radians. Values must already be wrapped into ``[-2π, 2π]``.
+    n_resamples : int, optional
+        If ``0`` (default), the p-value is the closed-form series. If ``>= 1``, it
+        is estimated from that many Monte-Carlo uniform samples (a cross-check that
+        floors at ``1/(n_resamples+1)`` in the deep tail).
+    seed : SeedLike, optional
+        Seed (or generator) for the Monte-Carlo p-value. Default 2046.
     verbose : bool, optional
         If ``True``, prints test details and results.
 
     Returns
     -------
     CircularRangeTestResult
-        Dataclass containing the range statistic and corresponding p-value.
+        Dataclass containing the range statistic, the corresponding p-value,
+        ``method`` (``"exact"`` for the closed-form series, or ``"monte_carlo"``
+        when ``n_resamples >= 1``), and ``n_resamples``.
 
     Reference
     ---------
@@ -2900,7 +2928,9 @@ def rao_homogeneity_test(
     Returns
     -------
     RaoHomogeneityTestResult
-        Dataclass containing test statistics, p-values, and rejection flags.
+        Dataclass containing test statistics, p-values, and rejection flags, plus
+        ``method`` (``"asymptotic"`` for Rao's large-sample χ², or
+        ``"randomization"`` when ``n_resamples >= 1``) and ``n_resamples``.
 
     References
     ----------
