@@ -328,6 +328,7 @@ class CircularAnovaResult(TestResult):
     pval: float
     SS: Optional[tuple[float, float, float]] = None
     MS: Optional[tuple[float, float]] = None
+    n_resamples: int = 0  # >0 => `pval` is a label-randomization p-value
 
 
 @dataclass(frozen=True)
@@ -1682,6 +1683,8 @@ def circ_anova(
     method: str = "F-test",
     kappa: Optional[float] = None,
     f_mod: bool = True,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> CircularAnovaResult:
     """
@@ -1703,13 +1706,21 @@ def circ_anova(
         The common concentration parameter (κ). If not specified, it is estimated using MLE.
     f_mod : bool, optional
         If `True`, applies a correction factor `(1 + 3/8κ)` to the F-statistic.
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from the parametric (F or χ²) distribution.
+        If ``>= 1``, it is estimated by permuting the pooled angles into the group sizes
+        and recomputing the selected statistic — distribution-free, and free of the
+        high-concentration assumption.
+    seed : SeedLike, optional
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If `True`, prints the test summary.
 
     Returns
     -------
     result : CircularAnovaResult
-        Dataclass containing the selected statistic, p-value, and supporting metrics.
+        Dataclass containing the selected statistic, p-value, supporting metrics, and
+        ``n_resamples`` (>0 when the p-value is from label randomization).
 
     References
     ----------
@@ -1762,7 +1773,18 @@ def circ_anova(
         else:
             F_stat = MS_between / MS_within
 
-        p_value = f.sf(F_stat, df_between, df_within)
+        if n_resamples >= 1:
+            def _f_stat(groups: list[np.ndarray]) -> float:
+                sumR = sum(circ_r(g) * len(g) for g in groups)
+                fval = ((sumR - R_all) / df_between) / ((N - sumR) / df_within)
+                return (1 + 3 / (8 * kappa_value)) * fval if f_mod else fval
+
+            rng = _init_rng(seed)
+            p_value = _randomization_pval(
+                _f_stat, all_samples, ns, float(F_stat), n_resamples, rng
+            )
+        else:
+            p_value = float(f.sf(F_stat, df_between, df_within))
 
         result = CircularAnovaResult(
             method="F-test",
@@ -1777,6 +1799,7 @@ def circ_anova(
             pval=float(p_value),
             SS=(float(SS_between), float(SS_within), float(SS_total)),
             MS=(float(MS_between), float(MS_within)),
+            n_resamples=n_resamples,
         )
 
     # **Likelihood Ratio Test (LRT)**
@@ -1787,7 +1810,18 @@ def circ_anova(
         chi_square_stat = term1 * term2
 
         df = k - 1
-        p_value = chi2.sf(chi_square_stat, df)
+        if n_resamples >= 1:
+            def _lrt_stat(groups: list[np.ndarray]) -> float:
+                mus_p = np.array([circ_mean(g) for g in groups])
+                Rs_p = np.array([circ_r(g) * len(g) for g in groups])
+                return float(term1 * (2 * kappa_value * np.sum(Rs_p * (1 - np.cos(mus_p - mu_all)))))
+
+            rng = _init_rng(seed)
+            p_value = _randomization_pval(
+                _lrt_stat, all_samples, ns, float(chi_square_stat), n_resamples, rng
+            )
+        else:
+            p_value = float(chi2.sf(chi_square_stat, df))
 
         result = CircularAnovaResult(
             method="LRT",
@@ -1800,6 +1834,7 @@ def circ_anova(
             df=int(df),
             statistic=float(chi_square_stat),
             pval=float(p_value),
+            n_resamples=n_resamples,
         )
 
     else:

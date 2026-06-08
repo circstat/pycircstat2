@@ -1310,3 +1310,24 @@ def test_one_sample_specified_mean():
         angle=3.9270, alpha=b1, symmetric=True, n_resamples=500, seed=np.random.default_rng(4)
     ).pval
     assert p_int == p_gen
+
+
+def test_circ_anova_randomization():
+    """circ_anova(n_resamples>0) gives a label-randomization p-value (free of the
+    high-κ assumption) that tracks the parametric one and rejects separated means."""
+    rng = np.random.default_rng(42)
+    same = [rng.vonmises(0.0, 5, 40) for _ in range(3)]
+    diff = [rng.vonmises(m, 5, 40) for m in (0.0, 0.5, 1.0)]
+
+    for method in ("F-test", "LRT"):
+        a = circ_anova(same, method=method)
+        r = circ_anova(same, method=method, n_resamples=4999, seed=1)
+        assert r.n_resamples == 4999
+        assert abs(r.pval - a.pval) < 0.05  # tracks the parametric p-value under H0
+        assert circ_anova(diff, method=method, n_resamples=4999, seed=1).pval < 0.05
+
+    # default unchanged (parametric); determinism of the randomization
+    assert circ_anova(same).n_resamples == 0
+    p_int = circ_anova(diff, n_resamples=500, seed=7).pval
+    p_gen = circ_anova(diff, n_resamples=500, seed=np.random.default_rng(7)).pval
+    assert p_int == p_gen
