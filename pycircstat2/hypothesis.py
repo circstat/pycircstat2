@@ -136,6 +136,36 @@ def _warn_deprecated_attr(old: str, new: str) -> None:
     )
 
 
+def _randomization_pval(
+    statistic_fn,
+    pooled: np.ndarray,
+    group_sizes: Sequence[int],
+    observed: float,
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> float:
+    """Randomization (permutation) p-value for a multi-sample statistic.
+
+    Each of ``n_resamples`` permutations reshuffles the pooled per-observation
+    quantities into the original group sizes; ``statistic_fn`` recomputes the
+    statistic from the list of group arrays. Returns
+    ``(#{stat >= observed} + 1) / (n_resamples + 1)``
+    (Pewsey, Neuhäuser & Ruxton 2013, §7.3.2/7.4.3/7.5.3/7.5.5).
+
+    ``pooled`` may be 1-D (e.g. angles, deviations, sign indicators) or 2-D with one
+    row per observation (e.g. cos/sin uniform-score pairs); permutation is along axis 0.
+    """
+
+    pooled = np.asarray(pooled)
+    split_at = np.cumsum(group_sizes)[:-1]
+    count = 0
+    for _ in range(n_resamples):
+        groups = np.split(rng.permutation(pooled), split_at)
+        if statistic_fn(groups) >= observed:
+            count += 1
+    return (count + 1) / (n_resamples + 1)
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -235,6 +265,8 @@ class WatsonWilliamsTestResult(TestResult):
 class WatsonU2TestResult(TestResult):
     U2: float
     pval: float
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -409,6 +441,8 @@ class CommonMedianTestResult(TestResult):
     statistic: float
     pval: float
     reject: bool
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -1213,8 +1247,21 @@ def watson_williams_test(
     return result
 
 
+def _watson_u2_statistic(s0: np.ndarray, s1: np.ndarray) -> float:
+    """Watson's two-sample U² statistic for two arrays of angles (ties via counts)."""
+    s0 = np.sort(np.asarray(s0, dtype=float))
+    s1 = np.sort(np.asarray(s1, dtype=float))
+    n0, n1 = s0.size, s1.size
+    N = n0 + n1
+    a, t = np.unique(np.concatenate([s0, s1]), return_counts=True)
+    d = np.searchsorted(s0, a, side="right") / n0 - np.searchsorted(s1, a, side="right") / n1
+    return float(n0 * n1 / N**2 * (np.sum(t * d**2) - np.sum(t * d) ** 2 / N))
+
+
 def watson_u2_test(
     samples: Sequence[Any],
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> WatsonU2TestResult:
     """Watson's U2 Test for nonparametric two-sample testing
@@ -1236,13 +1283,22 @@ def watson_u2_test(
     samples: sequence
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
+    n_resamples: int
+        If ``0`` (default), the p-value uses Watson's (1961) approximation. If ``>= 1``,
+        it is estimated from that many label randomizations (recommended for small
+        samples; Pewsey et al. 2013, §7.5.5).
+
+    seed: SeedLike
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
+
     verbose: bool
         Print formatted results.
 
     Returns
     -------
     WatsonU2TestResult
-        Dataclass containing the U² statistic and the associated p-value.
+        Dataclass containing the U² statistic, p-value, ``method``
+        ("asymptotic"|"randomization"), and ``n_resamples``.
 
     Reference
     ---------
@@ -1254,37 +1310,25 @@ def watson_u2_test(
     if len(normalized) != 2:
         raise ValueError("`watson_u2_test` requires exactly two samples.")
 
-    def cumfreq(alpha_unique: np.ndarray, sample: _CircularSample) -> np.ndarray:
-        # The step-CDF reconstruction below assumes ascending order, so sort
-        # rather than relying on the caller to pass pre-sorted angles.
-        expanded = np.sort(sample.expand())
-        if expanded.size == 0:
-            raise ValueError("Each sample must contain at least one observation.")
+    s0, s1 = normalized[0].expand(), normalized[1].expand()
+    U2 = _watson_u2_statistic(s0, s1)
 
-        idx = [np.where(np.isclose(alpha_unique, val, atol=1e-10))[0] for val in expanded]
-        idx = np.concatenate(idx)
-        idx = np.hstack([0, idx, alpha_unique.size])
-
-        freq_cumsum = rankdata(expanded, method="max") / sample.n
-        freq_cumsum = np.hstack([0, freq_cumsum])
-
-        tiles = np.diff(idx)
-        return np.repeat(freq_cumsum, tiles)
-
-    expanded_samples = [sample.expand() for sample in normalized]
-    a, t = np.unique(np.hstack(expanded_samples), return_counts=True)
-    cfs = [cumfreq(a, sample) for sample in normalized]
-    d = np.diff(cfs, axis=0)
-
-    N = sum(sample.n for sample in normalized)
-    U2 = (
-        np.prod([sample.n for sample in normalized])
-        / N**2
-        * (np.sum(t * d**2) - np.sum(t * d) ** 2 / N)
-    )
-    pval = 2 * np.exp(-19.74 * U2)
-    # Approximated P-value from Watson (1961)
-    # https://github.com/pierremegevand/watsons_u2/blob/master/watsons_U2_approx_p.m
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        pval = _randomization_pval(
+            lambda groups: _watson_u2_statistic(groups[0], groups[1]),
+            np.concatenate([s0, s1]),
+            [s0.size, s1.size],
+            U2,
+            n_resamples,
+            rng,
+        )
+        method = "randomization"
+    else:
+        # Approximated P-value from Watson (1961)
+        # https://github.com/pierremegevand/watsons_u2/blob/master/watsons_U2_approx_p.m
+        pval = float(2 * np.exp(-19.74 * U2))
+        method = "asymptotic"
 
     if verbose:
         print("Watson's U2 Test for two samples")
@@ -1293,9 +1337,9 @@ def watson_u2_test(
         print("HA: The two samples are not from populations with the same angle.")
         print("")
         print(f"Test Statistics: {U2:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WatsonU2TestResult(U2=float(U2), pval=float(pval))
+    return WatsonU2TestResult(U2=float(U2), pval=float(pval), method=method, n_resamples=n_resamples)
 
 
 def wheeler_watson_test(
@@ -2802,6 +2846,8 @@ def equal_kappa_test(samples: Sequence[Any], verbose: bool = False) -> EqualKapp
 def common_median_test(
     samples: Sequence[Any],
     alpha: float = 0.05,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> CommonMedianTestResult:
     """
@@ -2817,17 +2863,25 @@ def common_median_test(
         array-like radian samples.
     alpha : float, optional
         Significance level for deciding whether to reject the null hypothesis (default 0.05).
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from the χ² approximation. If ``>= 1``, it is
+        estimated from that many label randomizations (recommended for small samples;
+        Pewsey et al. 2013, §7.3.2).
+    seed : SeedLike, optional
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If `True`, prints the test summary.
 
     Returns
     -------
     CommonMedianTestResult
-        Dataclass containing the common median, test statistic, p-value, and rejection flag.
+        Dataclass containing the common median, test statistic, p-value, rejection flag,
+        ``method`` ("asymptotic"|"randomization"), and ``n_resamples``.
 
     References
     ----------
     - Fisher, N. I. (1995). Statistical Analysis of Circular Data.
+    - Pewsey, Neuhäuser & Ruxton (2013), §7.3.2 (randomization version).
     - `circ_cmtest` from MATLAB's Circular Statistics Toolbox.
     """
 
@@ -2847,22 +2901,33 @@ def common_median_test(
     # Compute the common circular median
     common_median = circ_median(np.hstack(arrays))
 
-    # Compute deviations from the common median
-    m = np.zeros(k, dtype=float)
-    for i, group in enumerate(arrays):
-        deviations = circ_dist(group, common_median)
-        m[i] = np.sum(deviations < 0)
+    # Per-observation indicator of falling below the (fixed) common median. The
+    # common median and these indicators are invariant under relabelling, so the
+    # randomization below only reshuffles the indicators into the group sizes.
+    below = (circ_dist(np.hstack(arrays), common_median) < 0).astype(float)
+    split_at = np.cumsum(ns)[:-1]
+    m = np.array([g.sum() for g in np.split(below, split_at)])
 
     # Compute test statistic
     M = np.sum(m)
     if M == 0 or M == N:
         raise ValueError("All observations fall on the same side of the median; test is undefined.")
 
-    P = (N**2 / (M * (N - M))) * np.sum(m**2 / ns) - (N * M) / (N - M)
+    def _pg(groups: list[np.ndarray]) -> float:
+        mk = np.array([g.sum() for g in groups])
+        return (N**2 / (M * (N - M))) * np.sum(mk**2 / ns) - (N * M) / (N - M)
+
+    P = _pg(np.split(below, split_at))
 
     # Compute p-value
     df = k - 1
-    p_value = chi2.sf(P, df)
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        p_value = _randomization_pval(_pg, below, ns, P, n_resamples, rng)
+        method = "randomization"
+    else:
+        p_value = float(chi2.sf(P, df))
+        method = "asymptotic"
     reject = p_value < alpha
 
     # If the null hypothesis is rejected, return NaN for the median
@@ -2874,6 +2939,8 @@ def common_median_test(
         statistic=float(P),
         pval=float(p_value),
         reject=bool(reject),
+        method=method,
+        n_resamples=n_resamples,
     )
 
     # Print results if verbose is enabled

@@ -1167,3 +1167,41 @@ def test_deprecated_resampling_aliases():
     rao = rao_spacing_test(alpha, n_resamples=200, seed=1)
     with pytest.warns(DeprecationWarning):
         assert rao.mode == rao.data_kind  # "ungrouped"
+
+
+def test_common_median_randomization():
+    """common_median_test randomization reproduces the book's ant-data result and
+    the χ² asymptotic value (Pewsey et al. 2013, §7.3.2; data = B10)."""
+    df = load_data("B10", source="fisher")  # desert-ant directions, 3 groups
+    groups = [np.deg2rad(df[df["set"] == s]["θ"].values.astype(float)) for s in (1, 2, 3)]
+
+    asy = common_median_test(groups)
+    assert asy.method == "asymptotic"
+    np.testing.assert_allclose(asy.pval, 0.4293, atol=2e-3)  # book χ² p-value
+
+    rnd = common_median_test(groups, n_resamples=9999, seed=1)
+    assert rnd.method == "randomization" and rnd.n_resamples == 9999
+    assert 0.40 < rnd.pval < 0.44  # book randomization p ≈ 0.4195, CI (0.410, 0.429)
+
+    # determinism: int seed == equivalent Generator
+    p_int = common_median_test(groups, n_resamples=500, seed=7).pval
+    p_gen = common_median_test(groups, n_resamples=500, seed=np.random.default_rng(7)).pval
+    assert p_int == p_gen
+
+
+def test_watson_u2_randomization():
+    """watson_u2_test randomization reproduces the book's ant-data result
+    (control vs 2nd treatment; Pewsey et al. 2013, §7.5.5; data = B10)."""
+    df = load_data("B10", source="fisher")
+    s1 = np.deg2rad(df[df["set"] == 1]["θ"].values.astype(float))
+    s3 = np.deg2rad(df[df["set"] == 3]["θ"].values.astype(float))
+
+    rnd = watson_u2_test([s1, s3], n_resamples=9999, seed=1)
+    assert rnd.method == "randomization" and rnd.n_resamples == 9999
+    np.testing.assert_allclose(rnd.U2, 0.1944, atol=1e-3)  # book statistic
+    assert 0.03 < rnd.pval < 0.05  # book randomization p ≈ 0.0386, CI (0.035, 0.042)
+
+    assert watson_u2_test([s1, s3]).method == "asymptotic"  # default unchanged
+    p_int = watson_u2_test([s1, s3], n_resamples=500, seed=3).pval
+    p_gen = watson_u2_test([s1, s3], n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p_int == p_gen
