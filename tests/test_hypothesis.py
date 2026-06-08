@@ -262,7 +262,7 @@ def test_kuiper_test():
 def test_watson_test():
     pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
     c_pigeon = Circular(data=pigeon)
-    result = watson_test(alpha=c_pigeon.alpha, n_simulation=9999)
+    result = watson_test(alpha=c_pigeon.alpha, n_resamples=9999)
     np.testing.assert_approx_equal(result.U2, 0.137, significant=3)
     assert result.pval > 0.10
 
@@ -282,7 +282,7 @@ def test_angular_randomisation_test():
 def test_rao_spacing_test():
     pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
     c_pigeon = Circular(data=pigeon)
-    result = rao_spacing_test(alpha=c_pigeon.alpha, n_simulation=9999)
+    result = rao_spacing_test(alpha=c_pigeon.alpha, n_resamples=9999)
     np.testing.assert_approx_equal(result.statistic, 161.92308, significant=3)
     assert 0.05 < result.pval < 0.10
 
@@ -294,27 +294,27 @@ def test_randomized_tests_seed_harmonization():
     def make_generator():
         return np.random.default_rng(seed_value)
 
-    rayleigh_int = rayleigh_test(alpha=alpha, B=128, seed=seed_value)
-    rayleigh_gen = rayleigh_test(alpha=alpha, B=128, seed=make_generator())
-    assert rayleigh_int.bootstrap_pval == rayleigh_gen.bootstrap_pval
+    rayleigh_int = rayleigh_test(alpha=alpha, n_resamples=128, seed=seed_value)
+    rayleigh_gen = rayleigh_test(alpha=alpha, n_resamples=128, seed=make_generator())
+    assert rayleigh_int.pval == rayleigh_gen.pval
 
     samples = [alpha[:6], alpha[6:]]
-    art_int = angular_randomisation_test(samples, n_simulation=128, seed=seed_value)
+    art_int = angular_randomisation_test(samples, n_resamples=128, seed=seed_value)
     art_gen = angular_randomisation_test(
-        samples, n_simulation=128, seed=make_generator()
+        samples, n_resamples=128, seed=make_generator()
     )
     assert art_int.pval == art_gen.pval
 
-    kuiper_int = kuiper_test(alpha=alpha, n_simulation=256, seed=seed_value)
-    kuiper_gen = kuiper_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    kuiper_int = kuiper_test(alpha=alpha, n_resamples=256, seed=seed_value)
+    kuiper_gen = kuiper_test(alpha=alpha, n_resamples=256, seed=make_generator())
     assert kuiper_int.pval == kuiper_gen.pval
 
-    watson_int = watson_test(alpha=alpha, n_simulation=256, seed=seed_value)
-    watson_gen = watson_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    watson_int = watson_test(alpha=alpha, n_resamples=256, seed=seed_value)
+    watson_gen = watson_test(alpha=alpha, n_resamples=256, seed=make_generator())
     assert watson_int.pval == watson_gen.pval
 
-    rao_int = rao_spacing_test(alpha=alpha, n_simulation=256, seed=seed_value)
-    rao_gen = rao_spacing_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    rao_int = rao_spacing_test(alpha=alpha, n_resamples=256, seed=seed_value)
+    rao_gen = rao_spacing_test(alpha=alpha, n_resamples=256, seed=make_generator())
     assert rao_int.pval == rao_gen.pval
 
 
@@ -935,18 +935,19 @@ def test_rao_spacing_test_grouped():
     ang = np.deg2rad(np.array([10.0, 40.0, 70.0, 100.0, 200.0, 300.0]))
     w = np.array([3, 1, 2, 1, 4, 2])
 
-    grouped = rao_spacing_test(ang, w=w, n_simulation=999, seed=1)
-    expanded = rao_spacing_test(np.repeat(ang, w), n_simulation=999, seed=1)
-    assert grouped.mode == "grouped"
+    grouped = rao_spacing_test(ang, w=w, n_resamples=999, seed=1)
+    expanded = rao_spacing_test(np.repeat(ang, w), n_resamples=999, seed=1)
+    assert grouped.data_kind == "grouped"
+    assert grouped.method == "monte_carlo"
     np.testing.assert_allclose(grouped.statistic, expanded.statistic, rtol=1e-12)
     assert 0.0 < grouped.pval <= 1.0
 
     with pytest.raises(ValueError):  # negative weight
-        rao_spacing_test(ang, w=np.array([1, -1, 2, 1, 1, 1]), n_simulation=99)
+        rao_spacing_test(ang, w=np.array([1, -1, 2, 1, 1, 1]), n_resamples=99)
     with pytest.raises(ValueError):  # non-integer weight
-        rao_spacing_test(ang, w=np.array([1.0, 1.5, 2.0, 1.0, 1.0, 1.0]), n_simulation=99)
+        rao_spacing_test(ang, w=np.array([1.0, 1.5, 2.0, 1.0, 1.0, 1.0]), n_resamples=99)
     with pytest.raises(ValueError):  # shape mismatch
-        rao_spacing_test(ang, w=np.array([1, 2, 3]), n_simulation=99)
+        rao_spacing_test(ang, w=np.array([1, 2, 3]), n_resamples=99)
 
 
 def test_wheeler_watson_three_samples():
@@ -978,27 +979,29 @@ def test_wheeler_watson_three_samples():
 
 
 def test_kuiper_test_asymptotic():
-    """Asymptotic mode (n_simulation=1) returns a valid p-value close to the
-    simulated one."""
+    """Asymptotic mode (n_resamples=0) returns a valid p-value close to the
+    Monte-Carlo one."""
     d = load_data("B5", source="fisher")["θ"].values[:]
     c = Circular(data=d, unit="degree", full_cycle=180)
-    asymp = kuiper_test(alpha=c.alpha, n_simulation=1)
-    sim = kuiper_test(alpha=c.alpha, n_simulation=9999)
-    assert asymp.mode == "asymptotic"
-    assert asymp.n_simulation == 1
+    asymp = kuiper_test(alpha=c.alpha, n_resamples=0)
+    sim = kuiper_test(alpha=c.alpha, n_resamples=9999)
+    assert asymp.method == "asymptotic"
+    assert asymp.n_resamples == 0
+    assert sim.method == "monte_carlo"
     assert 0.0 <= asymp.pval <= 1.0
     assert abs(asymp.pval - sim.pval) < 0.05
 
 
 def test_watson_test_asymptotic():
-    """Asymptotic mode (n_simulation=1) returns a valid p-value close to the
-    simulated one."""
+    """Asymptotic mode (n_resamples=0) returns a valid p-value close to the
+    Monte-Carlo one."""
     pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
     c = Circular(data=pigeon)
-    asymp = watson_test(alpha=c.alpha, n_simulation=1)
-    sim = watson_test(alpha=c.alpha, n_simulation=9999)
-    assert asymp.mode == "asymptotic"
-    assert asymp.n_simulation == 1
+    asymp = watson_test(alpha=c.alpha, n_resamples=0)
+    sim = watson_test(alpha=c.alpha, n_resamples=9999)
+    assert asymp.method == "asymptotic"
+    assert asymp.n_resamples == 0
+    assert sim.method == "monte_carlo"
     assert 0.0 <= asymp.pval <= 1.0
     assert abs(asymp.pval - sim.pval) < 0.05
 
@@ -1088,7 +1091,7 @@ def test_verbose_branches_smoke(capsys):
     rng = np.random.default_rng(0)
     alpha = rng.vonmises(0.0, 4, 30)
 
-    rayleigh_test(alpha=alpha, B=50, verbose=True)            # bootstrap print
+    rayleigh_test(alpha=alpha, n_resamples=50, verbose=True)  # monte-carlo print
     one_sample_test(angle=0.0, alpha=alpha, verbose=True)     # reject=False branch
     one_sample_test(angle=np.pi, alpha=alpha, verbose=True)   # reject=True branch
     circ_range_test(alpha, verbose=True)
@@ -1113,7 +1116,8 @@ def test_result_helpers():
         "r": res.r,
         "z": res.z,
         "pval": res.pval,
-        "bootstrap_pval": res.bootstrap_pval,
+        "method": res.method,
+        "n_resamples": res.n_resamples,
     }
     assert res.significance() == "***"
     assert res.significance("does_not_exist") is None
@@ -1128,3 +1132,38 @@ def test_legacy_positional_verbose_warns():
     alpha = np.linspace(0, 2 * np.pi, 12, endpoint=False)
     with pytest.warns(DeprecationWarning):
         rayleigh_test(alpha=alpha, seed=True)
+
+
+def test_deprecated_resampling_aliases():
+    """Old `B` / `n_simulation` kwargs and old result attributes still work,
+    with a DeprecationWarning, after the n_resamples/method harmonization."""
+    rng = np.random.default_rng(0)
+    alpha = rng.uniform(0, 2 * np.pi, 30)
+
+    # Param alias maps onto n_resamples (same seed/count => identical result).
+    with pytest.warns(DeprecationWarning):
+        old = rayleigh_test(alpha=alpha, B=200, seed=1)
+    new = rayleigh_test(alpha=alpha, n_resamples=200, seed=1)
+    assert old.pval == new.pval
+    assert old.method == "monte_carlo"
+
+    # Old sentinel `1` meant "no resampling" for tests with an analytic fallback.
+    with pytest.warns(DeprecationWarning):
+        assert rayleigh_test(alpha=alpha, B=1).method == "asymptotic"
+    with pytest.warns(DeprecationWarning):
+        assert kuiper_test(alpha=alpha, n_simulation=1).method == "asymptotic"
+    with pytest.warns(DeprecationWarning):
+        assert kuiper_test(alpha=alpha, n_simulation=500, seed=1).method == "monte_carlo"
+
+    # Deprecated result attributes proxy the new fields.
+    mc = rayleigh_test(alpha=alpha, n_resamples=200, seed=1)
+    with pytest.warns(DeprecationWarning):
+        assert mc.bootstrap_pval == mc.pval
+    kup = kuiper_test(alpha=alpha, n_resamples=0)
+    with pytest.warns(DeprecationWarning):
+        assert kup.mode == "asymptotic"
+    with pytest.warns(DeprecationWarning):
+        assert kup.n_simulation == 0
+    rao = rao_spacing_test(alpha, n_resamples=200, seed=1)
+    with pytest.warns(DeprecationWarning):
+        assert rao.mode == rao.data_kind  # "ungrouped"

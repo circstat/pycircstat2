@@ -93,6 +93,49 @@ def _resolve_legacy_verbose(seed: SeedLike, verbose: bool) -> tuple[SeedLike, bo
     return seed, verbose
 
 
+def _resolve_n_resamples(
+    n_resamples: int,
+    *,
+    B: Optional[int] = None,
+    n_simulation: Optional[int] = None,
+    has_asymptotic: bool,
+) -> int:
+    """Map the deprecated ``B`` / ``n_simulation`` keywords onto ``n_resamples``.
+
+    ``n_resamples == 0`` means "no resampling" (use the analytic p-value). For tests
+    that have an analytic fallback (``has_asymptotic``) the old sentinel value ``1``
+    requested exactly that, so it maps to ``0``; otherwise the count passes through.
+    """
+
+    legacy_name, legacy_value = None, None
+    if B is not None:
+        legacy_name, legacy_value = "B", B
+    elif n_simulation is not None:
+        legacy_name, legacy_value = "n_simulation", n_simulation
+
+    if legacy_value is None:
+        return n_resamples
+
+    warnings.warn(
+        f"`{legacy_name}` is deprecated; use `n_resamples` instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    if has_asymptotic and legacy_value <= 1:
+        return 0
+    return int(legacy_value)
+
+
+def _warn_deprecated_attr(old: str, new: str) -> None:
+    """Emit a deprecation warning for a renamed result attribute."""
+
+    warnings.warn(
+        f"`{old}` is deprecated; use `{new}` instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -127,9 +170,16 @@ class TestResult:
 @dataclass(frozen=True)
 class RayleighTestResult(TestResult):
     r: float  # Resultant vector length
-    z: float  # Test Statistic (Rayleigh's Z)
-    pval: float  # Classical P-value
-    bootstrap_pval: Optional[float] = None  # Bootstrap P-value, if computed
+    z: float  # Test statistic (Rayleigh's Z)
+    pval: float  # P-value (analytic or Monte-Carlo, per `method`)
+    method: str  # "asymptotic" | "monte_carlo"
+    n_resamples: int = 0
+
+    @property
+    def bootstrap_pval(self) -> Optional[float]:
+        """Deprecated: the Monte-Carlo p-value, now in `pval` when `method="monte_carlo"`."""
+        _warn_deprecated_attr("bootstrap_pval", "pval (with method='monte_carlo')")
+        return self.pval if self.method == "monte_carlo" else None
 
 
 @dataclass(frozen=True)
@@ -220,31 +270,75 @@ class CircularAnovaResult(TestResult):
 class AngularRandomisationTestResult(TestResult):
     statistic: float
     pval: float
-    n_simulation: int
+    method: str  # always "randomization"
+    n_resamples: int
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class KuiperTestResult(TestResult):
     V: float
     pval: float
-    mode: str
-    n_simulation: int
+    method: str  # "asymptotic" | "monte_carlo"
+    n_resamples: int
+
+    @property
+    def mode(self) -> str:
+        """Deprecated: p-value method, now in `method` ("asymptotic"|"monte_carlo")."""
+        _warn_deprecated_attr("mode", "method")
+        return "asymptotic" if self.method == "asymptotic" else "simulation"
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class WatsonTestResult(TestResult):
     U2: float
     pval: float
-    mode: str
-    n_simulation: int
+    method: str  # "asymptotic" | "monte_carlo"
+    n_resamples: int
+
+    @property
+    def mode(self) -> str:
+        """Deprecated: p-value method, now in `method` ("asymptotic"|"monte_carlo")."""
+        _warn_deprecated_attr("mode", "method")
+        return "asymptotic" if self.method == "asymptotic" else "simulation"
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class RaoSpacingTestResult(TestResult):
     statistic: float
     pval: float
-    mode: str
-    n_simulation: int
+    method: str  # always "monte_carlo"
+    data_kind: str  # "grouped" | "ungrouped"
+    n_resamples: int
+
+    @property
+    def mode(self) -> str:
+        """Deprecated: data descriptor, now in `data_kind` ("grouped"|"ungrouped")."""
+        _warn_deprecated_attr("mode", "data_kind")
+        return self.data_kind
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
@@ -430,9 +524,11 @@ def rayleigh_test(
     w: Optional[np.ndarray] = None,
     r: Optional[float] = None,
     n: Optional[int] = None,
-    B: int = 1,
+    n_resamples: int = 0,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    B: Optional[int] = None,
 ) -> RayleighTestResult:
     r"""
     Rayleigh's Test for Circular Uniformity.
@@ -464,17 +560,22 @@ def rayleigh_test(
     n: int or None
         Sample size.
 
-    B: int
-        Number of bootstrap samples for p-value estimation.
+    n_resamples: int
+        If ``0`` (default), the analytic p-value (eq. 27.4) is returned. If ``>= 1``,
+        that many Monte-Carlo samples drawn from the uniform null are used to estimate
+        the p-value instead.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for bootstrap resampling
-        when ``B > 1``. Accepts integers, sequences of integers, ``numpy.random.Generator``,
-        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
-        Defaults to 2046.
+        Seed used to initialize the random number generator for Monte-Carlo resampling
+        when ``n_resamples >= 1``. Accepts integers, sequences of integers,
+        ``numpy.random.Generator``, ``numpy.random.BitGenerator``,
+        ``numpy.random.SeedSequence`` or ``None``. Defaults to 2046.
 
     verbose: bool
         Print formatted results.
+
+    B: int or None
+        Deprecated alias for ``n_resamples`` (the old ``B=1`` meant "no resampling").
 
     Returns
     -------
@@ -486,17 +587,20 @@ def rayleigh_test(
         - z: float
             - Test statistic (Rayleigh's Z).
         - pval: float
-            - Classical p-value based on the asymptotic formula.
-        - bootstrap_pval: float or None
-            - Bootstrap p-value (if computed, i.e., B > 1); otherwise, None.
+            - P-value, computed per ``method``.
+        - method: str
+            - "asymptotic" (eq. 27.4) or "monte_carlo".
+        - n_resamples: int
+            - Number of Monte-Carlo resamples used (0 if analytic).
 
     Reference
     ---------
     P625, Section 27.1, Example 27.1 of Zar, 2010
     """
 
-    if B <= 0:
-        raise ValueError("`B` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, B=B, has_asymptotic=True)
+    if n_resamples < 0:
+        raise ValueError("`n_resamples` must be a non-negative integer.")
 
     if r is None:
         if alpha is None:
@@ -529,20 +633,18 @@ def rayleigh_test(
     R = n * r
     z = n * r**2  # eq(27.2)
 
-    pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
+    pval = float(np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n)))  # eq(27.4)
+    method = "asymptotic"
 
-    bootstrap_pval: Optional[float]
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if B > 1:
+    if n_resamples >= 1:
         rng = _init_rng(seed)
-        uniforms = rng.uniform(0.0, 2 * np.pi, size=(B, n))
-        unit_vectors = np.exp(1j * uniforms)
-        resultant_lengths = np.abs(np.sum(unit_vectors, axis=1))
-        bootstrap_stats = (resultant_lengths**2) / n
-        bootstrap_pval = float((np.count_nonzero(bootstrap_stats >= z) + 1) / (B + 1))
-    else:
-        bootstrap_pval = None
+        uniforms = rng.uniform(0.0, 2 * np.pi, size=(n_resamples, n))
+        resultant_lengths = np.abs(np.sum(np.exp(1j * uniforms), axis=1))
+        mc_stats = (resultant_lengths**2) / n
+        pval = float((np.count_nonzero(mc_stats >= z) + 1) / (n_resamples + 1))
+        method = "monte_carlo"
 
     if verbose:
         print("Rayleigh's Test of Uniformity")
@@ -551,13 +653,9 @@ def rayleigh_test(
         print("HA: ρ ≠ 0")
         print("")
         print(f"Test Statistics  (ρ | z-score): {r:.5f} | {z:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
-        if B > 1 and bootstrap_pval is not None:
-            print(
-                f"Bootstrap P-value: {bootstrap_pval:.5f} {significance_code(bootstrap_pval)}"
-            )
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return RayleighTestResult(r=r, z=z, pval=pval, bootstrap_pval=bootstrap_pval)
+    return RayleighTestResult(r=r, z=z, pval=pval, method=method, n_resamples=n_resamples)
 
 
 def chisquare_test(w: np.ndarray, verbose: bool = False) -> ChiSquareTestResult:
@@ -1504,9 +1602,11 @@ def circ_anova(
 
 def angular_randomisation_test(
     samples: Sequence[Any],
-    n_simulation: int = 1000,
+    n_resamples: int = 1000,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> AngularRandomisationTestResult:
     """The Angular Randomization Test (ART) for homogeneity.
 
@@ -1517,18 +1617,21 @@ def angular_randomisation_test(
     ----------
     samples: sequence
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
-    n_simulation: int, optional
-        Number of permutations for the test. Defaults to 1000.
+    n_resamples: int, optional
+        Number of random permutations for the test. Defaults to 1000.
     seed: SeedLike
         Seed used to initialize the random number generator for the permutation test.
         Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples``.
 
     Returns
     -------
     AngularRandomisationTestResult
-        Dataclass containing the observed statistic and permutation p-value.
+        Dataclass containing the observed statistic, permutation p-value,
+        ``method="randomization"``, and ``n_resamples``.
 
     Reference
     ---------
@@ -1537,12 +1640,14 @@ def angular_randomisation_test(
     International Journal of Nonlinear Analysis and Applications, 13(1), 2703-2711.
     """
 
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=False)
+
     normalized = _coerce_circular_samples(samples)
 
     if len(normalized) != 2:
         raise ValueError("The Angular Randomization Test requires exactly two samples.")
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    if n_resamples <= 0:
+        raise ValueError("`n_resamples` must be a positive integer.")
 
     sample_arrays = [np.asarray(sample.alpha, dtype=float) for sample in normalized]
     if any(arr.size == 0 for arr in sample_arrays):
@@ -1568,10 +1673,10 @@ def angular_randomisation_test(
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
     rng = _init_rng(seed)
 
-    # Each simulation draws a random partition of the N pooled angles into a
+    # Each permutation draws a random partition of the N pooled angles into a
     # first group of size n1; `left`/`right` are the 0/1 group indicators.
-    order = np.argsort(rng.random((n_simulation, N)), axis=1)
-    left = np.zeros((n_simulation, N), dtype=float)
+    order = np.argsort(rng.random((n_resamples, N)), axis=1)
+    left = np.zeros((n_resamples, N), dtype=float)
     np.put_along_axis(left, order[:, :n1], 1.0, axis=1)
     right = 1.0 - left
 
@@ -1580,7 +1685,7 @@ def angular_randomisation_test(
     # +1 in numerator and denominator counts the observed statistic itself
     # (Jebur & Abushilah 2022, eq. 4.3).
     n_extreme = 1 + int(np.count_nonzero(perm_stats >= observed_stat))
-    p_value = n_extreme / (n_simulation + 1)
+    p_value = n_extreme / (n_resamples + 1)
 
     if verbose:
         print("Angular Randomization Test (ART) for Homogeneity")
@@ -1591,7 +1696,12 @@ def angular_randomisation_test(
         print(f"Observed Test Statistic: {observed_stat:.5f}")
         print(f"P-value: {p_value:.5f} {significance_code(p_value)}")
 
-    return AngularRandomisationTestResult(statistic=float(observed_stat), pval=float(p_value), n_simulation=n_simulation)
+    return AngularRandomisationTestResult(
+        statistic=float(observed_stat),
+        pval=float(p_value),
+        method="randomization",
+        n_resamples=n_resamples,
+    )
 
 
 #####################
@@ -1601,9 +1711,11 @@ def angular_randomisation_test(
 
 def kuiper_test(
     alpha: np.ndarray,
-    n_simulation: int = 9999,
+    n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> KuiperTestResult:
     """
     Kuiper's test for Circular Uniformity.
@@ -1619,22 +1731,24 @@ def kuiper_test(
     alpha: np.array
         Angles in radian.
 
-    n_simulation: int
-        Number of simulation for the p-value.
-        If n_simulation=1, the p-value is asymptotically approximated.
-        If n_simulation>1, the p-value is simulated.
-        Default is 9999.
+    n_resamples: int
+        If ``0``, the p-value is the asymptotic series approximation. If ``>= 1``
+        (default 9999), it is estimated from that many Monte-Carlo uniform samples.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for the simulation-based
+        Seed used to initialize the random number generator for the Monte-Carlo
         p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
 
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples`` (the old ``n_simulation=1`` meant asymptotic).
+
     Returns
     -------
     KuiperTestResult
-        Dataclass containing the Kuiper statistic, p-value, simulation mode, and count.
+        Dataclass containing the Kuiper statistic, p-value, ``method``
+        ("asymptotic"|"monte_carlo"), and ``n_resamples``.
 
     Note
     ----
@@ -1642,8 +1756,9 @@ def kuiper_test(
     https://rdrr.io/cran/Directional/src/R/kuiper.R
     """
 
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=True)
+    if n_resamples < 0:
+        raise ValueError("`n_resamples` must be a non-negative integer.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
@@ -1665,9 +1780,9 @@ def kuiper_test(
 
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if n_simulation == 1:
+    if n_resamples == 0:
         # asymptotic p-value
-        mode = "asymptotic"
+        method = "asymptotic"
         m = (np.arange(1, 50, dtype=float)) ** 2
         a1 = 4 * m * Vo**2
         a2 = np.exp(-2 * m * Vo**2)
@@ -1675,12 +1790,12 @@ def kuiper_test(
         b2 = 8 * Vo / (3 * f) * m * (a1 - 3) * a2
         pval = float(np.sum(b1 - b2))
     else:
-        mode = "simulation"
+        method = "monte_carlo"
         rng = _init_rng(seed)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_resamples))
         x = np.sort(uniforms, axis=0)
-        Vs = np.array([compute_V(x[:, i])[0] for i in range(n_simulation)])
-        pval = float((np.count_nonzero(Vs >= Vo) + 1) / (n_simulation + 1))
+        Vs = np.array([compute_V(x[:, i])[0] for i in range(n_resamples)])
+        pval = float((np.count_nonzero(Vs >= Vo) + 1) / (n_resamples + 1))
 
     if verbose:
         print("Kuiper's Test of Circular Uniformity")
@@ -1689,16 +1804,18 @@ def kuiper_test(
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {Vo:.4f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return KuiperTestResult(V=float(Vo), pval=float(pval), mode=mode, n_simulation=n_simulation)
+    return KuiperTestResult(V=float(Vo), pval=float(pval), method=method, n_resamples=n_resamples)
 
 
 def watson_test(
     alpha: np.ndarray,
-    n_simulation: int = 9999,
+    n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> WatsonTestResult:
     """
     Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
@@ -1714,21 +1831,24 @@ def watson_test(
     alpha: np.array
         Angles in radian.
 
-    n_simulation: int
-        Number of simulation for the p-value.
-        If n_simulation=1, the p-value is asymptotically approximated.
-        If n_simulation>1, the p-value is simulated.
+    n_resamples: int
+        If ``0``, the p-value is the asymptotic series approximation. If ``>= 1``
+        (default 9999), it is estimated from that many Monte-Carlo uniform samples.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for the simulation-based
+        Seed used to initialize the random number generator for the Monte-Carlo
         p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
 
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples`` (the old ``n_simulation=1`` meant asymptotic).
+
     Returns
     -------
     WatsonTestResult
-        Dataclass containing the Watson U² statistic, p-value, and simulation details.
+        Dataclass containing the Watson U² statistic, p-value, ``method``
+        ("asymptotic"|"monte_carlo"), and ``n_resamples``.
 
     Note
     ----
@@ -1743,8 +1863,9 @@ def watson_test(
     kuiper_test(); rao_spacing_test()
     """
 
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=True)
+    if n_resamples < 0:
+        raise ValueError("`n_resamples` must be a non-negative integer.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
@@ -1764,17 +1885,17 @@ def watson_test(
 
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if n_simulation == 1:
-        mode = "asymptotic"
+    if n_resamples == 0:
+        method = "asymptotic"
         m = np.arange(1, 51)
         pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
     else:
-        mode = "simulation"
+        method = "monte_carlo"
         rng = _init_rng(seed)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_resamples))
         x = np.sort(uniforms, axis=0)
-        U2s = np.array([compute_U2(x[:, i]) for i in range(n_simulation)])
-        pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_simulation + 1))
+        U2s = np.array([compute_U2(x[:, i]) for i in range(n_resamples)])
+        pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_resamples + 1))
 
     if verbose:
         print("Watson's One-Sample U2 Test of Circular Uniformity")
@@ -1783,18 +1904,20 @@ def watson_test(
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {U2o:.4f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WatsonTestResult(U2=float(U2o), pval=float(pval), mode=mode, n_simulation=n_simulation)
+    return WatsonTestResult(U2=float(U2o), pval=float(pval), method=method, n_resamples=n_resamples)
 
 
 def rao_spacing_test(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     kappa: float = 1000.0,
-    n_simulation: int = 9999,
+    n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> RaoSpacingTestResult:
     """Simulation based Rao's spacing test.
 
@@ -1814,19 +1937,24 @@ def rao_spacing_test(
     kappa: float
         Concentration parameter. Only use for grouped data.
 
-    n_simulation: int
-        Number of simulations.
+    n_resamples: int
+        Number of Monte-Carlo samples for the p-value (default 9999). Must be >= 1;
+        this test has no analytic fallback.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for the simulation-based
+        Seed used to initialize the random number generator for the Monte-Carlo
         p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
 
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples``.
+
     Returns
     -------
     RaoSpacingTestResult
-        Dataclass containing the Rao spacing statistic (degrees), p-value, method, and simulation count.
+        Dataclass containing the Rao spacing statistic (degrees), p-value,
+        ``method="monte_carlo"``, ``data_kind`` ("grouped"|"ungrouped"), and ``n_resamples``.
 
     Reference
     ---------
@@ -1834,8 +1962,9 @@ def rao_spacing_test(
     https://movementecologyjournal.biomedcentral.com/articles/10.1186/s40462-019-0160-x
     """
 
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=False)
+    if n_resamples <= 0:
+        raise ValueError("`n_resamples` must be a positive integer.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
@@ -1861,11 +1990,11 @@ def rao_spacing_test(
             raise ValueError("Sum of weights must be positive.")
         m = alpha.size
         expanded_alpha = np.repeat(alpha, w)
-        mode = "grouped"
+        data_kind = "grouped"
     else:
         expanded_alpha = alpha
         n = expanded_alpha.size
-        mode = "ungrouped"
+        data_kind = "ungrouped"
 
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
@@ -1874,17 +2003,17 @@ def rao_spacing_test(
     Uo = compute_U(expanded_alpha)
     if w is not None:  # noncontinuous / grouped data
         vm_dist = vonmises(kappa=kappa)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n_simulation, n))
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n_resamples, n))
         snapped = np.floor(uniforms * m / (2 * np.pi)) * (2 * np.pi / m)
-        noise = vm_dist.rvs(size=(n_simulation, n), random_state=rng)
+        noise = vm_dist.rvs(size=(n_resamples, n), random_state=rng)
         samples = angmod(snapped + noise)
         Us = np.array([compute_U(sample) for sample in samples])
     else:
-        samples = rng.uniform(low=0.0, high=2 * np.pi, size=(n_simulation, n))
+        samples = rng.uniform(low=0.0, high=2 * np.pi, size=(n_resamples, n))
         Us = np.array([compute_U(sample) for sample in samples])
 
     counter = np.count_nonzero(Us >= Uo)
-    pval = float((counter + 1) / (n_simulation + 1))
+    pval = float((counter + 1) / (n_resamples + 1))
 
     if verbose:
         print("Rao's Spacing Test of Circular Uniformity")
@@ -1898,8 +2027,9 @@ def rao_spacing_test(
     return RaoSpacingTestResult(
         statistic=float(np.rad2deg(Uo)),
         pval=float(pval),
-        mode=mode,
-        n_simulation=n_simulation,
+        method="monte_carlo",
+        data_kind=data_kind,
+        n_resamples=n_resamples,
     )
 
 
