@@ -73,6 +73,26 @@ def _init_rng(seed: SeedLike) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
+def _resolve_legacy_verbose(seed: SeedLike, verbose: bool) -> tuple[SeedLike, bool]:
+    """Back-compat shim for the formerly positional ``verbose`` argument.
+
+    Before ``seed`` was introduced these tests took ``verbose`` as the trailing
+    positional argument, so a legacy call such as ``test(..., True)`` now binds
+    ``True`` to ``seed`` instead. Detect that exact case (``seed is True`` with
+    ``verbose`` left at its default) and reinterpret it as ``verbose=True``.
+    """
+
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return 2046, True
+
+    return seed, verbose
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -384,7 +404,7 @@ def rayleigh_test(
     Rayleigh's Test for Circular Uniformity.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: The data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not distributed uniformly around the circle.
 
     $$ z = n \cdot r^2 $$
 
@@ -478,14 +498,7 @@ def rayleigh_test(
     pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
 
     bootstrap_pval: Optional[float]
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
     if B > 1:
         rng = _init_rng(seed)
@@ -517,9 +530,9 @@ def chisquare_test(w: np.ndarray, verbose: bool = False) -> ChiSquareTestResult:
     """Chi-Square Goodness of Fit for Circular data.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not distributed uniformly around the circle.
 
-    For method is for grouped data.
+    This method is for grouped data.
 
     Parameters
     ----------
@@ -846,7 +859,7 @@ def omnibus_test(
         print('Hodges-Ajne ("omnibus") Test for Uniformity')
         print("-------------------------------------------")
         print("H0: uniform")
-        print("HA: not unifrom")
+        print("HA: not uniform")
         print("")
         print(f"Test Statistics: {A:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -899,7 +912,7 @@ def batschelet_test(
         print("Batschelet Test for Uniformity")
         print("------------------------------")
         print("H0: uniform")
-        print(f"HA: not unifrom but concentrated around θ = {angle:.5f} rad")
+        print(f"HA: not uniform but concentrated around θ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {C}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -1097,14 +1110,14 @@ def watson_u2_test(
     P639-640, Section 27.5, Example 27.10 of Zar, 2010
     """
 
-    from scipy.stats import rankdata
-
     normalized = _coerce_circular_samples(samples)
     if len(normalized) != 2:
         raise ValueError("`watson_u2_test` requires exactly two samples.")
 
     def cumfreq(alpha_unique: np.ndarray, sample: _CircularSample) -> np.ndarray:
-        expanded = sample.expand()
+        # The step-CDF reconstruction below assumes ascending order, so sort
+        # rather than relying on the caller to pass pre-sorted angles.
+        expanded = np.sort(sample.expand())
         if expanded.size == 0:
             raise ValueError("Each sample must contain at least one observation.")
 
@@ -1178,8 +1191,6 @@ def wheeler_watson_test(
     The current implementation doesn't consider ties in the data.
     Can be improved with P144, Pewsey et al. (2013)
     """
-    from scipy.stats import chi2
-
     normalized = _coerce_circular_samples(samples)
 
     def get_circrank(alpha: np.ndarray, sample: _CircularSample, N: int) -> np.ndarray:
@@ -1269,7 +1280,12 @@ def wallraff_test(
         angles = angle_arr
 
     ns = [sample.n for sample in normalized]
-    distances = [angular_distance(normalized[i].alpha, angles[i]) for i in range(len(normalized))]
+    # Expand by weights so each distance vector has length ``sample.n``; this
+    # keeps the Mann-Whitney rank split below correct for grouped data and is a
+    # no-op for ungrouped samples.
+    distances = [
+        angular_distance(sample.expand(), angles[i]) for i, sample in enumerate(normalized)
+    ]
 
     rs = rankdata(np.hstack(distances))
 
@@ -1379,7 +1395,7 @@ def circ_anova(
         else:
             F_stat = MS_between / MS_within
 
-        p_value = 1 - f.cdf(F_stat, df_between, df_within)
+        p_value = f.sf(F_stat, df_between, df_within)
 
         result = CircularAnovaResult(
             method="F-test",
@@ -1404,7 +1420,7 @@ def circ_anova(
         chi_square_stat = term1 * term2
 
         df = k - 1
-        p_value = 1 - chi2.cdf(chi_square_stat, df)
+        p_value = chi2.sf(chi_square_stat, df)
 
         result = CircularAnovaResult(
             method="LRT",
@@ -1523,14 +1539,7 @@ def angular_randomisation_test(
     n1 = sample_arrays[0].size
 
     # Perform permutation test
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
     rng = _init_rng(seed)
 
@@ -1579,7 +1588,7 @@ def kuiper_test(
     Kuiper's test for Circular Uniformity.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not distributed uniformly around the circle.
 
     This method is for ungrouped data.
 
@@ -1633,14 +1642,7 @@ def kuiper_test(
     n = alpha.size
     Vo, f = compute_V(alpha)
 
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
     if n_simulation == 1:
         # asymptotic p-value
@@ -1666,7 +1668,7 @@ def kuiper_test(
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {Vo:.4f}")
-        print(f"P-value = {pval} {significance_code(pval)}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
     return KuiperTestResult(V=float(Vo), pval=float(pval), mode=mode, n_simulation=n_simulation)
 
@@ -1739,14 +1741,7 @@ def watson_test(
     n = alpha.size
     U2o = compute_U2(alpha)
 
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
     if n_simulation == 1:
         mode = "asymptotic"
@@ -1767,7 +1762,7 @@ def watson_test(
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {U2o:.4f}")
-        print(f"P-value = {pval} {significance_code(pval)}")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
     return WatsonTestResult(U2=float(U2o), pval=float(pval), mode=mode, n_simulation=n_simulation)
 
@@ -1851,14 +1846,7 @@ def rao_spacing_test(
         n = expanded_alpha.size
         mode = "ungrouped"
 
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
     rng = _init_rng(seed)
 
@@ -1883,8 +1871,8 @@ def rao_spacing_test(
         print("H0: The sample is drawn from a circularly uniform distribution.")
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
-        print(f"Test Statistic: {Uo:.4f}")
-        print(f"P-value = {pval}\n")
+        print(f"Test Statistic: {np.rad2deg(Uo):.4f}°")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
     return RaoSpacingTestResult(
         statistic=float(np.rad2deg(Uo)),
@@ -2205,8 +2193,8 @@ def rao_homogeneity_test(
 
     # Compute p-values
     df = k - 1  # Degrees of freedom
-    pval_polar = 1 - chi2.cdf(H_polar, df)
-    pval_disp = 1 - chi2.cdf(H_disp, df)
+    pval_polar = chi2.sf(H_polar, df)
+    pval_disp = chi2.sf(H_disp, df)
 
     # Determine critical values
     crit_polar = chi2.ppf(1 - alpha, df)
@@ -2245,7 +2233,7 @@ def rao_homogeneity_test(
     return result
 
 
-def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
+def change_point_test(alpha: np.ndarray, verbose: bool = False) -> ChangePointTestResult:
     """
     Perform a change point test for mean direction, concentration, or both.
 
@@ -2291,6 +2279,7 @@ def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
         """Estimate mean resultant length (rho)."""
         return np.linalg.norm(np.sum(np.exp(1j * alpha))) / len(alpha)
 
+    alpha = np.asarray(alpha, dtype=float)
     n = len(alpha)
     if n < 4:
         raise ValueError("Sample size must be at least 4 for change point test.")
@@ -2316,13 +2305,11 @@ def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
     k_r = np.argmax(R_diff)
     rave = np.mean(R_diff)
 
-    if n > 3:
-        V = V[1 : n - 2]
-        tmax = np.max(V)
-        k_t = np.argmax(V) + 1
-        tave = np.mean(V)
-    else:
-        raise ValueError("Sample size must be at least 4.")
+    # ``n >= 4`` is guaranteed by the guard above.
+    V = V[1 : n - 2]
+    tmax = np.max(V)
+    k_t = np.argmax(V) + 1
+    tave = np.mean(V)
 
     result = ChangePointTestResult(
         n=int(n),
@@ -2445,7 +2432,7 @@ def harrison_kanji_test(
             ms_i = eff_i / df_i
 
             FI = ms_i / ms_r
-            pI = 1 - f.cdf(FI, df_i, df_r)  # `f.cdf` is now unambiguous
+            pI = f.sf(FI, df_i, df_r)
         else:
             eff_r = n - sum(qr**2.0 / qn) - sum(pr**2.0 / pn) + tr**2 / n
             df_r = (p - 1) * (q - 1)
@@ -2455,22 +2442,22 @@ def harrison_kanji_test(
             beta = 1
 
         F1 = beta * ms_1 / ms_r
-        p1 = 1 - f.cdf(F1, df_1, df_r)
+        p1 = f.sf(F1, df_1, df_r)
 
         F2 = beta * ms_2 / ms_r
-        p2 = 1 - f.cdf(F2, df_2, df_r)
+        p2 = f.sf(F2, df_2, df_r)
 
     else:  # Small kappa approximation
         rr = iv(1, kk) / iv(0, kk)
-        kappa_factor = 2 / (1 - rr**2)  # Renamed `f` to `kappa_factor`
+        kappa_factor = 2 / (1 - rr**2)
 
         chi1 = kappa_factor * (sum(pr**2.0 / pn) - tr**2 / n)
         df_1 = 2 * (p - 1)
-        p1 = 1 - chi2.cdf(chi1, df=df_1)
+        p1 = chi2.sf(chi1, df=df_1)
 
         chi2_val = kappa_factor * (sum(qr**2.0 / qn) - tr**2 / n)
         df_2 = 2 * (q - 1)
-        p2 = 1 - chi2.cdf(chi2_val, df=df_2)
+        p2 = chi2.sf(chi2_val, df=df_2)
 
         chiI = kappa_factor * (
             np.asarray((cr**2.0 / cn).values).sum()
@@ -2626,7 +2613,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
 
     # Compute p-value
     df = k - 1
-    p_value = 1 - chi2.cdf(chi_square_stat, df)
+    p_value = chi2.sf(chi_square_stat, df)
 
     result = EqualKappaTestResult(
         kappa=kappas,
@@ -2721,7 +2708,7 @@ def common_median_test(
 
     # Compute p-value
     df = k - 1
-    p_value = 1 - chi2.cdf(P, df)
+    p_value = chi2.sf(P, df)
     reject = p_value < alpha
 
     # If the null hypothesis is rejected, return NaN for the median
