@@ -1331,3 +1331,31 @@ def test_circ_anova_randomization():
     p_int = circ_anova(diff, n_resamples=500, seed=7).pval
     p_gen = circ_anova(diff, n_resamples=500, seed=np.random.default_rng(7)).pval
     assert p_int == p_gen
+
+
+def test_mc_uniform_pvalues():
+    """V_test / omnibus_test / circ_range_test gain a Monte-Carlo-under-uniform p-value
+    that tracks the analytic one (the analytic Rayleigh/Ajne forms are approximations)."""
+    rng = np.random.default_rng(0)
+    a = rng.vonmises(np.deg2rad(80), 1.0, 30)
+
+    v_a = V_test(angle=np.deg2rad(90), alpha=a)
+    v_m = V_test(angle=np.deg2rad(90), alpha=a, n_resamples=9999, seed=1)
+    assert v_a.method == "asymptotic" and v_m.method == "monte_carlo" and v_m.n_resamples == 9999
+    assert abs(v_a.pval - v_m.pval) < 0.02
+
+    d8 = Circular(data=load_data("D8", source="zar")["θ"].values[:], unit="degree")
+    o_m = omnibus_test(d8.alpha, n_resamples=9999, seed=1)
+    assert o_m.method == "monte_carlo" and o_m.pval < 0.05  # book/asymptotic ~0.0043
+    # MC handles the degenerate (maximally uniform) case the analytic formula clamps.
+    ev = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+    assert omnibus_test(ev, n_resamples=2000, seed=1).pval > 0.5
+
+    x = np.deg2rad(np.array([0.0] * 12 + [3.6, 36, 36, 36, 36, 36, 36, 72, 108, 108, 169.2, 324.0]))
+    assert circ_range_test(x).method == "exact"
+    assert circ_range_test(x, n_resamples=9999, seed=1).pval < 0.05  # clustered -> reject
+
+    # determinism
+    p_int = omnibus_test(d8.alpha, n_resamples=500, seed=3).pval
+    p_gen = omnibus_test(d8.alpha, n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p_int == p_gen

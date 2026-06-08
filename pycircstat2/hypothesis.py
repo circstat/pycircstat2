@@ -190,6 +190,28 @@ def _bootstrap_pval(
     return (count + 1) / (n_resamples + 1)
 
 
+def _mc_uniform_pval(
+    statistic_fn,
+    n: int,
+    observed: float,
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> float:
+    """Monte-Carlo p-value under the uniform-circle null hypothesis.
+
+    Draws ``n_resamples`` samples of ``n`` angles ~ Uniform(0, 2π), recomputes the
+    statistic, and returns ``(#{stat >= observed} + 1) / (n_resamples + 1)``. Pass a
+    statistic oriented so that *larger* means *more extreme*; negate it (and ``observed``)
+    for tests where small values indicate departure from uniformity.
+    """
+
+    count = 0
+    for _ in range(n_resamples):
+        if statistic_fn(rng.uniform(0.0, 2 * np.pi, size=n)) >= observed:
+            count += 1
+    return (count + 1) / (n_resamples + 1)
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -247,6 +269,8 @@ class VTestResult(TestResult):
     V: float
     u: float
     pval: float
+    method: str = "asymptotic"  # "asymptotic" | "monte_carlo"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -265,6 +289,8 @@ class OmnibusTestResult(TestResult):
     A: float
     pval: float
     m: int
+    method: str = "asymptotic"  # "asymptotic" (Ajne approx) | "monte_carlo"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -410,6 +436,8 @@ class RaoSpacingTestResult(TestResult):
 class CircularRangeTestResult(TestResult):
     range_stat: float
     pval: float
+    method: str = "exact"  # "exact" (series) | "monte_carlo"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -792,6 +820,8 @@ def V_test(
     mean: Optional[float] = None,
     r: Optional[float] = None,
     n: Optional[int] = None,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> VTestResult:
     """
@@ -865,7 +895,17 @@ def V_test(
     R = n * r
     V = R * np.cos(angmod(mean - angle, bounds=[-np.pi, np.pi]))  # eq(27.5)
     u = V * np.sqrt(2.0 / n)  # eq(27.6)
-    pval = float(norm.sf(u))
+
+    if n_resamples >= 1:
+        def _v_stat(sample: np.ndarray) -> float:
+            return sample.size * circ_r(sample) * np.cos(circ_mean(sample) - angle)
+
+        rng = _init_rng(seed)
+        pval = _mc_uniform_pval(_v_stat, n, V, n_resamples, rng)
+        method = "monte_carlo"
+    else:
+        pval = float(norm.sf(u))
+        method = "asymptotic"
 
     if verbose:
         print("Modified Rayleigh's Test of Uniformity")
@@ -874,9 +914,9 @@ def V_test(
         print(f"HA: ρ ≠ 0 and μ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {V:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return VTestResult(V=V, u=u, pval=pval)
+    return VTestResult(V=V, u=u, pval=pval, method=method, n_resamples=n_resamples)
 
 
 def _spec_mean_stat(alpha: np.ndarray, mu0: float, symmetric: bool) -> tuple[float, float]:
@@ -1037,9 +1077,20 @@ def one_sample_test(
     )
 
 
+def _omnibus_m(alpha: np.ndarray, scale: int) -> int:
+    """Hodges-Ajne statistic m: the minimum point count on one side of a diameter."""
+    lines = np.linspace(0.0, np.pi, scale * 360, endpoint=False)
+    n = alpha.size
+    lines_rotated = angmod(lines[:, None] - alpha)
+    right = n - np.logical_and(lines_rotated > 0.0, lines_rotated < np.pi).sum(axis=1)
+    return int(np.min(right))
+
+
 def omnibus_test(
     alpha: np.ndarray,
     scale: int = 1,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> OmnibusTestResult:
     """
@@ -1082,16 +1133,8 @@ def omnibus_test(
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
 
-    lines = np.linspace(0.0, np.pi, scale * 360, endpoint=False)
     n = alpha.size
-
-    lines_rotated = angmod(lines[:, None] - alpha)
-
-    # # count number of points on the right half circle, excluding the boundaries
-    right = n - np.logical_and(
-        lines_rotated > 0.0, lines_rotated < np.pi
-    ).sum(axis=1)
-    m = int(np.min(right))
+    m = _omnibus_m(alpha, scale)
 
     # ------------------------------------------------------------------
     # 2. p-value   ———  analytical formula and its log form
@@ -1136,6 +1179,14 @@ def omnibus_test(
         pval = float(np.exp(logp))
         A = np.pi * np.sqrt(n) / (2 * denom)
 
+    if n_resamples >= 1:
+        # Smaller m = more clustered = more extreme, so negate for the upper-tail helper.
+        rng = _init_rng(seed)
+        pval = _mc_uniform_pval(lambda s: -_omnibus_m(s, scale), n, -m, n_resamples, rng)
+        method = "monte_carlo"
+    else:
+        method = "asymptotic"
+
     if verbose:
         print('Hodges-Ajne ("omnibus") Test for Uniformity')
         print("-------------------------------------------")
@@ -1143,8 +1194,10 @@ def omnibus_test(
         print("HA: not uniform")
         print("")
         print(f"Test Statistics: {A:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
-    return OmnibusTestResult(A=float(A), pval=float(pval), m=int(m))
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
+    return OmnibusTestResult(
+        A=float(A), pval=float(pval), m=int(m), method=method, n_resamples=n_resamples
+    )
 
 
 def batschelet_test(
@@ -2293,7 +2346,12 @@ def rao_spacing_test(
     )
 
 
-def circ_range_test(alpha: np.ndarray, verbose: bool = False) -> CircularRangeTestResult:
+def circ_range_test(
+    alpha: np.ndarray,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> CircularRangeTestResult:
     """
     Perform the Circular Range Test for uniformity.
 
@@ -2337,8 +2395,19 @@ def circ_range_test(alpha: np.ndarray, verbose: bool = False) -> CircularRangeTe
         * (1 - index * (1 - range_stat / (2 * np.pi))) ** (n - 1)
     )
     p_value = float(np.sum(sequence))
+    method = "exact"
 
-    result = CircularRangeTestResult(range_stat=float(range_stat), pval=float(p_value))
+    if n_resamples >= 1:
+        # Smaller range = more clustered = more extreme, so negate for the upper-tail helper.
+        rng = _init_rng(seed)
+        p_value = _mc_uniform_pval(
+            lambda s: -circ_range(s), n, -float(range_stat), n_resamples, rng
+        )
+        method = "monte_carlo"
+
+    result = CircularRangeTestResult(
+        range_stat=float(range_stat), pval=float(p_value), method=method, n_resamples=n_resamples
+    )
 
     if verbose:
         range_deg = float(np.rad2deg(result.range_stat))
