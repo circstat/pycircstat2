@@ -166,6 +166,30 @@ def _randomization_pval(
     return (count + 1) / (n_resamples + 1)
 
 
+def _bootstrap_pval(
+    statistic_fn,
+    null_sample: np.ndarray,
+    n: int,
+    observed: float,
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> float:
+    """Bootstrap p-value for a one-sample statistic under a null-constrained sample.
+
+    Draws ``n_resamples`` samples of size ``n`` with replacement from ``null_sample``
+    (a version of the data forced to satisfy H0 — e.g. symmetrized about the mean, or
+    mean-shifted to μ₀), recomputes ``statistic_fn``, and returns
+    ``(#{stat >= observed} + 1) / (n_resamples + 1)`` (Pewsey et al. 2013, §5.2.2/5.3.3).
+    """
+
+    null_sample = np.asarray(null_sample, dtype=float)
+    count = 0
+    for _ in range(n_resamples):
+        if statistic_fn(rng.choice(null_sample, size=n, replace=True)) >= observed:
+            count += 1
+    return (count + 1) / (n_resamples + 1)
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -227,9 +251,13 @@ class VTestResult(TestResult):
 
 @dataclass(frozen=True)
 class OneSampleTestResult(TestResult):
-    reject: bool
+    reject: bool  # whether μ0 lies outside the 95% CI of the mean
     angle: float
     ci: tuple[float, float]
+    statistic: Optional[float] = None  # eq. 5.10 z, when raw angles are supplied
+    pval: Optional[float] = None  # specified-mean test p-value (eq. 5.10)
+    method: Optional[str] = None  # "asymptotic" | "bootstrap" | None (CI only)
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -249,6 +277,8 @@ class BatscheletTestResult(TestResult):
 class SymmetryTestResult(TestResult):
     statistic: float
     pval: float
+    method: str = "wilcoxon"  # "wilcoxon" (Zar) | "pewsey" (β̄₂ test)
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -848,38 +878,71 @@ def V_test(
     return VTestResult(V=V, u=u, pval=pval)
 
 
+def _spec_mean_stat(alpha: np.ndarray, mu0: float, symmetric: bool) -> tuple[float, float]:
+    """Statistic 5.10 (z) and bias-corrected mean μ̂BC for the specified-mean test (§5.3.3)."""
+    n = alpha.size
+    C1 = float(np.mean(np.cos(alpha)))
+    S1 = float(np.mean(np.sin(alpha)))
+    tbar = float(np.arctan2(S1, C1) % (2 * np.pi))
+    Rbar = float(np.hypot(C1, S1))
+    dev = alpha - tbar
+    abar2 = float(np.mean(np.cos(2 * dev)))
+    bbar2 = 0.0 if symmetric else float(np.mean(np.sin(2 * dev)))
+    div = 2 * n * Rbar**2
+    mubc = float((tbar + bbar2 / div) % (2 * np.pi))
+    se = np.sqrt((1 - abar2) / div)
+    dist = np.pi - abs(np.pi - abs(mubc - mu0))  # angular distance between μ̂BC and μ0
+    return float(dist / se), mubc
+
+
 def one_sample_test(
     angle: Union[int, float],
     alpha: Optional[np.ndarray] = None,
     w: Optional[np.ndarray] = None,
     lb: Optional[float] = None,
     ub: Optional[float] = None,
+    symmetric: bool = False,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> OneSampleTestResult:
     """
-    To test whether the population mean angle is equal to a specified value,
-    which is achieved by observing whether the angle lies within the 95% CI.
+    Test whether the population mean direction equals a specified value μ0.
 
-    - H0: The population has a mean of μ (μ_a = μ_0)
-    - H1: The population mean is not μ (μ_a ≠ μ_0)
+    The decision (`reject`) is made by checking whether μ0 lies within the 95% CI
+    of the mean. When the raw angles (`alpha`) are supplied, a continuous p-value
+    for H0: μ = μ0 is also computed from Pewsey et al. (2013), §5.3.3 (statistic 5.10):
+    the large-sample normal p-value when ``n_resamples=0``, or the bootstrap p-value
+    when ``n_resamples >= 1`` (recommended for small samples).
+
+    - H0: The population has a mean of μ0 (μ_a = μ_0)
+    - H1: The population mean is not μ0 (μ_a ≠ μ_0)
 
     Parameters
     ----------
-
     angle: float or int
-        Angle in radian to be compared with mean angle.
+        Specified mean direction μ0 in radian.
 
     alpha: np.array or None
-        Angles in radian.
+        Angles in radian (required for the p-value; for the CI either `alpha` or
+        `lb`/`ub` is needed).
 
     w: np.array or None.
-        Frequencies of angles
+        Frequencies of angles.
 
-    lb: float
-        Lower bound of circular mean from `descriptive.circ_mean_ci()`.
+    lb, ub: float or None
+        Confidence-interval bounds from `descriptive.circ_mean_ci()`; computed from
+        `alpha` when not supplied.
 
-    ub: float
-        Upper bound of circular mean from `descriptive.circ_mean_ci()`.
+    symmetric: bool
+        If ``True``, assume the underlying distribution is reflectively symmetric
+        (zeroes the skewness bias-correction; symmetrizes the bootstrap pool about μ0).
+
+    n_resamples: int
+        ``0`` (default) → large-sample p-value; ``>= 1`` → bootstrap p-value (§5.3.3).
+
+    seed: SeedLike
+        Seed for the bootstrap RNG when ``n_resamples >= 1``.
 
     verbose: bool
         Print formatted results.
@@ -887,19 +950,19 @@ def one_sample_test(
     Returns
     -------
     OneSampleTestResult
-        Dataclass containing whether H0 is rejected, the tested `angle`, and the
-        95% confidence interval `ci = (lb, ub)` of the mean angle.
+        Dataclass with the CI decision `reject`, the tested `angle`, the 95% CI `ci`,
+        and (when `alpha` is supplied) the specified-mean `statistic` (eq. 5.10),
+        `pval`, `method` ("asymptotic"|"bootstrap"), and `n_resamples`.
 
     Reference
     ---------
-    P628, Section 27.1, Example 27.3 of Zar, 2010
+    P628, Section 27.1, Example 27.3 of Zar, 2010 (CI inclusion).
+    Pewsey, Neuhäuser & Ruxton (2013), §5.3.3 (specified-mean p-value).
     """
 
     angle = float(angle)
 
-    if lb is None or ub is None:
-        if alpha is None:
-            raise ValueError("If `lb` or `ub` is None, then `alpha` (and optionally `w`) is required.")
+    if alpha is not None:
         alpha = np.asarray(alpha, dtype=float)
         if alpha.size == 0:
             raise ValueError("`alpha` must contain at least one angle.")
@@ -909,6 +972,10 @@ def one_sample_test(
             w = np.asarray(w, dtype=float)
             if w.shape != alpha.shape:
                 raise ValueError("`w` must have the same shape as `alpha`.")
+
+    if lb is None or ub is None:
+        if alpha is None:
+            raise ValueError("If `lb` or `ub` is None, then `alpha` (and optionally `w`) is required.")
         lb, ub = circ_mean_ci(alpha=alpha, w=w)
 
     lb = float(lb)
@@ -916,22 +983,57 @@ def one_sample_test(
 
     reject = not is_within_circular_range(angle, lb, ub)
 
+    # Continuous specified-mean p-value (eq. 5.10), only when raw angles are available.
+    statistic: Optional[float] = None
+    pval: Optional[float] = None
+    method: Optional[str] = None
+    used_resamples = 0
+    if alpha is not None:
+        sample = np.repeat(alpha, np.round(w).astype(int))
+        z0, mubc = _spec_mean_stat(sample, angle, symmetric)
+        statistic = z0
+        if n_resamples >= 1:
+            # Shift the sample to mean direction μ0 (optionally symmetrize about μ0),
+            # then resample with replacement (§5.3.3 / Fisher 1993 §4.4.5).
+            shifted = angmod(sample - mubc + angle)
+            null_sample = (
+                np.concatenate([shifted, angmod(2 * angle - shifted)]) if symmetric else shifted
+            )
+            rng = _init_rng(seed)
+            pval = _bootstrap_pval(
+                lambda b: _spec_mean_stat(b, angle, symmetric)[0],
+                null_sample,
+                sample.size,
+                z0,
+                n_resamples,
+                rng,
+            )
+            method = "bootstrap"
+            used_resamples = n_resamples
+        else:
+            pval = float(2 * norm.sf(z0))
+            method = "asymptotic"
+
     if verbose:
         print("One-Sample Test for the Mean Angle")
         print("----------------------------------")
         print("H0: μ = μ0")
         print(f"HA: μ ≠ μ0 and μ0 = {angle:.5f} rad")
         print("")
-        if reject:
-            print(
-                f"Reject H0:\nμ0 = {angle:.5f} lies outside the 95% CI of μ ({np.array([lb, ub]).round(5)})"
-            )
-        else:
-            print(
-                f"Failed to reject H0:\nμ0 = {angle:.5f} lies within the 95% CI of μ ({np.array([lb, ub]).round(5)})"
-            )
+        verb = "outside" if reject else "within"
+        print(f"μ0 = {angle:.5f} lies {verb} the 95% CI of μ ({np.array([lb, ub]).round(5)})")
+        if pval is not None:
+            print(f"P-value ({method}): {pval:.5g} {significance_code(pval)}")
 
-    return OneSampleTestResult(reject=reject, angle=angle, ci=(lb, ub))
+    return OneSampleTestResult(
+        reject=reject,
+        angle=angle,
+        ci=(lb, ub),
+        statistic=statistic,
+        pval=pval,
+        method=method,
+        n_resamples=used_resamples,
+    )
 
 
 def omnibus_test(
@@ -1098,59 +1200,117 @@ def batschelet_test(
     return BatscheletTestResult(C=C, pval=pval)
 
 
+def _rs_test_stat(alpha: np.ndarray) -> float:
+    """Pewsey's (2002) studentized second sine moment |z| for reflective symmetry (eq. 5.4)."""
+    n = alpha.size
+    Rbar = circ_r(alpha)
+    dev = alpha - circ_mean(alpha)
+    abar2 = float(np.mean(np.cos(2 * dev)))
+    bbar2 = float(np.mean(np.sin(2 * dev)))
+    abar3 = float(np.mean(np.cos(3 * dev)))
+    abar4 = float(np.mean(np.cos(4 * dev)))
+    var = (
+        (1 - abar4) / 2 - 2 * abar2 + (2 * abar2 / Rbar) * (abar3 + abar2 * (1 - abar2) / Rbar)
+    ) / n
+    return float(abs(bbar2 / np.sqrt(var)))
+
+
 def symmetry_test(
     alpha: np.ndarray,
     median: Optional[float] = None,
+    method: str = "wilcoxon",
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> SymmetryTestResult:
-    """Non-parametric test for symmetry around the median. Works by performing a
-    Wilcoxon sign rank test on the differences to the median. Also known as
-    Wilcoxon paired-sample test.
+    """Test for reflective symmetry of a circular distribution.
 
-    - H0: the population is symmetrical around the median
-    - HA: the population is not symmetrical around the median
+    - H0: the population is reflectively symmetrical
+    - HA: the population is not symmetrical
 
     Parameters
     ----------
     alpha: np.array
         Angles in radian.
 
-    median: float or None.
-        Median computed by `descriptive.median()`.
+    median: float or None
+        Median (only used by ``method="wilcoxon"``). Computed by
+        `descriptive.circ_median()` if not provided.
+
+    method: str
+        - ``"wilcoxon"`` (default): Wilcoxon signed-rank test on the angular
+          deviations from the median (Zar 2010; symmetry about the median).
+        - ``"pewsey"``: Pewsey's (2002) studentized second sine moment about the
+          mean direction (eq. 5.4). With ``n_resamples=0`` the large-sample normal
+          p-value is used (valid n >= 50); with ``n_resamples >= 1`` the §5.2.2
+          bootstrap p-value (Efron symmetrization) is used — recommended for small
+          samples.
+
+    n_resamples: int
+        Bootstrap resamples for ``method="pewsey"`` (default 0 = large-sample).
+
+    seed: SeedLike
+        Seed for the bootstrap RNG when ``method="pewsey"`` and ``n_resamples >= 1``.
 
     verbose: bool
         Print formatted results.
 
+    Returns
+    -------
+    SymmetryTestResult
+        Dataclass with the test statistic, p-value, ``method`` ("wilcoxon"|"pewsey"),
+        and ``n_resamples``.
+
     Reference
     ---------
-    P631-632, Section 27.3, Example 27.6 of Zar, 2010
+    P631-632, Section 27.3, Example 27.6 of Zar, 2010 (Wilcoxon).
+    Pewsey (2002); Pewsey, Neuhäuser & Ruxton (2013), §5.2 (Pewsey β̄₂ test).
     """
+
+    if method not in ("wilcoxon", "pewsey"):
+        raise ValueError("`method` must be 'wilcoxon' or 'pewsey'.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
 
-    if median is None:
-        median = float(circ_median(alpha=alpha))
-    else:
-        median = float(median)
-
-    d = angmod(alpha - median, bounds=[-np.pi, np.pi])
-
-    res = wilcoxon(d, alternative="two-sided")
-    test_statistic = float(res.statistic)
-    pval = float(res.pvalue)
+    if method == "wilcoxon":
+        if median is None:
+            median = float(circ_median(alpha=alpha))
+        else:
+            median = float(median)
+        d = angmod(alpha - median, bounds=[-np.pi, np.pi])
+        res = wilcoxon(d, alternative="two-sided")
+        statistic = float(res.statistic)
+        pval = float(res.pvalue)
+        used_resamples = 0
+    else:  # method == "pewsey"
+        statistic = _rs_test_stat(alpha)
+        if n_resamples >= 1:
+            theta_bar = circ_mean(alpha)
+            # Efron symmetrization: reflect about the mean, pool, resample (§5.2.2).
+            symmetrized = np.concatenate([alpha, 2 * theta_bar - alpha])
+            rng = _init_rng(seed)
+            pval = _bootstrap_pval(
+                _rs_test_stat, symmetrized, alpha.size, statistic, n_resamples, rng
+            )
+            used_resamples = n_resamples
+        else:
+            pval = float(2 * norm.sf(statistic))
+            used_resamples = 0
 
     if verbose:
         print("Symmetry Test")
         print("------------------------------")
-        print("H0: symmetrical around median")
-        print("HA: not symmetrical around median")
+        print(f"H0: reflectively symmetrical ({method})")
+        print("HA: not symmetrical")
         print("")
-        print(f"Test Statistics: {test_statistic:.5f}")
+        print(f"Test Statistics: {statistic:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return SymmetryTestResult(statistic=test_statistic, pval=pval)
+    return SymmetryTestResult(
+        statistic=statistic, pval=pval, method=method, n_resamples=used_resamples
+    )
 
 
 ###########################
@@ -2268,6 +2428,8 @@ def concentration_test(
 
     References
     ----------
+    Mardia, K. V. (1972). Statistics of Directional Data, eq. (6.3.39) & Example 6.15
+        (high-concentration F-test; degrees of freedom n1-1, n2-1).
     Batschelet, E. (1980). Circular Statistics in Biology, Section 6.9, p. 122-124.
     Pewsey, Neuhäuser & Ruxton (2013), §7.4.3 (randomization version).
     """
@@ -2324,7 +2486,11 @@ def concentration_test(
         )
         method = "randomization"
     else:
-        # Two-sided parametric p-value (adjusting for F-stat symmetry).
+        # Two-sided parametric p-value (adjusting for F-stat symmetry). Statistic and
+        # degrees of freedom follow Mardia (1972), eq. (6.3.39) & Example 6.15:
+        #   F = [(n1-R1)/(n1-1)] / [(n2-R2)/(n2-1)] ~ F_{n1-1, n2-1}.
+        # NB: MATLAB CircStat's `circ_ktest` uses df (n1, n2) here, which is a bug —
+        # do not "fix" the (n-1) df below to match it.
         if f_stat >= 1:
             pval = float(min(2 * f.sf(f_stat, df1, df2), 1.0))
         else:

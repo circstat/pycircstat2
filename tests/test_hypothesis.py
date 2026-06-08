@@ -1257,3 +1257,56 @@ def test_concentration_randomization():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         concentration_test(u1, u2, n_resamples=200, seed=1)
+
+
+def test_symmetry_test_pewsey():
+    """method='pewsey' = Pewsey's (2002) β̄₂ reflective-symmetry test; large-sample
+    matches R's `circular` package and the bootstrap reproduces the book's cross-bed
+    azimuth result (Pewsey et al. 2013, §5.2; data = B6/set1)."""
+    b6 = load_data("B6", source="fisher")
+    s1 = np.deg2rad(b6[b6["set"] == 1]["θ"].values.astype(float))
+
+    large = symmetry_test(s1, method="pewsey")
+    assert large.method == "pewsey"
+    np.testing.assert_allclose(large.statistic, 0.594601, rtol=1e-4)  # |z|, == R RSTestStat
+    np.testing.assert_allclose(large.pval, 0.552110, rtol=1e-4)
+
+    boot = symmetry_test(s1, method="pewsey", n_resamples=9999, seed=2046)
+    assert boot.method == "pewsey" and boot.n_resamples == 9999
+    assert 0.52 < boot.pval < 0.56  # book 0.5391, 95% CI (0.529, 0.549)
+
+    assert symmetry_test(s1).method == "wilcoxon"  # default unchanged
+    with pytest.raises(ValueError, match="method"):
+        symmetry_test(s1, method="bogus")
+
+    p1 = symmetry_test(s1, method="pewsey", n_resamples=500, seed=3).pval
+    p2 = symmetry_test(s1, method="pewsey", n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p1 == p2
+
+
+def test_one_sample_specified_mean():
+    """one_sample_test adds the §5.3.3 specified-mean p-value (eq. 5.10) when raw
+    angles are supplied; validated bit-for-bit against R's `circular` package."""
+    from pycircstat2.utils import time2float
+
+    # B1 intensive-care times with the proper hh:mm -> decimal-hour conversion (== R's
+    # fisherB1c). NB: the book's published 9.126e-5 used raw fisherB1 (8.45-as-decimal).
+    b1 = time2float(load_data("B1", source="fisher")["time"].values) * 2 * np.pi / 24
+
+    r = one_sample_test(angle=3.9270, alpha=b1, symmetric=True)  # H0: mean = 15:00
+    assert r.method == "asymptotic"
+    np.testing.assert_allclose(r.statistic, 4.217775, rtol=1e-4)  # == R SpecMeanTestRes
+    np.testing.assert_allclose(r.pval, 2.467243e-05, rtol=1e-3)
+    assert r.pval < 1e-3  # 3pm emphatically rejected (book's conclusion)
+
+    # Backward-compat: CI-only path has no p-value; `reject` is the CI decision.
+    ci_only = one_sample_test(lb=0.0, ub=1.0, angle=0.5)
+    assert ci_only.reject is False
+    assert ci_only.pval is None and ci_only.method is None
+
+    # bootstrap determinism
+    p_int = one_sample_test(angle=3.9270, alpha=b1, symmetric=True, n_resamples=500, seed=4).pval
+    p_gen = one_sample_test(
+        angle=3.9270, alpha=b1, symmetric=True, n_resamples=500, seed=np.random.default_rng(4)
+    ).pval
+    assert p_int == p_gen
