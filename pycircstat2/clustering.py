@@ -201,7 +201,7 @@ class MovM:
         alpha = X if self.unit == "radian" else data2rad(X, k=self.full_cycle)
         self.data = X
         self.alpha = alpha
-        self.n = n = alpha.size
+        self.n = alpha.size
 
         means, kappa, p = self._initialize(alpha, self.n_clusters)
 
@@ -1464,7 +1464,6 @@ class CircHAC:
         alpha = np.asarray(alpha, dtype=float)
         alpha = alpha if self.unit == "radian" else data2rad(alpha, k=self.full_cycle)
 
-        k = self.centers_.size
         labels = np.zeros(alpha.size, dtype=int)
         for i, angle in enumerate(alpha):
             distances = [abs(circ_dist(angle, center, metric=self.metric)) for center in self.centers_]

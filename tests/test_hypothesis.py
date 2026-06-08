@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -14,6 +16,7 @@ from pycircstat2.hypothesis import (
     circ_range_test,
     common_median_test,
     concentration_test,
+    equal_kappa_test,
     harrison_kanji_test,
     kuiper_test,
     omnibus_test,
@@ -25,6 +28,7 @@ from pycircstat2.hypothesis import (
     wallraff_test,
     watson_test,
     watson_u2_test,
+    kuiper_two_test,
     watson_williams_test,
     wheeler_watson_test,
 )
@@ -210,6 +214,44 @@ def test_watson_u2_test():
     np.testing.assert_allclose(array_result.pval, result.pval, rtol=1e-6)
 
 
+def test_kuiper_two_test():
+    """Two-sample Kuiper test: direction, dispersion sensitivity, rotation-invariance,
+    grouped-data support, and asymptotic/randomization determinism."""
+    rng = np.random.default_rng(0)
+    a = vonmises.rvs(mu=0.0, kappa=3.0, size=40, random_state=rng)
+    same = vonmises.rvs(mu=0.0, kappa=3.0, size=40, random_state=rng)
+    loc_shift = vonmises.rvs(mu=1.2, kappa=3.0, size=40, random_state=rng)
+    disp_change = vonmises.rvs(mu=0.0, kappa=0.4, size=40, random_state=rng)
+
+    assert kuiper_two_test([a, same]).pval > 0.05
+    assert kuiper_two_test([a, loc_shift]).pval < 0.05  # location difference
+    assert kuiper_two_test([a, disp_change]).pval < 0.05  # dispersion difference
+
+    r = kuiper_two_test([a, loc_shift])
+    assert r.method == "asymptotic" and r.n_resamples == 0
+
+    # statistic is invariant to a common rotation (Kuiper's defining property)
+    shift = 2.0
+    v_rot = kuiper_two_test(
+        [(a + shift) % (2 * np.pi), (loc_shift + shift) % (2 * np.pi)]
+    ).V
+    np.testing.assert_allclose(r.V, v_rot, atol=1e-9)
+
+    # grouped data expand consistently with raw angles
+    d = load_data("D12", source="zar")
+    c0 = Circular(data=d[d["sample"] == 1]["θ"].values[:])
+    c1 = Circular(data=d[d["sample"] == 2]["θ"].values[:])
+    np.testing.assert_allclose(
+        kuiper_two_test([c0, c1]).V, kuiper_two_test([c0.alpha, c1.alpha]).V, rtol=1e-9
+    )
+
+    # randomization path: determinism (int seed == Generator)
+    rr = kuiper_two_test([a, loc_shift], n_resamples=999, seed=3)
+    assert rr.method == "randomization" and rr.n_resamples == 999
+    p_gen = kuiper_two_test([a, loc_shift], n_resamples=999, seed=np.random.default_rng(3)).pval
+    assert rr.pval == p_gen
+
+
 def test_wheeler_watson_test():
     d = load_data("D12", source="zar")
     c0 = Circular(data=d[d["sample"] == 1]["θ"].values[:])
@@ -261,9 +303,35 @@ def test_kuiper_test():
 def test_watson_test():
     pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
     c_pigeon = Circular(data=pigeon)
-    result = watson_test(alpha=c_pigeon.alpha, n_simulation=9999)
+    result = watson_test(alpha=c_pigeon.alpha, n_resamples=9999)
     np.testing.assert_approx_equal(result.U2, 0.137, significant=3)
     assert result.pval > 0.10
+    assert result.dist == "uniform" and result.mu is None
+
+
+def test_watson_test_vonmises_gof():
+    """watson_test(dist='vonmises') is a parametric-bootstrap GoF: it accepts von Mises
+    data, rejects a non–von Mises (wrapped Cauchy) alternative, and reports fitted μ, κ."""
+    from pycircstat2.distributions import wrapcauchy
+
+    rng = np.random.default_rng(0)
+    vm = np.asarray(vonmises.rvs(mu=0.7, kappa=2.0, size=60, random_state=rng))
+    wc = np.asarray(wrapcauchy.rvs(mu=0.7, rho=0.7, size=60, random_state=rng))
+
+    r_vm = watson_test(vm, dist="vonmises", n_resamples=999, seed=3)
+    assert r_vm.method == "parametric_bootstrap"
+    assert r_vm.dist == "vonmises" and r_vm.mu is not None and r_vm.kappa is not None
+    assert r_vm.pval > 0.05  # von Mises data: do not reject
+
+    r_wc = watson_test(wc, dist="vonmises", n_resamples=999, seed=3)
+    assert r_wc.pval < 0.05  # wrapped Cauchy: reject von Mises fit
+
+    # no closed-form p-value for the von Mises null; determinism on the bootstrap path
+    with pytest.raises(ValueError):
+        watson_test(vm, dist="vonmises", n_resamples=0)
+    p_gen = watson_test(vm, dist="vonmises", n_resamples=300,
+                        seed=np.random.default_rng(11)).pval
+    assert watson_test(vm, dist="vonmises", n_resamples=300, seed=11).pval == p_gen
 
 
 def test_angular_randomisation_test():
@@ -281,7 +349,7 @@ def test_angular_randomisation_test():
 def test_rao_spacing_test():
     pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
     c_pigeon = Circular(data=pigeon)
-    result = rao_spacing_test(alpha=c_pigeon.alpha, n_simulation=9999)
+    result = rao_spacing_test(alpha=c_pigeon.alpha, n_resamples=9999)
     np.testing.assert_approx_equal(result.statistic, 161.92308, significant=3)
     assert 0.05 < result.pval < 0.10
 
@@ -293,27 +361,27 @@ def test_randomized_tests_seed_harmonization():
     def make_generator():
         return np.random.default_rng(seed_value)
 
-    rayleigh_int = rayleigh_test(alpha=alpha, B=128, seed=seed_value)
-    rayleigh_gen = rayleigh_test(alpha=alpha, B=128, seed=make_generator())
-    assert rayleigh_int.bootstrap_pval == rayleigh_gen.bootstrap_pval
+    rayleigh_int = rayleigh_test(alpha=alpha, n_resamples=128, seed=seed_value)
+    rayleigh_gen = rayleigh_test(alpha=alpha, n_resamples=128, seed=make_generator())
+    assert rayleigh_int.pval == rayleigh_gen.pval
 
     samples = [alpha[:6], alpha[6:]]
-    art_int = angular_randomisation_test(samples, n_simulation=128, seed=seed_value)
+    art_int = angular_randomisation_test(samples, n_resamples=128, seed=seed_value)
     art_gen = angular_randomisation_test(
-        samples, n_simulation=128, seed=make_generator()
+        samples, n_resamples=128, seed=make_generator()
     )
     assert art_int.pval == art_gen.pval
 
-    kuiper_int = kuiper_test(alpha=alpha, n_simulation=256, seed=seed_value)
-    kuiper_gen = kuiper_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    kuiper_int = kuiper_test(alpha=alpha, n_resamples=256, seed=seed_value)
+    kuiper_gen = kuiper_test(alpha=alpha, n_resamples=256, seed=make_generator())
     assert kuiper_int.pval == kuiper_gen.pval
 
-    watson_int = watson_test(alpha=alpha, n_simulation=256, seed=seed_value)
-    watson_gen = watson_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    watson_int = watson_test(alpha=alpha, n_resamples=256, seed=seed_value)
+    watson_gen = watson_test(alpha=alpha, n_resamples=256, seed=make_generator())
     assert watson_int.pval == watson_gen.pval
 
-    rao_int = rao_spacing_test(alpha=alpha, n_simulation=256, seed=seed_value)
-    rao_gen = rao_spacing_test(alpha=alpha, n_simulation=256, seed=make_generator())
+    rao_int = rao_spacing_test(alpha=alpha, n_resamples=256, seed=seed_value)
+    rao_gen = rao_spacing_test(alpha=alpha, n_resamples=256, seed=make_generator())
     assert rao_int.pval == rao_gen.pval
 
 
@@ -503,6 +571,36 @@ def test_rao_homogeneity_different_dispersion():
     results = rao_homogeneity_test(samples)
 
     assert results.pval_disp < 0.05, f"Expected rejection but got p={results.pval_disp}"
+
+
+def test_rao_homogeneity_randomization():
+    """rao_homogeneity_test(n_resamples>0) gives permutation p-values that isolate each
+    effect: a mean shift flags only H_polar, a dispersion change only H_disp."""
+    def mk(seeds, mus, kappas, size=50):
+        return [
+            vonmises.rvs(mu=m, kappa=k, size=size, random_state=np.random.default_rng(s))
+            for s, m, k in zip(seeds, mus, kappas)
+        ]
+
+    identical = mk([101, 102, 103], [0, 0, 0], [2, 2, 2])
+    diff_mean = mk([201, 202, 203], [0, np.pi / 4, np.pi / 2], [2, 2, 2])
+    diff_disp = mk([301, 302, 303], [0, 0, 0], [5, 2, 1])
+
+    r_id = rao_homogeneity_test(identical, n_resamples=1999, seed=7)
+    assert r_id.method == "randomization" and r_id.n_resamples == 1999
+    assert r_id.pval_polar > 0.05 and r_id.pval_disp > 0.05
+
+    r_mean = rao_homogeneity_test(diff_mean, n_resamples=1999, seed=7)
+    assert r_mean.pval_polar < 0.05 < r_mean.pval_disp  # only mean direction flagged
+
+    r_disp = rao_homogeneity_test(diff_disp, n_resamples=1999, seed=7)
+    assert r_disp.pval_disp < 0.05 < r_disp.pval_polar  # only dispersion flagged
+
+    # default = asymptotic; determinism of the randomization path
+    assert rao_homogeneity_test(identical).method == "asymptotic"
+    a = rao_homogeneity_test(diff_mean, n_resamples=300, seed=11)
+    b = rao_homogeneity_test(diff_mean, n_resamples=300, seed=np.random.default_rng(11))
+    assert a.pval_polar == b.pval_polar and a.pval_disp == b.pval_disp
 
 
 def test_rao_homogeneity_small_samples():
@@ -848,3 +946,536 @@ def test_equal_median_small_sample():
     result = common_median_test([alpha1, alpha2])
     assert result.reject is False
     assert not np.isnan(result.common_median)
+
+
+def test_omnibus_evenly_spaced_not_rejected():
+    """Maximally uniform data (m ≈ n/2) drives the analytic formula's
+    denominator to zero; the test must not spuriously reject uniformity."""
+    alpha = np.linspace(0.0, 2 * np.pi, 8, endpoint=False)
+    result = omnibus_test(alpha)
+    assert result.pval == 1.0
+
+
+def test_multisample_input_standards():
+    """circ_anova / rao_homogeneity_test / equal_kappa_test / common_median_test
+    must accept np.ndarray, list-of-lists, and Circular objects interchangeably."""
+    rng = np.random.default_rng(0)
+    groups = [
+        rng.vonmises(0.0, 3, 40),
+        rng.vonmises(0.5, 3, 40),
+        rng.vonmises(1.0, 3, 40),
+    ]
+    as_lists = [g.tolist() for g in groups]
+    as_circular = [Circular(g, unit="radian") for g in groups]
+
+    for fn in (
+        lambda s: circ_anova(s).statistic,
+        lambda s: rao_homogeneity_test(s).H_polar,
+        lambda s: equal_kappa_test(s).statistic,
+        lambda s: common_median_test(s).statistic,
+    ):
+        ref = fn(groups)
+        np.testing.assert_allclose(fn(as_lists), ref, rtol=1e-12)
+        np.testing.assert_allclose(fn(as_circular), ref, rtol=1e-12)
+
+
+def test_watson_u2_test_unsorted_input():
+    """watson_u2_test must not depend on the input ordering of the angles."""
+    a = np.array([0.1, 2.0, 1.0, 3.0, 0.5])
+    b = np.array([2.5, 0.2, 1.5, 2.8, 0.8])
+    unsorted = watson_u2_test([a, b]).U2
+    ordered = watson_u2_test([np.sort(a), np.sort(b)]).U2
+    np.testing.assert_allclose(unsorted, ordered, rtol=1e-12)
+
+
+def test_wallraff_test_grouped_matches_expanded():
+    """Weighted/grouped samples must rank-split by total weight, matching the
+    equivalent weight-expanded plain arrays."""
+    ang = np.deg2rad(np.array([10.0, 30.0, 50.0, 70.0, 90.0]))
+    w1 = np.array([2, 3, 1, 1, 1])
+    w2 = np.array([1, 1, 2, 2, 1])
+    grouped = wallraff_test(
+        samples=[Circular(ang, w=w1, unit="radian"), Circular(ang, w=w2, unit="radian")],
+        angle=0.0,
+    ).U
+    expanded = wallraff_test(
+        samples=[np.repeat(ang, w1), np.repeat(ang, w2)], angle=0.0
+    ).U
+    np.testing.assert_allclose(grouped, expanded, rtol=1e-12)
+
+
+def test_equal_kappa_regimes():
+    """equal_kappa_test routes through and labels each r̄-regime correctly
+    (small/arcsin, moderate/asinh, large/Bartlett)."""
+    for kappa, expected in [(0.6, "small"), (1.5, "moderate"), (4.0, "large")]:
+        rng = np.random.default_rng(7)
+        groups = [rng.vonmises(0.0, kappa, 60) for _ in range(3)]
+        result = equal_kappa_test(groups)
+        assert result.regime == expected, (
+            f"kappa={kappa}: expected regime {expected!r}, got {result.regime!r}"
+        )
+        assert result.df == 2
+        assert 0.0 <= result.pval <= 1.0
+
+
+def test_equal_kappa_detects_difference():
+    """Groups with clearly different concentrations are rejected."""
+    rng = np.random.default_rng(5)
+    groups = [rng.vonmises(0.0, k, 60) for k in (8, 8, 1)]
+    result = equal_kappa_test(groups)
+    assert result.pval < 0.05, f"Expected rejection, got p={result.pval}"
+
+
+def test_rao_spacing_test_grouped():
+    """Grouped (weighted) mode: the observed statistic matches the equivalent
+    weight-expanded sample, the mode is reported, and invalid weights raise."""
+    ang = np.deg2rad(np.array([10.0, 40.0, 70.0, 100.0, 200.0, 300.0]))
+    w = np.array([3, 1, 2, 1, 4, 2])
+
+    grouped = rao_spacing_test(ang, w=w, n_resamples=999, seed=1)
+    expanded = rao_spacing_test(np.repeat(ang, w), n_resamples=999, seed=1)
+    assert grouped.data_kind == "grouped"
+    assert grouped.method == "monte_carlo"
+    np.testing.assert_allclose(grouped.statistic, expanded.statistic, rtol=1e-12)
+    assert 0.0 < grouped.pval <= 1.0
+
+    with pytest.raises(ValueError):  # negative weight
+        rao_spacing_test(ang, w=np.array([1, -1, 2, 1, 1, 1]), n_resamples=99)
+    with pytest.raises(ValueError):  # non-integer weight
+        rao_spacing_test(ang, w=np.array([1.0, 1.5, 2.0, 1.0, 1.0, 1.0]), n_resamples=99)
+    with pytest.raises(ValueError):  # shape mismatch
+        rao_spacing_test(ang, w=np.array([1, 2, 3]), n_resamples=99)
+
+
+def test_wheeler_watson_three_samples():
+    """The k>=3 branch matches an independent uniform-scores computation and
+    separates groups with different mean directions."""
+    from scipy.stats import rankdata
+
+    rng = np.random.default_rng(11)
+    groups = [rng.vonmises(m, 4, 25) for m in (0.0, 0.3, 0.6)]
+    result = wheeler_watson_test(groups)
+
+    # Independent reimplementation of W = 2 * Σ_g (C_g² + S_g²) / n_g.
+    pooled = np.concatenate(groups)
+    N = pooled.size
+    beta = 2 * np.pi * rankdata(pooled, method="ordinal") / N
+    W_ref, idx = 0.0, 0
+    for grp in groups:
+        b = beta[idx:idx + grp.size]
+        idx += grp.size
+        W_ref += (np.sum(np.cos(b)) ** 2 + np.sum(np.sin(b)) ** 2) / grp.size
+    W_ref *= 2.0
+
+    np.testing.assert_allclose(result.W, W_ref, rtol=1e-12)
+    assert result.df == 2 * (len(groups) - 1)
+
+    rng = np.random.default_rng(9)
+    separated = [rng.vonmises(m, 6, 30) for m in (0.0, 1.6, 3.1)]
+    assert wheeler_watson_test(separated).pval < 0.05
+
+
+def test_kuiper_test_asymptotic():
+    """Asymptotic mode (n_resamples=0) returns a valid p-value close to the
+    Monte-Carlo one."""
+    d = load_data("B5", source="fisher")["θ"].values[:]
+    c = Circular(data=d, unit="degree", full_cycle=180)
+    asymp = kuiper_test(alpha=c.alpha, n_resamples=0)
+    sim = kuiper_test(alpha=c.alpha, n_resamples=9999)
+    assert asymp.method == "asymptotic"
+    assert asymp.n_resamples == 0
+    assert sim.method == "monte_carlo"
+    assert 0.0 <= asymp.pval <= 1.0
+    assert abs(asymp.pval - sim.pval) < 0.05
+
+
+def test_watson_test_asymptotic():
+    """Asymptotic mode (n_resamples=0) returns a valid p-value close to the
+    Monte-Carlo one."""
+    pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
+    c = Circular(data=pigeon)
+    asymp = watson_test(alpha=c.alpha, n_resamples=0)
+    sim = watson_test(alpha=c.alpha, n_resamples=9999)
+    assert asymp.method == "asymptotic"
+    assert asymp.n_resamples == 0
+    assert sim.method == "monte_carlo"
+    assert 0.0 <= asymp.pval <= 1.0
+    assert abs(asymp.pval - sim.pval) < 0.05
+
+
+def test_harrison_kanji_inter_false():
+    """inter=False on high-concentration data exercises the large-kappa,
+    no-interaction branch and suppresses the interaction term."""
+    rng = np.random.default_rng(3)
+    alpha = rng.vonmises(0, 6, 60)  # high kappa -> kk > 2 (large-kappa branch)
+    idp = rng.choice([1, 2, 3], 60)
+    idq = rng.choice([1, 2], 60)
+
+    result = harrison_kanji_test(alpha, idp, idq, inter=False)
+
+    p_a, p_b, p_inter = result.p_values
+    assert np.isnan(p_inter)  # interaction term dropped
+    assert 0.0 <= p_a <= 1.0 and 0.0 <= p_b <= 1.0
+
+    table = result.anova_table
+    assert list(table.index) == ["A", "B", "Interaction", "Residual", "Total"]
+    p, q = len(np.unique(idp)), len(np.unique(idq))
+    assert table.loc["Residual", "DoF"] == (p - 1) * (q - 1)
+
+
+def test_one_sample_test_rejects_distant_angle():
+    """An angle far from the mean direction lies outside the 95% CI -> reject."""
+    rng = np.random.default_rng(0)
+    alpha = rng.vonmises(0.0, 20, 30)  # tightly concentrated near 0
+    assert one_sample_test(angle=0.0, alpha=alpha).reject is False
+    assert one_sample_test(angle=np.pi, alpha=alpha).reject is True
+
+
+def test_watson_williams_warns_low_concentration():
+    """Watson-Williams warns when the common concentration is low (κ < 1)."""
+    rng = np.random.default_rng(2)
+    s1 = rng.uniform(0, 2 * np.pi, 40)
+    s2 = rng.uniform(0, 2 * np.pi, 40)
+    with pytest.warns(RuntimeWarning):
+        watson_williams_test([s1, s2])
+
+
+def test_circ_anova_no_correction():
+    """The f_mod=False branch (no Stephens correction factor) runs."""
+    rng = np.random.default_rng(1)
+    groups = [rng.vonmises(m, 5, 40) for m in (0.0, 0.4, 0.8)]
+    plain = circ_anova(groups, f_mod=False)
+    corrected = circ_anova(groups, f_mod=True)
+    assert 0.0 <= plain.pval <= 1.0
+    # The correction factor (1 + 3/8κ) > 1 inflates the F statistic.
+    assert corrected.statistic > plain.statistic
+
+
+def test_symmetry_test_default_median():
+    """When no median is supplied, symmetry_test computes it internally."""
+    from pycircstat2.descriptive import circ_median
+
+    data_zar_ex6_ch27 = load_data("D9", source="zar")
+    alpha = Circular(data=data_zar_ex6_ch27["θ"].values[:], unit="degree").alpha
+    auto = symmetry_test(alpha)
+    explicit = symmetry_test(alpha, median=float(circ_median(alpha)))
+    np.testing.assert_allclose(auto.statistic, explicit.statistic, rtol=1e-9)
+    np.testing.assert_allclose(auto.pval, explicit.pval, rtol=1e-9)
+
+
+def test_weighted_input_paths():
+    """The alpha+w paths (n/mean/r inferred from weighted angles) match the
+    weight-expanded sample for the single-sample tests that accept `w`."""
+    a = np.array([0.1, 0.2, 0.3, 1.0, 1.1])
+    w = np.array([2, 2, 2, 2, 2])  # total weight 10 (one_sample CI needs n >= 8)
+    exp = np.repeat(a, w)
+
+    np.testing.assert_allclose(
+        rayleigh_test(alpha=a, w=w).z, rayleigh_test(alpha=exp).z, rtol=1e-12
+    )
+    np.testing.assert_allclose(
+        V_test(angle=0.0, alpha=a, w=w).V, V_test(angle=0.0, alpha=exp).V, rtol=1e-12
+    )
+    weighted_ci = one_sample_test(angle=0.0, alpha=a, w=w)
+    expanded_ci = one_sample_test(angle=0.0, alpha=exp)
+    np.testing.assert_allclose(weighted_ci.ci, expanded_ci.ci, rtol=1e-12)
+    assert weighted_ci.reject == expanded_ci.reject
+
+
+def test_verbose_branches_smoke(capsys):
+    """verbose=True output paths run without error across representative tests
+    (including the reject / bootstrap / NaN-median display branches)."""
+    rng = np.random.default_rng(0)
+    alpha = rng.vonmises(0.0, 4, 30)
+
+    rayleigh_test(alpha=alpha, n_resamples=50, verbose=True)  # monte-carlo print
+    one_sample_test(angle=0.0, alpha=alpha, verbose=True)     # reject=False branch
+    one_sample_test(angle=np.pi, alpha=alpha, verbose=True)   # reject=True branch
+    circ_range_test(alpha, verbose=True)
+    harrison_kanji_test(
+        alpha, rng.choice([1, 2, 3], 30), rng.choice([1, 2], 30), verbose=True
+    )
+    common_median_test(
+        [rng.vonmises(0, 3, 20), rng.vonmises(0.2, 3, 20)], verbose=True
+    )
+    common_median_test(  # rejection -> NaN-median display branch
+        [rng.vonmises(0, 3, 20), rng.vonmises(3.0, 3, 20)], verbose=True
+    )
+
+    assert capsys.readouterr().out  # something was printed
+
+
+def test_result_helpers():
+    """TestResult.asdict() and .significance() behave correctly."""
+    rng = np.random.default_rng(0)
+    res = rayleigh_test(alpha=rng.vonmises(0.0, 8, 40))  # strongly non-uniform
+    assert res.asdict() == {
+        "r": res.r,
+        "z": res.z,
+        "pval": res.pval,
+        "method": res.method,
+        "n_resamples": res.n_resamples,
+    }
+    assert res.significance() == "***"
+    assert res.significance("does_not_exist") is None
+    # a perfectly uniform sample is not significant -> empty stars
+    uniform = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+    assert rayleigh_test(alpha=uniform).significance() == ""
+
+
+def test_legacy_positional_verbose_warns():
+    """Passing seed=True (the formerly positional `verbose`) is deprecated but
+    still honored via the back-compat shim."""
+    alpha = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+    with pytest.warns(DeprecationWarning):
+        rayleigh_test(alpha=alpha, seed=True)
+
+
+def test_deprecated_resampling_aliases():
+    """Old `B` / `n_simulation` kwargs and old result attributes still work,
+    with a DeprecationWarning, after the n_resamples/method harmonization."""
+    rng = np.random.default_rng(0)
+    alpha = rng.uniform(0, 2 * np.pi, 30)
+
+    # Param alias maps onto n_resamples (same seed/count => identical result).
+    with pytest.warns(DeprecationWarning):
+        old = rayleigh_test(alpha=alpha, B=200, seed=1)
+    new = rayleigh_test(alpha=alpha, n_resamples=200, seed=1)
+    assert old.pval == new.pval
+    assert old.method == "monte_carlo"
+
+    # Old sentinel `1` meant "no resampling" for tests with an analytic fallback.
+    with pytest.warns(DeprecationWarning):
+        assert rayleigh_test(alpha=alpha, B=1).method == "asymptotic"
+    with pytest.warns(DeprecationWarning):
+        assert kuiper_test(alpha=alpha, n_simulation=1).method == "asymptotic"
+    with pytest.warns(DeprecationWarning):
+        assert kuiper_test(alpha=alpha, n_simulation=500, seed=1).method == "monte_carlo"
+
+    # Deprecated result attributes proxy the new fields.
+    mc = rayleigh_test(alpha=alpha, n_resamples=200, seed=1)
+    with pytest.warns(DeprecationWarning):
+        assert mc.bootstrap_pval == mc.pval
+    kup = kuiper_test(alpha=alpha, n_resamples=0)
+    with pytest.warns(DeprecationWarning):
+        assert kup.mode == "asymptotic"
+    with pytest.warns(DeprecationWarning):
+        assert kup.n_simulation == 0
+    rao = rao_spacing_test(alpha, n_resamples=200, seed=1)
+    with pytest.warns(DeprecationWarning):
+        assert rao.mode == rao.data_kind  # "ungrouped"
+
+
+def test_common_median_randomization():
+    """common_median_test randomization reproduces the book's ant-data result and
+    the χ² asymptotic value (Pewsey et al. 2013, §7.3.2; data = B10)."""
+    df = load_data("B10", source="fisher")  # desert-ant directions, 3 groups
+    groups = [np.deg2rad(df[df["set"] == s]["θ"].values.astype(float)) for s in (1, 2, 3)]
+
+    asy = common_median_test(groups)
+    assert asy.method == "asymptotic"
+    np.testing.assert_allclose(asy.pval, 0.4293, atol=2e-3)  # book χ² p-value
+
+    rnd = common_median_test(groups, n_resamples=9999, seed=1)
+    assert rnd.method == "randomization" and rnd.n_resamples == 9999
+    assert 0.40 < rnd.pval < 0.44  # book randomization p ≈ 0.4195, CI (0.410, 0.429)
+
+    # determinism: int seed == equivalent Generator
+    p_int = common_median_test(groups, n_resamples=500, seed=7).pval
+    p_gen = common_median_test(groups, n_resamples=500, seed=np.random.default_rng(7)).pval
+    assert p_int == p_gen
+
+
+def test_watson_u2_randomization():
+    """watson_u2_test randomization reproduces the book's ant-data result
+    (control vs 2nd treatment; Pewsey et al. 2013, §7.5.5; data = B10)."""
+    df = load_data("B10", source="fisher")
+    s1 = np.deg2rad(df[df["set"] == 1]["θ"].values.astype(float))
+    s3 = np.deg2rad(df[df["set"] == 3]["θ"].values.astype(float))
+
+    rnd = watson_u2_test([s1, s3], n_resamples=9999, seed=1)
+    assert rnd.method == "randomization" and rnd.n_resamples == 9999
+    np.testing.assert_allclose(rnd.U2, 0.1944, atol=1e-3)  # book statistic
+    assert 0.03 < rnd.pval < 0.05  # book randomization p ≈ 0.0386, CI (0.035, 0.042)
+
+    assert watson_u2_test([s1, s3]).method == "asymptotic"  # default unchanged
+    p_int = watson_u2_test([s1, s3], n_resamples=500, seed=3).pval
+    p_gen = watson_u2_test([s1, s3], n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p_int == p_gen
+
+
+def test_wheeler_watson_randomization_with_ties():
+    """wheeler_watson_test now handles tied data via midranks, and its randomization
+    p-value tracks the χ² approximation (Pewsey et al. 2013, §7.5.3; data = B10)."""
+    df = load_data("B10", source="fisher")  # ant data, 3 groups, contains ties
+    groups = [np.deg2rad(df[df["set"] == s]["θ"].values.astype(float)) for s in (1, 2, 3)]
+
+    asy = wheeler_watson_test(groups)  # previously crashed on ties
+    rnd = wheeler_watson_test(groups, n_resamples=9999, seed=1)
+    assert rnd.method == "randomization" and rnd.n_resamples == 9999
+    assert 0.10 < rnd.pval < 0.17  # book ≈ 0.1407; χ² approximation ≈ 0.13
+    assert abs(rnd.pval - asy.pval) < 0.03  # randomization tracks the approximation
+
+    p_int = wheeler_watson_test(groups, n_resamples=500, seed=4).pval
+    p_gen = wheeler_watson_test(groups, n_resamples=500, seed=np.random.default_rng(4)).pval
+    assert p_int == p_gen
+
+    rng = np.random.default_rng(0)
+    sep = [rng.vonmises(m, 6, 25) for m in (0.0, 1.8, 3.4)]  # separated -> reject
+    assert wheeler_watson_test(sep, n_resamples=2000, seed=1).pval < 0.05
+
+
+def test_concentration_randomization():
+    """concentration_test randomization is distribution-free: it rejects clearly
+    different concentrations and not equal ones (Pewsey et al. 2013, §7.4.3)."""
+    rng = np.random.default_rng(42)
+    same1 = vonmises.rvs(mu=0, kappa=5, size=60, random_state=rng)
+    same2 = vonmises.rvs(mu=0, kappa=5, size=60, random_state=rng)
+    diff1 = vonmises.rvs(mu=0, kappa=8, size=60, random_state=rng)
+    diff2 = vonmises.rvs(mu=0, kappa=1.5, size=60, random_state=rng)
+
+    assert concentration_test(same1, same2).method == "asymptotic"  # default = F-test
+
+    eq = concentration_test(same1, same2, n_resamples=9999, seed=1)
+    ne = concentration_test(diff1, diff2, n_resamples=9999, seed=1)
+    assert eq.method == "randomization" and eq.n_resamples == 9999
+    assert eq.pval > 0.05
+    assert ne.pval < 0.05
+
+    p_int = concentration_test(diff1, diff2, n_resamples=500, seed=3).pval
+    p_gen = concentration_test(diff1, diff2, n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p_int == p_gen
+
+    # randomization on dispersed data must not emit the rbar<0.7 warning
+    u1 = rng.uniform(0, 2 * np.pi, 50)
+    u2 = rng.uniform(0, 2 * np.pi, 50)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        concentration_test(u1, u2, n_resamples=200, seed=1)
+
+
+def test_symmetry_test_pewsey():
+    """method='pewsey' = Pewsey's (2002) β̄₂ reflective-symmetry test; large-sample
+    matches R's `circular` package and the bootstrap reproduces the book's cross-bed
+    azimuth result (Pewsey et al. 2013, §5.2; data = B6/set1)."""
+    b6 = load_data("B6", source="fisher")
+    s1 = np.deg2rad(b6[b6["set"] == 1]["θ"].values.astype(float))
+
+    large = symmetry_test(s1, method="pewsey")
+    assert large.method == "pewsey"
+    np.testing.assert_allclose(large.statistic, 0.594601, rtol=1e-4)  # |z|, == R RSTestStat
+    np.testing.assert_allclose(large.pval, 0.552110, rtol=1e-4)
+
+    boot = symmetry_test(s1, method="pewsey", n_resamples=9999, seed=2046)
+    assert boot.method == "pewsey" and boot.n_resamples == 9999
+    assert 0.52 < boot.pval < 0.56  # book 0.5391, 95% CI (0.529, 0.549)
+
+    assert symmetry_test(s1).method == "wilcoxon"  # default unchanged
+    with pytest.raises(ValueError, match="method"):
+        symmetry_test(s1, method="bogus")
+
+    p1 = symmetry_test(s1, method="pewsey", n_resamples=500, seed=3).pval
+    p2 = symmetry_test(s1, method="pewsey", n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p1 == p2
+
+
+def test_one_sample_specified_mean():
+    """one_sample_test adds the §5.3.3 specified-mean p-value (eq. 5.10) when raw
+    angles are supplied; validated bit-for-bit against R's `circular` package."""
+    from pycircstat2.utils import time2float
+
+    # B1 intensive-care times with the proper hh:mm -> decimal-hour conversion (== R's
+    # fisherB1c). NB: the book's published 9.126e-5 used raw fisherB1 (8.45-as-decimal).
+    b1 = time2float(load_data("B1", source="fisher")["time"].values) * 2 * np.pi / 24
+
+    r = one_sample_test(angle=3.9270, alpha=b1, symmetric=True)  # H0: mean = 15:00
+    assert r.method == "asymptotic"
+    np.testing.assert_allclose(r.statistic, 4.217775, rtol=1e-4)  # == R SpecMeanTestRes
+    np.testing.assert_allclose(r.pval, 2.467243e-05, rtol=1e-3)
+    assert r.pval < 1e-3  # 3pm emphatically rejected (book's conclusion)
+
+    # Backward-compat: CI-only path has no p-value; `reject` is the CI decision.
+    ci_only = one_sample_test(lb=0.0, ub=1.0, angle=0.5)
+    assert ci_only.reject is False
+    assert ci_only.pval is None and ci_only.method is None
+
+    # bootstrap determinism
+    p_int = one_sample_test(angle=3.9270, alpha=b1, symmetric=True, n_resamples=500, seed=4).pval
+    p_gen = one_sample_test(
+        angle=3.9270, alpha=b1, symmetric=True, n_resamples=500, seed=np.random.default_rng(4)
+    ).pval
+    assert p_int == p_gen
+
+
+def test_circ_anova_randomization():
+    """circ_anova(n_resamples>0) gives a label-randomization p-value (free of the
+    high-κ assumption) that tracks the parametric one and rejects separated means."""
+    rng = np.random.default_rng(42)
+    same = [rng.vonmises(0.0, 5, 40) for _ in range(3)]
+    diff = [rng.vonmises(m, 5, 40) for m in (0.0, 0.5, 1.0)]
+
+    for method in ("F-test", "LRT"):
+        a = circ_anova(same, method=method)
+        r = circ_anova(same, method=method, n_resamples=4999, seed=1)
+        assert r.n_resamples == 4999
+        assert abs(r.pval - a.pval) < 0.05  # tracks the parametric p-value under H0
+        assert circ_anova(diff, method=method, n_resamples=4999, seed=1).pval < 0.05
+
+    # default unchanged (parametric); determinism of the randomization
+    assert circ_anova(same).n_resamples == 0
+    p_int = circ_anova(diff, n_resamples=500, seed=7).pval
+    p_gen = circ_anova(diff, n_resamples=500, seed=np.random.default_rng(7)).pval
+    assert p_int == p_gen
+
+
+def test_mc_uniform_pvalues():
+    """V_test / omnibus_test / circ_range_test gain a Monte-Carlo-under-uniform p-value
+    that tracks the analytic one (the analytic Rayleigh/Ajne forms are approximations)."""
+    rng = np.random.default_rng(0)
+    a = rng.vonmises(np.deg2rad(80), 1.0, 30)
+
+    v_a = V_test(angle=np.deg2rad(90), alpha=a)
+    v_m = V_test(angle=np.deg2rad(90), alpha=a, n_resamples=9999, seed=1)
+    assert v_a.method == "asymptotic" and v_m.method == "monte_carlo" and v_m.n_resamples == 9999
+    assert abs(v_a.pval - v_m.pval) < 0.02
+
+    d8 = Circular(data=load_data("D8", source="zar")["θ"].values[:], unit="degree")
+    o_m = omnibus_test(d8.alpha, n_resamples=9999, seed=1)
+    assert o_m.method == "monte_carlo" and o_m.pval < 0.05  # book/asymptotic ~0.0043
+    # MC handles the degenerate (maximally uniform) case the analytic formula clamps.
+    ev = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+    assert omnibus_test(ev, n_resamples=2000, seed=1).pval > 0.5
+
+    x = np.deg2rad(np.array([0.0] * 12 + [3.6, 36, 36, 36, 36, 36, 36, 72, 108, 108, 169.2, 324.0]))
+    assert circ_range_test(x).method == "exact"
+    assert circ_range_test(x, n_resamples=9999, seed=1).pval < 0.05  # clustered -> reject
+
+    # determinism
+    p_int = omnibus_test(d8.alpha, n_resamples=500, seed=3).pval
+    p_gen = omnibus_test(d8.alpha, n_resamples=500, seed=np.random.default_rng(3)).pval
+    assert p_int == p_gen
+
+
+def test_change_point_permutation_pvalues():
+    """change_point_test(n_resamples>0) adds permutation p-values: rmax flags a
+    mean-direction change, tmax a concentration change; homogeneous data is not flagged."""
+    rng = np.random.default_rng(0)
+    mean_change = np.concatenate([rng.vonmises(0, 5, 15), rng.vonmises(np.pi, 5, 15)])
+    conc_change = np.concatenate([rng.vonmises(0, 12, 15), rng.vonmises(0, 0.4, 15)])
+    homog = rng.vonmises(0, 5, 30)
+
+    mc = change_point_test(mean_change, n_resamples=1999, seed=1)
+    assert mc.n_resamples == 1999
+    assert mc.pval_r < 0.05  # mean direction changed
+
+    cc = change_point_test(conc_change, n_resamples=1999, seed=1)
+    assert cc.pval_t < 0.05  # concentration changed (likelihood statistic)
+
+    hm = change_point_test(homog, n_resamples=1999, seed=1)
+    assert hm.pval_r > 0.05 and hm.pval_t > 0.05
+
+    # default = statistics only, no p-values; determinism
+    assert change_point_test(homog).pval_r is None
+    a = change_point_test(mean_change, n_resamples=300, seed=7)
+    b = change_point_test(mean_change, n_resamples=300, seed=np.random.default_rng(7))
+    assert a.pval_r == b.pval_r and a.pval_t == b.pval_t

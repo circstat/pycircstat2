@@ -6,7 +6,7 @@ from typing import Any, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 from scipy.special import comb, i0, iv
-from scipy.stats import chi2, f, norm, rankdata, vonmises, wilcoxon
+from scipy.stats import chi2, f, norm, rankdata, wilcoxon
 
 from .descriptive import (
     circ_dist,
@@ -19,6 +19,7 @@ from .descriptive import (
     circ_r,
     circ_range,
 )
+from .distributions import vonmises
 from .utils import (
     A1inv,
     angmod,
@@ -37,6 +38,7 @@ __all__ = [
     "symmetry_test",
     "watson_williams_test",
     "watson_u2_test",
+    "kuiper_two_test",
     "wheeler_watson_test",
     "wallraff_test",
     "circ_anova",
@@ -73,6 +75,145 @@ def _init_rng(seed: SeedLike) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
+def _resolve_legacy_verbose(seed: SeedLike, verbose: bool) -> tuple[SeedLike, bool]:
+    """Back-compat shim for the formerly positional ``verbose`` argument.
+
+    Before ``seed`` was introduced these tests took ``verbose`` as the trailing
+    positional argument, so a legacy call such as ``test(..., True)`` now binds
+    ``True`` to ``seed`` instead. Detect that exact case (``seed is True`` with
+    ``verbose`` left at its default) and reinterpret it as ``verbose=True``.
+    """
+
+    if seed is True and verbose is False:
+        warnings.warn(
+            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return 2046, True
+
+    return seed, verbose
+
+
+def _resolve_n_resamples(
+    n_resamples: int,
+    *,
+    B: Optional[int] = None,
+    n_simulation: Optional[int] = None,
+    has_asymptotic: bool,
+) -> int:
+    """Map the deprecated ``B`` / ``n_simulation`` keywords onto ``n_resamples``.
+
+    ``n_resamples == 0`` means "no resampling" (use the analytic p-value). For tests
+    that have an analytic fallback (``has_asymptotic``) the old sentinel value ``1``
+    requested exactly that, so it maps to ``0``; otherwise the count passes through.
+    """
+
+    legacy_name, legacy_value = None, None
+    if B is not None:
+        legacy_name, legacy_value = "B", B
+    elif n_simulation is not None:
+        legacy_name, legacy_value = "n_simulation", n_simulation
+
+    if legacy_value is None:
+        return n_resamples
+
+    warnings.warn(
+        f"`{legacy_name}` is deprecated; use `n_resamples` instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    if has_asymptotic and legacy_value <= 1:
+        return 0
+    return int(legacy_value)
+
+
+def _warn_deprecated_attr(old: str, new: str) -> None:
+    """Emit a deprecation warning for a renamed result attribute."""
+
+    warnings.warn(
+        f"`{old}` is deprecated; use `{new}` instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def _randomization_pval(
+    statistic_fn,
+    pooled: np.ndarray,
+    group_sizes: Sequence[int],
+    observed: float,
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> float:
+    """Randomization (permutation) p-value for a multi-sample statistic.
+
+    Each of ``n_resamples`` permutations reshuffles the pooled per-observation
+    quantities into the original group sizes; ``statistic_fn`` recomputes the
+    statistic from the list of group arrays. Returns
+    ``(#{stat >= observed} + 1) / (n_resamples + 1)``
+    (Pewsey, Neuhäuser & Ruxton 2013, §7.3.2/7.4.3/7.5.3/7.5.5).
+
+    ``pooled`` may be 1-D (e.g. angles, deviations, sign indicators) or 2-D with one
+    row per observation (e.g. cos/sin uniform-score pairs); permutation is along axis 0.
+    """
+
+    pooled = np.asarray(pooled)
+    split_at = np.cumsum(group_sizes)[:-1]
+    count = 0
+    for _ in range(n_resamples):
+        groups = np.split(rng.permutation(pooled), split_at)
+        if statistic_fn(groups) >= observed:
+            count += 1
+    return (count + 1) / (n_resamples + 1)
+
+
+def _bootstrap_pval(
+    statistic_fn,
+    null_sample: np.ndarray,
+    n: int,
+    observed: float,
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> float:
+    """Bootstrap p-value for a one-sample statistic under a null-constrained sample.
+
+    Draws ``n_resamples`` samples of size ``n`` with replacement from ``null_sample``
+    (a version of the data forced to satisfy H0 — e.g. symmetrized about the mean, or
+    mean-shifted to μ₀), recomputes ``statistic_fn``, and returns
+    ``(#{stat >= observed} + 1) / (n_resamples + 1)`` (Pewsey et al. 2013, §5.2.2/5.3.3).
+    """
+
+    null_sample = np.asarray(null_sample, dtype=float)
+    count = 0
+    for _ in range(n_resamples):
+        if statistic_fn(rng.choice(null_sample, size=n, replace=True)) >= observed:
+            count += 1
+    return (count + 1) / (n_resamples + 1)
+
+
+def _mc_uniform_pval(
+    statistic_fn,
+    n: int,
+    observed: float,
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> float:
+    """Monte-Carlo p-value under the uniform-circle null hypothesis.
+
+    Draws ``n_resamples`` samples of ``n`` angles ~ Uniform(0, 2π), recomputes the
+    statistic, and returns ``(#{stat >= observed} + 1) / (n_resamples + 1)``. Pass a
+    statistic oriented so that *larger* means *more extreme*; negate it (and ``observed``)
+    for tests where small values indicate departure from uniformity.
+    """
+
+    count = 0
+    for _ in range(n_resamples):
+        if statistic_fn(rng.uniform(0.0, 2 * np.pi, size=n)) >= observed:
+            count += 1
+    return (count + 1) / (n_resamples + 1)
+
+
 ###################
 # One-Sample Test #
 ###################
@@ -107,9 +248,16 @@ class TestResult:
 @dataclass(frozen=True)
 class RayleighTestResult(TestResult):
     r: float  # Resultant vector length
-    z: float  # Test Statistic (Rayleigh's Z)
-    pval: float  # Classical P-value
-    bootstrap_pval: Optional[float] = None  # Bootstrap P-value, if computed
+    z: float  # Test statistic (Rayleigh's Z)
+    pval: float  # P-value (analytic or Monte-Carlo, per `method`)
+    method: str  # "asymptotic" | "monte_carlo"
+    n_resamples: int = 0
+
+    @property
+    def bootstrap_pval(self) -> Optional[float]:
+        """Deprecated: the Monte-Carlo p-value, now in `pval` when `method="monte_carlo"`."""
+        _warn_deprecated_attr("bootstrap_pval", "pval (with method='monte_carlo')")
+        return self.pval if self.method == "monte_carlo" else None
 
 
 @dataclass(frozen=True)
@@ -123,13 +271,19 @@ class VTestResult(TestResult):
     V: float
     u: float
     pval: float
+    method: str = "asymptotic"  # "asymptotic" | "monte_carlo"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
 class OneSampleTestResult(TestResult):
-    reject: bool
+    reject: bool  # whether μ0 lies outside the 95% CI of the mean
     angle: float
     ci: tuple[float, float]
+    statistic: Optional[float] = None  # eq. 5.10 z, when raw angles are supplied
+    pval: Optional[float] = None  # specified-mean test p-value (eq. 5.10)
+    method: Optional[str] = None  # "asymptotic" | "bootstrap" | None (CI only)
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,6 +291,8 @@ class OmnibusTestResult(TestResult):
     A: float
     pval: float
     m: int
+    method: str = "asymptotic"  # "asymptotic" (Ajne approx) | "monte_carlo"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -149,6 +305,8 @@ class BatscheletTestResult(TestResult):
 class SymmetryTestResult(TestResult):
     statistic: float
     pval: float
+    method: str = "wilcoxon"  # "wilcoxon" (Zar) | "pewsey" (β̄₂ test)
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -165,6 +323,16 @@ class WatsonWilliamsTestResult(TestResult):
 class WatsonU2TestResult(TestResult):
     U2: float
     pval: float
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
+
+
+@dataclass(frozen=True)
+class KuiperTwoTestResult(TestResult):
+    V: float  # two-sample Kuiper statistic D+ + D-
+    pval: float
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -172,6 +340,8 @@ class WheelerWatsonTestResult(TestResult):
     W: float
     pval: float
     df: int
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -194,43 +364,93 @@ class CircularAnovaResult(TestResult):
     pval: float
     SS: Optional[tuple[float, float, float]] = None
     MS: Optional[tuple[float, float]] = None
+    n_resamples: int = 0  # >0 => `pval` is a label-randomization p-value
 
 
 @dataclass(frozen=True)
 class AngularRandomisationTestResult(TestResult):
     statistic: float
     pval: float
-    n_simulation: int
+    method: str  # always "randomization"
+    n_resamples: int
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class KuiperTestResult(TestResult):
     V: float
     pval: float
-    mode: str
-    n_simulation: int
+    method: str  # "asymptotic" | "monte_carlo"
+    n_resamples: int
+
+    @property
+    def mode(self) -> str:
+        """Deprecated: p-value method, now in `method` ("asymptotic"|"monte_carlo")."""
+        _warn_deprecated_attr("mode", "method")
+        return "asymptotic" if self.method == "asymptotic" else "simulation"
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class WatsonTestResult(TestResult):
     U2: float
     pval: float
-    mode: str
-    n_simulation: int
+    method: str  # "asymptotic" | "monte_carlo" | "parametric_bootstrap"
+    n_resamples: int
+    dist: str = "uniform"  # null tested: "uniform" | "vonmises"
+    mu: Optional[float] = None  # fitted mean direction (von Mises GoF only)
+    kappa: Optional[float] = None  # fitted concentration (von Mises GoF only)
+
+    @property
+    def mode(self) -> str:
+        """Deprecated: p-value method, now in `method` ("asymptotic"|"monte_carlo")."""
+        _warn_deprecated_attr("mode", "method")
+        return "asymptotic" if self.method == "asymptotic" else "simulation"
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class RaoSpacingTestResult(TestResult):
     statistic: float
     pval: float
-    mode: str
-    n_simulation: int
+    method: str  # always "monte_carlo"
+    data_kind: str  # "grouped" | "ungrouped"
+    n_resamples: int
+
+    @property
+    def mode(self) -> str:
+        """Deprecated: data descriptor, now in `data_kind` ("grouped"|"ungrouped")."""
+        _warn_deprecated_attr("mode", "data_kind")
+        return self.data_kind
+
+    @property
+    def n_simulation(self) -> int:
+        """Deprecated alias for `n_resamples`."""
+        _warn_deprecated_attr("n_simulation", "n_resamples")
+        return self.n_resamples
 
 
 @dataclass(frozen=True)
 class CircularRangeTestResult(TestResult):
     range_stat: float
     pval: float
+    method: str = "exact"  # "exact" (series) | "monte_carlo"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -247,6 +467,8 @@ class ConcentrationTestResult(TestResult):
     pval: float
     df1: int
     df2: int
+    method: str = "asymptotic"  # "asymptotic" (F-test) | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -257,6 +479,8 @@ class RaoHomogeneityTestResult(TestResult):
     H_disp: float
     pval_disp: float
     reject_disp: bool
+    method: str = "asymptotic"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -269,6 +493,9 @@ class ChangePointTestResult(TestResult):
     tmax: float
     k_t: int
     tave: float
+    pval_r: Optional[float] = None  # permutation p-value for rmax (mean-direction change)
+    pval_t: Optional[float] = None  # permutation p-value for tmax (concentration change)
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -295,6 +522,8 @@ class CommonMedianTestResult(TestResult):
     statistic: float
     pval: float
     reject: bool
+    method: str = "asymptotic"  # "asymptotic" | "randomization"
+    n_resamples: int = 0
 
 
 @dataclass(frozen=True)
@@ -371,20 +600,56 @@ def _coerce_circular_samples(samples: Sequence[Any]) -> list[_CircularSample]:
     return normalized
 
 
+def _coerce_sample_arrays(samples: Sequence[Any]) -> list[np.ndarray]:
+    """Coerce a sequence of samples into a list of 1-D float angle arrays.
+
+    Lightweight counterpart to ``_coerce_circular_samples`` for tests that need
+    only the raw angles (no weights or resultants). Each sample may be an
+    array-like (``np.ndarray``, list, ...) or a ``Circular`` object; the latter
+    is unwrapped to its ``alpha``. Plain arrays/lists are the canonical input —
+    ``Circular`` support is a convenience.
+    """
+    if not isinstance(samples, Sequence) or len(samples) == 0:
+        raise ValueError("`samples` must be a non-empty sequence of array-like samples.")
+
+    try:
+        from .base import Circular
+    except Exception:  # pragma: no cover - defensive import guard
+        Circular = None  # type: ignore
+
+    arrays: list[np.ndarray] = []
+    for sample in samples:
+        if Circular is not None and isinstance(sample, Circular):  # type: ignore[arg-type]
+            arr = np.asarray(sample.alpha, dtype=float)
+        else:
+            arr = np.asarray(sample, dtype=float)
+        if arr.ndim != 1:
+            raise ValueError("Each sample must be a one-dimensional array of angles.")
+        if arr.size == 0:
+            raise ValueError("Each sample must contain at least one observation.")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Angles must be finite.")
+        arrays.append(arr)
+
+    return arrays
+
+
 def rayleigh_test(
     alpha: Optional[np.ndarray] = None,
     w: Optional[np.ndarray] = None,
     r: Optional[float] = None,
     n: Optional[int] = None,
-    B: int = 1,
+    n_resamples: int = 0,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    B: Optional[int] = None,
 ) -> RayleighTestResult:
     r"""
     Rayleigh's Test for Circular Uniformity.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: The data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not distributed uniformly around the circle.
 
     $$ z = n \cdot r^2 $$
 
@@ -410,17 +675,22 @@ def rayleigh_test(
     n: int or None
         Sample size.
 
-    B: int
-        Number of bootstrap samples for p-value estimation.
+    n_resamples: int
+        If ``0`` (default), the analytic p-value (eq. 27.4) is returned. If ``>= 1``,
+        that many Monte-Carlo samples drawn from the uniform null are used to estimate
+        the p-value instead.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for bootstrap resampling
-        when ``B > 1``. Accepts integers, sequences of integers, ``numpy.random.Generator``,
-        ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
-        Defaults to 2046.
+        Seed used to initialize the random number generator for Monte-Carlo resampling
+        when ``n_resamples >= 1``. Accepts integers, sequences of integers,
+        ``numpy.random.Generator``, ``numpy.random.BitGenerator``,
+        ``numpy.random.SeedSequence`` or ``None``. Defaults to 2046.
 
     verbose: bool
         Print formatted results.
+
+    B: int or None
+        Deprecated alias for ``n_resamples`` (the old ``B=1`` meant "no resampling").
 
     Returns
     -------
@@ -432,17 +702,20 @@ def rayleigh_test(
         - z: float
             - Test statistic (Rayleigh's Z).
         - pval: float
-            - Classical p-value based on the asymptotic formula.
-        - bootstrap_pval: float or None
-            - Bootstrap p-value (if computed, i.e., B > 1); otherwise, None.
+            - P-value, computed per ``method``.
+        - method: str
+            - "asymptotic" (eq. 27.4) or "monte_carlo".
+        - n_resamples: int
+            - Number of Monte-Carlo resamples used (0 if analytic).
 
     Reference
     ---------
     P625, Section 27.1, Example 27.1 of Zar, 2010
     """
 
-    if B <= 0:
-        raise ValueError("`B` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, B=B, has_asymptotic=True)
+    if n_resamples < 0:
+        raise ValueError("`n_resamples` must be a non-negative integer.")
 
     if r is None:
         if alpha is None:
@@ -475,27 +748,18 @@ def rayleigh_test(
     R = n * r
     z = n * r**2  # eq(27.2)
 
-    pval = np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n))  # eq(27.4)
+    pval = float(np.exp(np.sqrt(1 + 4 * n + 4 * (n**2 - R**2)) - (1 + 2 * n)))  # eq(27.4)
+    method = "asymptotic"
 
-    bootstrap_pval: Optional[float]
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if B > 1:
+    if n_resamples >= 1:
         rng = _init_rng(seed)
-        uniforms = rng.uniform(0.0, 2 * np.pi, size=(B, n))
-        unit_vectors = np.exp(1j * uniforms)
-        resultant_lengths = np.abs(np.sum(unit_vectors, axis=1))
-        bootstrap_stats = (resultant_lengths**2) / n
-        bootstrap_pval = float((np.count_nonzero(bootstrap_stats >= z) + 1) / (B + 1))
-    else:
-        bootstrap_pval = None
+        uniforms = rng.uniform(0.0, 2 * np.pi, size=(n_resamples, n))
+        resultant_lengths = np.abs(np.sum(np.exp(1j * uniforms), axis=1))
+        mc_stats = (resultant_lengths**2) / n
+        pval = float((np.count_nonzero(mc_stats >= z) + 1) / (n_resamples + 1))
+        method = "monte_carlo"
 
     if verbose:
         print("Rayleigh's Test of Uniformity")
@@ -504,22 +768,18 @@ def rayleigh_test(
         print("HA: ρ ≠ 0")
         print("")
         print(f"Test Statistics  (ρ | z-score): {r:.5f} | {z:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
-        if B > 1 and bootstrap_pval is not None:
-            print(
-                f"Bootstrap P-value: {bootstrap_pval:.5f} {significance_code(bootstrap_pval)}"
-            )
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return RayleighTestResult(r=r, z=z, pval=pval, bootstrap_pval=bootstrap_pval)
+    return RayleighTestResult(r=r, z=z, pval=pval, method=method, n_resamples=n_resamples)
 
 
 def chisquare_test(w: np.ndarray, verbose: bool = False) -> ChiSquareTestResult:
     """Chi-Square Goodness of Fit for Circular data.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not distributed uniformly around the circle.
 
-    For method is for grouped data.
+    This method is for grouped data.
 
     Parameters
     ----------
@@ -578,6 +838,8 @@ def V_test(
     mean: Optional[float] = None,
     r: Optional[float] = None,
     n: Optional[int] = None,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> VTestResult:
     """
@@ -607,6 +869,13 @@ def V_test(
     n: int or None
         Sample size. Needed if `alpha` is None.
 
+    n_resamples: int
+        If ``0`` (default), the p-value is the closed-form normal approximation. If
+        ``>= 1``, it is estimated from that many Monte-Carlo uniform samples.
+
+    seed: SeedLike
+        Seed (or generator) for the Monte-Carlo p-value. Default 2046.
+
     verbose: bool
         Print formatted results.
 
@@ -614,7 +883,8 @@ def V_test(
     -------
     VTestResult
         Dataclass containing the test statistic `V`, the normalized statistic `u`,
-        and the p-value.
+        the p-value, ``method`` (``"asymptotic"`` for the normal approximation, or
+        ``"monte_carlo"`` when ``n_resamples >= 1``), and ``n_resamples``.
 
     Reference
     ---------
@@ -651,7 +921,17 @@ def V_test(
     R = n * r
     V = R * np.cos(angmod(mean - angle, bounds=[-np.pi, np.pi]))  # eq(27.5)
     u = V * np.sqrt(2.0 / n)  # eq(27.6)
-    pval = float(norm.sf(u))
+
+    if n_resamples >= 1:
+        def _v_stat(sample: np.ndarray) -> float:
+            return sample.size * circ_r(sample) * np.cos(circ_mean(sample) - angle)
+
+        rng = _init_rng(seed)
+        pval = _mc_uniform_pval(_v_stat, n, V, n_resamples, rng)
+        method = "monte_carlo"
+    else:
+        pval = float(norm.sf(u))
+        method = "asymptotic"
 
     if verbose:
         print("Modified Rayleigh's Test of Uniformity")
@@ -660,9 +940,26 @@ def V_test(
         print(f"HA: ρ ≠ 0 and μ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {V:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return VTestResult(V=V, u=u, pval=pval)
+    return VTestResult(V=V, u=u, pval=pval, method=method, n_resamples=n_resamples)
+
+
+def _spec_mean_stat(alpha: np.ndarray, mu0: float, symmetric: bool) -> tuple[float, float]:
+    """Statistic 5.10 (z) and bias-corrected mean μ̂BC for the specified-mean test (§5.3.3)."""
+    n = alpha.size
+    C1 = float(np.mean(np.cos(alpha)))
+    S1 = float(np.mean(np.sin(alpha)))
+    tbar = float(np.arctan2(S1, C1) % (2 * np.pi))
+    Rbar = float(np.hypot(C1, S1))
+    dev = alpha - tbar
+    abar2 = float(np.mean(np.cos(2 * dev)))
+    bbar2 = 0.0 if symmetric else float(np.mean(np.sin(2 * dev)))
+    div = 2 * n * Rbar**2
+    mubc = float((tbar + bbar2 / div) % (2 * np.pi))
+    se = np.sqrt((1 - abar2) / div)
+    dist = np.pi - abs(np.pi - abs(mubc - mu0))  # angular distance between μ̂BC and μ0
+    return float(dist / se), mubc
 
 
 def one_sample_test(
@@ -671,46 +968,68 @@ def one_sample_test(
     w: Optional[np.ndarray] = None,
     lb: Optional[float] = None,
     ub: Optional[float] = None,
+    symmetric: bool = False,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> OneSampleTestResult:
     """
-    To test whether the population mean angle is equal to a specified value,
-    which is achieved by observing whether the angle lies within the 95% CI.
+    Test whether the population mean direction equals a specified value μ0.
 
-    - H0: The population has a mean of μ (μ_a = μ_0)
-    - H1: The population mean is not μ (μ_a ≠ μ_0)
+    The decision (`reject`) is made by checking whether μ0 lies within the 95% CI
+    of the mean. When the raw angles (`alpha`) are supplied, a continuous p-value
+    for H0: μ = μ0 is also computed from Pewsey et al. (2013), §5.3.3 (statistic 5.10):
+    the large-sample normal p-value when ``n_resamples=0``, or the bootstrap p-value
+    when ``n_resamples >= 1`` (recommended for small samples).
+
+    - H0: The population has a mean of μ0 (μ_a = μ_0)
+    - H1: The population mean is not μ0 (μ_a ≠ μ_0)
 
     Parameters
     ----------
-
     angle: float or int
-        Angle in radian to be compared with mean angle.
+        Specified mean direction μ0 in radian.
 
     alpha: np.array or None
-        Angles in radian.
+        Angles in radian (required for the p-value; for the CI either `alpha` or
+        `lb`/`ub` is needed).
 
     w: np.array or None.
-        Frequencies of angles
+        Frequencies of angles.
 
-    lb: float
-        Lower bound of circular mean from `descriptive.circ_mean_ci()`.
+    lb, ub: float or None
+        Confidence-interval bounds from `descriptive.circ_mean_ci()`; computed from
+        `alpha` when not supplied.
 
-    ub: float
-        Upper bound of circular mean from `descriptive.circ_mean_ci()`.
+    symmetric: bool
+        If ``True``, assume the underlying distribution is reflectively symmetric
+        (zeroes the skewness bias-correction; symmetrizes the bootstrap pool about μ0).
+
+    n_resamples: int
+        ``0`` (default) → large-sample p-value; ``>= 1`` → bootstrap p-value (§5.3.3).
+
+    seed: SeedLike
+        Seed for the bootstrap RNG when ``n_resamples >= 1``.
 
     verbose: bool
         Print formatted results.
 
+    Returns
+    -------
+    OneSampleTestResult
+        Dataclass with the CI decision `reject`, the tested `angle`, the 95% CI `ci`,
+        and (when `alpha` is supplied) the specified-mean `statistic` (eq. 5.10),
+        `pval`, `method` ("asymptotic"|"bootstrap"), and `n_resamples`.
+
     Reference
     ---------
-    P628, Section 27.1, Example 27.3 of Zar, 2010
+    P628, Section 27.1, Example 27.3 of Zar, 2010 (CI inclusion).
+    Pewsey, Neuhäuser & Ruxton (2013), §5.3.3 (specified-mean p-value).
     """
 
     angle = float(angle)
 
-    if lb is None or ub is None:
-        if alpha is None:
-            raise ValueError("If `lb` or `ub` is None, then `alpha` (and optionally `w`) is required.")
+    if alpha is not None:
         alpha = np.asarray(alpha, dtype=float)
         if alpha.size == 0:
             raise ValueError("`alpha` must contain at least one angle.")
@@ -720,6 +1039,10 @@ def one_sample_test(
             w = np.asarray(w, dtype=float)
             if w.shape != alpha.shape:
                 raise ValueError("`w` must have the same shape as `alpha`.")
+
+    if lb is None or ub is None:
+        if alpha is None:
+            raise ValueError("If `lb` or `ub` is None, then `alpha` (and optionally `w`) is required.")
         lb, ub = circ_mean_ci(alpha=alpha, w=w)
 
     lb = float(lb)
@@ -727,27 +1050,73 @@ def one_sample_test(
 
     reject = not is_within_circular_range(angle, lb, ub)
 
+    # Continuous specified-mean p-value (eq. 5.10), only when raw angles are available.
+    statistic: Optional[float] = None
+    pval: Optional[float] = None
+    method: Optional[str] = None
+    used_resamples = 0
+    if alpha is not None:
+        sample = np.repeat(alpha, np.round(w).astype(int))
+        z0, mubc = _spec_mean_stat(sample, angle, symmetric)
+        statistic = z0
+        if n_resamples >= 1:
+            # Shift the sample to mean direction μ0 (optionally symmetrize about μ0),
+            # then resample with replacement (§5.3.3 / Fisher 1993 §4.4.5).
+            shifted = angmod(sample - mubc + angle)
+            null_sample = (
+                np.concatenate([shifted, angmod(2 * angle - shifted)]) if symmetric else shifted
+            )
+            rng = _init_rng(seed)
+            pval = _bootstrap_pval(
+                lambda b: _spec_mean_stat(b, angle, symmetric)[0],
+                null_sample,
+                sample.size,
+                z0,
+                n_resamples,
+                rng,
+            )
+            method = "bootstrap"
+            used_resamples = n_resamples
+        else:
+            pval = float(2 * norm.sf(z0))
+            method = "asymptotic"
+
     if verbose:
         print("One-Sample Test for the Mean Angle")
         print("----------------------------------")
         print("H0: μ = μ0")
         print(f"HA: μ ≠ μ0 and μ0 = {angle:.5f} rad")
         print("")
-        if reject:
-            print(
-                f"Reject H0:\nμ0 = {angle:.5f} lies outside the 95% CI of μ ({np.array([lb, ub]).round(5)})"
-            )
-        else:
-            print(
-                f"Failed to reject H0:\nμ0 = {angle:.5f} lies within the 95% CI of μ ({np.array([lb, ub]).round(5)})"
-            )
+        verb = "outside" if reject else "within"
+        print(f"μ0 = {angle:.5f} lies {verb} the 95% CI of μ ({np.array([lb, ub]).round(5)})")
+        if pval is not None:
+            print(f"P-value ({method}): {pval:.5g} {significance_code(pval)}")
 
-    return OneSampleTestResult(reject=reject, angle=angle, ci=(lb, ub))
+    return OneSampleTestResult(
+        reject=reject,
+        angle=angle,
+        ci=(lb, ub),
+        statistic=statistic,
+        pval=pval,
+        method=method,
+        n_resamples=used_resamples,
+    )
+
+
+def _omnibus_m(alpha: np.ndarray, scale: int) -> int:
+    """Hodges-Ajne statistic m: the minimum point count on one side of a diameter."""
+    lines = np.linspace(0.0, np.pi, scale * 360, endpoint=False)
+    n = alpha.size
+    lines_rotated = angmod(lines[:, None] - alpha)
+    right = n - np.logical_and(lines_rotated > 0.0, lines_rotated < np.pi).sum(axis=1)
+    return int(np.min(right))
 
 
 def omnibus_test(
     alpha: np.ndarray,
     scale: int = 1,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> OmnibusTestResult:
     """
@@ -769,6 +1138,13 @@ def omnibus_test(
     scale: int
         Scale factor for the number of lines to be tested.
 
+    n_resamples: int
+        If ``0`` (default), the p-value is Hodges–Ajne's closed-form approximation.
+        If ``>= 1``, it is estimated from that many Monte-Carlo uniform samples.
+
+    seed: SeedLike
+        Seed (or generator) for the Monte-Carlo p-value. Default 2046.
+
     verbose: bool
         Print formatted results.
 
@@ -776,7 +1152,9 @@ def omnibus_test(
     -------
     OmnibusTestResult
         Dataclass containing the test statistic `A`, the corresponding p-value,
-        and the minimum count `m`.
+        the minimum count `m`, ``method`` (``"asymptotic"`` for the closed-form
+        approximation, or ``"monte_carlo"`` when ``n_resamples >= 1``), and
+        ``n_resamples``.
 
     Reference
     ---------
@@ -790,16 +1168,8 @@ def omnibus_test(
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
 
-    lines = np.linspace(0.0, np.pi, scale * 360, endpoint=False)
     n = alpha.size
-
-    lines_rotated = angmod(lines[:, None] - alpha)
-
-    # # count number of points on the right half circle, excluding the boundaries
-    right = n - np.logical_and(
-        lines_rotated > 0.0, lines_rotated < np.pi
-    ).sum(axis=1)
-    m = int(np.min(right))
+    m = _omnibus_m(alpha, scale)
 
     # ------------------------------------------------------------------
     # 2. p-value   ———  analytical formula and its log form
@@ -828,8 +1198,10 @@ def omnibus_test(
 
     denom = n - 2 * m
     if denom <= 0:
-        logp = -np.inf
-        pval = 0.0
+        # m ≈ n/2: the data is maximally uniform and the analytic p-value
+        # (valid only for m well below n/2) degenerates to 0. There is no
+        # evidence against uniformity here, so do not reject.
+        pval = 1.0
         A = np.inf
     else:
         logp = (
@@ -842,15 +1214,25 @@ def omnibus_test(
         pval = float(np.exp(logp))
         A = np.pi * np.sqrt(n) / (2 * denom)
 
+    if n_resamples >= 1:
+        # Smaller m = more clustered = more extreme, so negate for the upper-tail helper.
+        rng = _init_rng(seed)
+        pval = _mc_uniform_pval(lambda s: -_omnibus_m(s, scale), n, -m, n_resamples, rng)
+        method = "monte_carlo"
+    else:
+        method = "asymptotic"
+
     if verbose:
         print('Hodges-Ajne ("omnibus") Test for Uniformity')
         print("-------------------------------------------")
         print("H0: uniform")
-        print("HA: not unifrom")
+        print("HA: not uniform")
         print("")
         print(f"Test Statistics: {A:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
-    return OmnibusTestResult(A=float(A), pval=float(pval), m=int(m))
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
+    return OmnibusTestResult(
+        A=float(A), pval=float(pval), m=int(m), method=method, n_resamples=n_resamples
+    )
 
 
 def batschelet_test(
@@ -899,7 +1281,7 @@ def batschelet_test(
         print("Batschelet Test for Uniformity")
         print("------------------------------")
         print("H0: uniform")
-        print(f"HA: not unifrom but concentrated around θ = {angle:.5f} rad")
+        print(f"HA: not uniform but concentrated around θ = {angle:.5f} rad")
         print("")
         print(f"Test Statistics: {C}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
@@ -907,59 +1289,117 @@ def batschelet_test(
     return BatscheletTestResult(C=C, pval=pval)
 
 
+def _rs_test_stat(alpha: np.ndarray) -> float:
+    """Pewsey's (2002) studentized second sine moment |z| for reflective symmetry (eq. 5.4)."""
+    n = alpha.size
+    Rbar = circ_r(alpha)
+    dev = alpha - circ_mean(alpha)
+    abar2 = float(np.mean(np.cos(2 * dev)))
+    bbar2 = float(np.mean(np.sin(2 * dev)))
+    abar3 = float(np.mean(np.cos(3 * dev)))
+    abar4 = float(np.mean(np.cos(4 * dev)))
+    var = (
+        (1 - abar4) / 2 - 2 * abar2 + (2 * abar2 / Rbar) * (abar3 + abar2 * (1 - abar2) / Rbar)
+    ) / n
+    return float(abs(bbar2 / np.sqrt(var)))
+
+
 def symmetry_test(
     alpha: np.ndarray,
     median: Optional[float] = None,
+    method: str = "wilcoxon",
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> SymmetryTestResult:
-    """Non-parametric test for symmetry around the median. Works by performing a
-    Wilcoxon sign rank test on the differences to the median. Also known as
-    Wilcoxon paired-sample test.
+    """Test for reflective symmetry of a circular distribution.
 
-    - H0: the population is symmetrical around the median
-    - HA: the population is not symmetrical around the median
+    - H0: the population is reflectively symmetrical
+    - HA: the population is not symmetrical
 
     Parameters
     ----------
     alpha: np.array
         Angles in radian.
 
-    median: float or None.
-        Median computed by `descriptive.median()`.
+    median: float or None
+        Median (only used by ``method="wilcoxon"``). Computed by
+        `descriptive.circ_median()` if not provided.
+
+    method: str
+        - ``"wilcoxon"`` (default): Wilcoxon signed-rank test on the angular
+          deviations from the median (Zar 2010; symmetry about the median).
+        - ``"pewsey"``: Pewsey's (2002) studentized second sine moment about the
+          mean direction (eq. 5.4). With ``n_resamples=0`` the large-sample normal
+          p-value is used (valid n >= 50); with ``n_resamples >= 1`` the §5.2.2
+          bootstrap p-value (Efron symmetrization) is used — recommended for small
+          samples.
+
+    n_resamples: int
+        Bootstrap resamples for ``method="pewsey"`` (default 0 = large-sample).
+
+    seed: SeedLike
+        Seed for the bootstrap RNG when ``method="pewsey"`` and ``n_resamples >= 1``.
 
     verbose: bool
         Print formatted results.
 
+    Returns
+    -------
+    SymmetryTestResult
+        Dataclass with the test statistic, p-value, ``method`` ("wilcoxon"|"pewsey"),
+        and ``n_resamples``.
+
     Reference
     ---------
-    P631-632, Section 27.3, Example 27.6 of Zar, 2010
+    P631-632, Section 27.3, Example 27.6 of Zar, 2010 (Wilcoxon).
+    Pewsey (2002); Pewsey, Neuhäuser & Ruxton (2013), §5.2 (Pewsey β̄₂ test).
     """
+
+    if method not in ("wilcoxon", "pewsey"):
+        raise ValueError("`method` must be 'wilcoxon' or 'pewsey'.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
 
-    if median is None:
-        median = float(circ_median(alpha=alpha))
-    else:
-        median = float(median)
-
-    d = angmod(alpha - median, bounds=[-np.pi, np.pi])
-
-    res = wilcoxon(d, alternative="two-sided")
-    test_statistic = float(res.statistic)
-    pval = float(res.pvalue)
+    if method == "wilcoxon":
+        if median is None:
+            median = float(circ_median(alpha=alpha))
+        else:
+            median = float(median)
+        d = angmod(alpha - median, bounds=[-np.pi, np.pi])
+        res = wilcoxon(d, alternative="two-sided")
+        statistic = float(res.statistic)
+        pval = float(res.pvalue)
+        used_resamples = 0
+    else:  # method == "pewsey"
+        statistic = _rs_test_stat(alpha)
+        if n_resamples >= 1:
+            theta_bar = circ_mean(alpha)
+            # Efron symmetrization: reflect about the mean, pool, resample (§5.2.2).
+            symmetrized = np.concatenate([alpha, 2 * theta_bar - alpha])
+            rng = _init_rng(seed)
+            pval = _bootstrap_pval(
+                _rs_test_stat, symmetrized, alpha.size, statistic, n_resamples, rng
+            )
+            used_resamples = n_resamples
+        else:
+            pval = float(2 * norm.sf(statistic))
+            used_resamples = 0
 
     if verbose:
         print("Symmetry Test")
         print("------------------------------")
-        print("H0: symmetrical around median")
-        print("HA: not symmetrical around median")
+        print(f"H0: reflectively symmetrical ({method})")
+        print("HA: not symmetrical")
         print("")
-        print(f"Test Statistics: {test_statistic:.5f}")
+        print(f"Test Statistics: {statistic:.5f}")
         print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
-    return SymmetryTestResult(statistic=test_statistic, pval=pval)
+    return SymmetryTestResult(
+        statistic=statistic, pval=pval, method=method, n_resamples=used_resamples
+    )
 
 
 ###########################
@@ -1060,8 +1500,21 @@ def watson_williams_test(
     return result
 
 
+def _watson_u2_statistic(s0: np.ndarray, s1: np.ndarray) -> float:
+    """Watson's two-sample U² statistic for two arrays of angles (ties via counts)."""
+    s0 = np.sort(np.asarray(s0, dtype=float))
+    s1 = np.sort(np.asarray(s1, dtype=float))
+    n0, n1 = s0.size, s1.size
+    N = n0 + n1
+    a, t = np.unique(np.concatenate([s0, s1]), return_counts=True)
+    d = np.searchsorted(s0, a, side="right") / n0 - np.searchsorted(s1, a, side="right") / n1
+    return float(n0 * n1 / N**2 * (np.sum(t * d**2) - np.sum(t * d) ** 2 / N))
+
+
 def watson_u2_test(
     samples: Sequence[Any],
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> WatsonU2TestResult:
     """Watson's U2 Test for nonparametric two-sample testing
@@ -1083,13 +1536,22 @@ def watson_u2_test(
     samples: sequence
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
+    n_resamples: int
+        If ``0`` (default), the p-value uses Watson's (1961) approximation. If ``>= 1``,
+        it is estimated from that many label randomizations (recommended for small
+        samples; Pewsey et al. 2013, §7.5.5).
+
+    seed: SeedLike
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
+
     verbose: bool
         Print formatted results.
 
     Returns
     -------
     WatsonU2TestResult
-        Dataclass containing the U² statistic and the associated p-value.
+        Dataclass containing the U² statistic, p-value, ``method``
+        ("asymptotic"|"randomization"), and ``n_resamples``.
 
     Reference
     ---------
@@ -1097,41 +1559,29 @@ def watson_u2_test(
     P639-640, Section 27.5, Example 27.10 of Zar, 2010
     """
 
-    from scipy.stats import rankdata
-
     normalized = _coerce_circular_samples(samples)
     if len(normalized) != 2:
         raise ValueError("`watson_u2_test` requires exactly two samples.")
 
-    def cumfreq(alpha_unique: np.ndarray, sample: _CircularSample) -> np.ndarray:
-        expanded = sample.expand()
-        if expanded.size == 0:
-            raise ValueError("Each sample must contain at least one observation.")
+    s0, s1 = normalized[0].expand(), normalized[1].expand()
+    U2 = _watson_u2_statistic(s0, s1)
 
-        idx = [np.where(np.isclose(alpha_unique, val, atol=1e-10))[0] for val in expanded]
-        idx = np.concatenate(idx)
-        idx = np.hstack([0, idx, alpha_unique.size])
-
-        freq_cumsum = rankdata(expanded, method="max") / sample.n
-        freq_cumsum = np.hstack([0, freq_cumsum])
-
-        tiles = np.diff(idx)
-        return np.repeat(freq_cumsum, tiles)
-
-    expanded_samples = [sample.expand() for sample in normalized]
-    a, t = np.unique(np.hstack(expanded_samples), return_counts=True)
-    cfs = [cumfreq(a, sample) for sample in normalized]
-    d = np.diff(cfs, axis=0)
-
-    N = sum(sample.n for sample in normalized)
-    U2 = (
-        np.prod([sample.n for sample in normalized])
-        / N**2
-        * (np.sum(t * d**2) - np.sum(t * d) ** 2 / N)
-    )
-    pval = 2 * np.exp(-19.74 * U2)
-    # Approximated P-value from Watson (1961)
-    # https://github.com/pierremegevand/watsons_u2/blob/master/watsons_U2_approx_p.m
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        pval = _randomization_pval(
+            lambda groups: _watson_u2_statistic(groups[0], groups[1]),
+            np.concatenate([s0, s1]),
+            [s0.size, s1.size],
+            U2,
+            n_resamples,
+            rng,
+        )
+        method = "randomization"
+    else:
+        # Approximated P-value from Watson (1961)
+        # https://github.com/pierremegevand/watsons_u2/blob/master/watsons_U2_approx_p.m
+        pval = float(2 * np.exp(-19.74 * U2))
+        method = "asymptotic"
 
     if verbose:
         print("Watson's U2 Test for two samples")
@@ -1140,13 +1590,136 @@ def watson_u2_test(
         print("HA: The two samples are not from populations with the same angle.")
         print("")
         print(f"Test Statistics: {U2:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WatsonU2TestResult(U2=float(U2), pval=float(pval))
+    return WatsonU2TestResult(U2=float(U2), pval=float(pval), method=method, n_resamples=n_resamples)
+
+
+def _kuiper_pkp(lam: float) -> float:
+    """Survival function of the modified two-sample Kuiper statistic.
+
+    ``Q(λ) = 2 Σ_{j>=1} (4 j² λ² − 1) e^{−2 j² λ²}`` (Stephens 1965; Numerical Recipes
+    ``probkp``), where ``λ`` is the sample-size-corrected statistic. Returns 1.0 for
+    small ``λ`` (the series does not converge below the meaningful range). Reproduces
+    the tabulated Kuiper critical values (λ=1.747 → 0.05, λ=2.001 → 0.01, …).
+    """
+    if lam <= 0:
+        return 1.0
+    a2 = -2.0 * lam * lam
+    total = 0.0
+    termbf = 0.0
+    for j in range(1, 101):
+        term = 2.0 * (4.0 * j * j * lam * lam - 1.0) * np.exp(a2 * j * j)
+        total += term
+        if abs(term) <= 1e-3 * termbf or abs(term) <= 1e-8 * total:
+            return float(min(max(total, 0.0), 1.0))
+        termbf = abs(term)
+    return 1.0
+
+
+def _kuiper_two_statistic(s0: np.ndarray, s1: np.ndarray) -> float:
+    """Two-sample Kuiper statistic ``V = D⁺ + D⁻`` from the empirical CDFs.
+
+    Exact (no resolution binning) and ties-aware via ``searchsorted`` on the pooled
+    points: ``V = max(F0 − F1) − min(F0 − F1)``. Because both CDFs reach 1 the
+    difference is periodic on the circle, so ``V`` is invariant to the choice of
+    origin — the defining property of Kuiper's statistic vs. Kolmogorov–Smirnov.
+    """
+    s0 = np.sort(np.asarray(s0, dtype=float))
+    s1 = np.sort(np.asarray(s1, dtype=float))
+    n0, n1 = s0.size, s1.size
+    a = np.unique(np.concatenate([s0, s1]))
+    d = np.searchsorted(s0, a, side="right") / n0 - np.searchsorted(s1, a, side="right") / n1
+    return float(d.max() - d.min())
+
+
+def kuiper_two_test(
+    samples: Sequence[Any],
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> KuiperTwoTestResult:
+    """Two-sample Kuiper test — the circular analogue of the two-sample
+    Kolmogorov–Smirnov test.
+
+    - H0: The two samples come from the same population (F₁ = F₂).
+    - H1: The two distributions differ — in mean direction, dispersion, or any
+      other respect.
+
+    Unlike Watson's U² (sensitive mainly to differences in location and dispersion),
+    the Kuiper statistic ``V = D⁺ + D⁻`` responds to any difference between the two
+    empirical CDFs and is invariant to the choice of origin on the circle.
+
+    Parameters
+    ----------
+    samples : sequence
+        Exactly two entries, each a `Circular` object or a one-dimensional
+        array-like of radian angles (grouped data are expanded by frequency).
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from the large-sample asymptotic
+        distribution of the modified statistic (Stephens 1965). If ``>= 1``, that
+        many label-randomization resamples are used instead (pool the two samples,
+        permute into the original sizes, recompute ``V``); recommended for small
+        samples.
+    seed : int or numpy.random.Generator, optional
+        Seed (or generator) for the randomization path. Default is 2046.
+    verbose : bool, optional
+        If ``True``, prints the test summary.
+
+    Returns
+    -------
+    KuiperTwoTestResult
+        Dataclass with ``V``, ``pval``, ``method`` and ``n_resamples``.
+
+    References
+    ----------
+    - Kuiper, N.H. (1960). Tests concerning random points on a circle.
+    - Stephens, M.A. (1965). The goodness-of-fit statistic Vₙ: distribution and
+      significance points. Biometrika 52.
+    - Batschelet (1981), p. 112.
+    """
+
+    normalized = _coerce_circular_samples(samples)
+    if len(normalized) != 2:
+        raise ValueError("`kuiper_two_test` requires exactly two samples.")
+
+    s0, s1 = normalized[0].expand(), normalized[1].expand()
+    n, m = s0.size, s1.size
+    V = _kuiper_two_statistic(s0, s1)
+
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        pval = _randomization_pval(
+            lambda groups: _kuiper_two_statistic(groups[0], groups[1]),
+            np.concatenate([s0, s1]),
+            [n, m],
+            V,
+            n_resamples,
+            rng,
+        )
+        method = "randomization"
+    else:
+        en = np.sqrt(n * m / (n + m))
+        pval = _kuiper_pkp((en + 0.155 + 0.24 / en) * V)
+        method = "asymptotic"
+
+    if verbose:
+        print("Two-sample Kuiper Test")
+        print("----------------------")
+        print("H0: The two samples are drawn from the same distribution.")
+        print("HA: The two distributions differ.")
+        print("")
+        print(f"Sample sizes: n1 = {n}, n2 = {m}")
+        print(f"Test statistic (V = D+ + D-): {V:.5f}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
+
+    return KuiperTwoTestResult(V=float(V), pval=float(pval), method=method, n_resamples=n_resamples)
 
 
 def wheeler_watson_test(
     samples: Sequence[Any],
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> WheelerWatsonTestResult:
     """The Wheeler and Watson Two/Multi-Sample Test.
@@ -1161,13 +1734,23 @@ def wheeler_watson_test(
     samples: sequence
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
 
+    n_resamples: int
+        If ``0`` (default), the p-value uses the χ² approximation. If ``>= 1``, it is
+        estimated from that many label randomizations of the uniform scores
+        (recommended when any group has fewer than ~10 observations;
+        Pewsey et al. 2013, §7.5.3).
+
+    seed: SeedLike
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
+
     verbose: bool
         Print formatted results.
 
     Returns
     -------
     WheelerWatsonTestResult
-        Dataclass containing the W statistic, degrees of freedom, and p-value.
+        Dataclass containing the W statistic, degrees of freedom, p-value, ``method``
+        ("asymptotic"|"randomization"), and ``n_resamples``.
 
     Reference
     ---------
@@ -1175,45 +1758,46 @@ def wheeler_watson_test(
 
     Note
     ----
-    The current implementation doesn't consider ties in the data.
-    Can be improved with P144, Pewsey et al. (2013)
+    Ties are handled via midranks (Pewsey et al. 2013, P144).
     """
-    from scipy.stats import chi2
-
     normalized = _coerce_circular_samples(samples)
-
-    def get_circrank(alpha: np.ndarray, sample: _CircularSample, N: int) -> np.ndarray:
-        expanded = sample.expand()
-        rank_of_direction = (
-            np.squeeze([np.where(np.isclose(alpha, value))[0] for value in expanded]) + 1
-        )
-        return 2 * np.pi / N * rank_of_direction
-
-    N = sum(sample.n for sample in normalized)
-    expanded_samples = [sample.expand() for sample in normalized]
-    a, _ = np.unique(np.hstack(expanded_samples), return_counts=True)
-
-    circ_ranks = [get_circrank(a, sample, N) for sample in normalized]
-
-    k = len(circ_ranks)
-
-    if k == 2:
-        C = np.sum(np.cos(circ_ranks[0]))
-        S = np.sum(np.sin(circ_ranks[0]))
-        W = 2 * (N - 1) * (C**2 + S**2) / np.prod([sample.n for sample in normalized])
-    elif k >= 3:
-        W = 0.0
-        for i in range(k):
-            circ_rank = circ_ranks[i]
-            C = np.sum(np.cos(circ_rank))
-            S = np.sum(np.sin(circ_rank))
-            W += (C**2 + S**2) / normalized[i].n
-        W *= 2.0
-    else:
+    k = len(normalized)
+    if k < 2:
         raise ValueError("At least two samples are required for the Wheeler-Watson test.")
 
+    expanded_samples = [sample.expand() for sample in normalized]
+    ns = [e.size for e in expanded_samples]
+    N = sum(ns)
+
+    # Uniform (circular-rank) scores for the pooled sample; midranks handle ties.
+    pooled = np.concatenate(expanded_samples)
+    beta = 2 * np.pi * rankdata(pooled, method="average") / N
+    scores = np.column_stack([np.cos(beta), np.sin(beta)])  # one [cos, sin] row per obs
+    split_at = np.cumsum(ns)[:-1]
+    score_groups = np.split(scores, split_at)
+
+    def _wg(groups: list[np.ndarray]) -> float:
+        # 2 * Σ_k (C_k² + S_k²) / n_k. For k=2 this is a positive multiple of the
+        # special statistic `W` below, so the randomization p-value is unaffected.
+        return 2.0 * sum(
+            (g[:, 0].sum() ** 2 + g[:, 1].sum() ** 2) / g.shape[0] for g in groups
+        )
+
+    if k == 2:
+        C = score_groups[0][:, 0].sum()
+        S = score_groups[0][:, 1].sum()
+        W = 2 * (N - 1) * (C**2 + S**2) / (ns[0] * ns[1])
+    else:
+        W = _wg(score_groups)
+
     df = 2 * (k - 1)
-    pval = float(chi2.sf(W, df=df))
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        pval = _randomization_pval(_wg, scores, ns, _wg(score_groups), n_resamples, rng)
+        method = "randomization"
+    else:
+        pval = float(chi2.sf(W, df=df))
+        method = "asymptotic"
 
     if verbose:
         print("The Wheeler and Watson Two/Multi-Sample Test")
@@ -1222,9 +1806,11 @@ def wheeler_watson_test(
         print("HA: All samples are not from populations with the same angle.")
         print("")
         print(f"Test Statistics: {W:.5f}")
-        print(f"P-value: {pval:.5f} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WheelerWatsonTestResult(W=float(W), pval=pval, df=df)
+    return WheelerWatsonTestResult(
+        W=float(W), pval=pval, df=df, method=method, n_resamples=n_resamples
+    )
 
 
 def wallraff_test(
@@ -1269,7 +1855,12 @@ def wallraff_test(
         angles = angle_arr
 
     ns = [sample.n for sample in normalized]
-    distances = [angular_distance(normalized[i].alpha, angles[i]) for i in range(len(normalized))]
+    # Expand by weights so each distance vector has length ``sample.n``; this
+    # keeps the Mann-Whitney rank split below correct for grouped data and is a
+    # no-op for ungrouped samples.
+    distances = [
+        angular_distance(sample.expand(), angles[i]) for i, sample in enumerate(normalized)
+    ]
 
     rs = rankdata(np.hstack(distances))
 
@@ -1297,10 +1888,12 @@ def wallraff_test(
 
 
 def circ_anova(
-    samples: list[np.ndarray],
+    samples: Sequence[Any],
     method: str = "F-test",
     kappa: Optional[float] = None,
     f_mod: bool = True,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> CircularAnovaResult:
     """
@@ -1311,8 +1904,9 @@ def circ_anova(
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        List of arrays, where each array contains circular data (angles in radians) for a group.
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     method : str, optional
         The test statistic to use. Options:
         - `"F-test"` (default): High-concentration F-test (Stephens 1972).
@@ -1321,13 +1915,21 @@ def circ_anova(
         The common concentration parameter (κ). If not specified, it is estimated using MLE.
     f_mod : bool, optional
         If `True`, applies a correction factor `(1 + 3/8κ)` to the F-statistic.
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from the parametric (F or χ²) distribution.
+        If ``>= 1``, it is estimated by permuting the pooled angles into the group sizes
+        and recomputing the selected statistic — distribution-free, and free of the
+        high-concentration assumption.
+    seed : SeedLike, optional
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If `True`, prints the test summary.
 
     Returns
     -------
     result : CircularAnovaResult
-        Dataclass containing the selected statistic, p-value, and supporting metrics.
+        Dataclass containing the selected statistic, p-value, supporting metrics, and
+        ``n_resamples`` (>0 when the p-value is from label randomization).
 
     References
     ----------
@@ -1337,6 +1939,7 @@ def circ_anova(
     """
 
     # Number of groups
+    samples = _coerce_sample_arrays(samples)
     k = len(samples)
     if k < 2:
         raise ValueError("At least two groups are required for ANOVA.")
@@ -1379,7 +1982,18 @@ def circ_anova(
         else:
             F_stat = MS_between / MS_within
 
-        p_value = 1 - f.cdf(F_stat, df_between, df_within)
+        if n_resamples >= 1:
+            def _f_stat(groups: list[np.ndarray]) -> float:
+                sumR = sum(circ_r(g) * len(g) for g in groups)
+                fval = ((sumR - R_all) / df_between) / ((N - sumR) / df_within)
+                return (1 + 3 / (8 * kappa_value)) * fval if f_mod else fval
+
+            rng = _init_rng(seed)
+            p_value = _randomization_pval(
+                _f_stat, all_samples, ns, float(F_stat), n_resamples, rng
+            )
+        else:
+            p_value = float(f.sf(F_stat, df_between, df_within))
 
         result = CircularAnovaResult(
             method="F-test",
@@ -1394,6 +2008,7 @@ def circ_anova(
             pval=float(p_value),
             SS=(float(SS_between), float(SS_within), float(SS_total)),
             MS=(float(MS_between), float(MS_within)),
+            n_resamples=n_resamples,
         )
 
     # **Likelihood Ratio Test (LRT)**
@@ -1404,7 +2019,18 @@ def circ_anova(
         chi_square_stat = term1 * term2
 
         df = k - 1
-        p_value = 1 - chi2.cdf(chi_square_stat, df)
+        if n_resamples >= 1:
+            def _lrt_stat(groups: list[np.ndarray]) -> float:
+                mus_p = np.array([circ_mean(g) for g in groups])
+                Rs_p = np.array([circ_r(g) * len(g) for g in groups])
+                return float(term1 * (2 * kappa_value * np.sum(Rs_p * (1 - np.cos(mus_p - mu_all)))))
+
+            rng = _init_rng(seed)
+            p_value = _randomization_pval(
+                _lrt_stat, all_samples, ns, float(chi_square_stat), n_resamples, rng
+            )
+        else:
+            p_value = float(chi2.sf(chi_square_stat, df))
 
         result = CircularAnovaResult(
             method="LRT",
@@ -1417,6 +2043,7 @@ def circ_anova(
             df=int(df),
             statistic=float(chi_square_stat),
             pval=float(p_value),
+            n_resamples=n_resamples,
         )
 
     else:
@@ -1444,9 +2071,11 @@ def circ_anova(
 
 def angular_randomisation_test(
     samples: Sequence[Any],
-    n_simulation: int = 1000,
+    n_resamples: int = 1000,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> AngularRandomisationTestResult:
     """The Angular Randomization Test (ART) for homogeneity.
 
@@ -1457,18 +2086,21 @@ def angular_randomisation_test(
     ----------
     samples: sequence
         A sequence of `Circular` objects or one-dimensional array-like radian samples.
-    n_simulation: int, optional
-        Number of permutations for the test. Defaults to 1000.
+    n_resamples: int, optional
+        Number of random permutations for the test. Defaults to 1000.
     seed: SeedLike
         Seed used to initialize the random number generator for the permutation test.
         Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples``.
 
     Returns
     -------
     AngularRandomisationTestResult
-        Dataclass containing the observed statistic and permutation p-value.
+        Dataclass containing the observed statistic, permutation p-value,
+        ``method="randomization"``, and ``n_resamples``.
 
     Reference
     ---------
@@ -1477,80 +2109,52 @@ def angular_randomisation_test(
     International Journal of Nonlinear Analysis and Applications, 13(1), 2703-2711.
     """
 
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=False)
+
     normalized = _coerce_circular_samples(samples)
 
     if len(normalized) != 2:
         raise ValueError("The Angular Randomization Test requires exactly two samples.")
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    if n_resamples <= 0:
+        raise ValueError("`n_resamples` must be a positive integer.")
 
     sample_arrays = [np.asarray(sample.alpha, dtype=float) for sample in normalized]
     if any(arr.size == 0 for arr in sample_arrays):
         raise ValueError("Each sample must contain at least one observation.")
 
-    def art_statistic(S1: np.ndarray, S2: np.ndarray) -> float:
-        """
-        Compute the Angular Randomisation Test (ART) statistic for two groups of circular data.
-        Following equations (3.1) and (4.2) from Jebur & Abushilah (2022) .
+    # ART statistic (Jebur & Abushilah 2022, eq. 3.1 & 4.2): the scaled sum of
+    # all pairwise geodesic distances between the two groups,
+    #     T = sqrt(n·m / (n + m)) · Σ_{i,j} d_geo(φ_i, ψ_j).
+    # Under the permutation null the two group sizes (hence the scale) are fixed,
+    # so precompute the full N×N geodesic distance matrix once and score every
+    # permutation as a vectorized indicator quadratic form aᵀ·D·b, instead of
+    # re-summing pairwise distances in a Python loop.
+    n1, n2 = sample_arrays[0].size, sample_arrays[1].size
+    N = n1 + n2
+    scaling_factor = np.sqrt(n1 * n2 / N)
 
-        Args:
-            S1 (np.ndarray): First group of angles in radians (φ values)
-            S2 (np.ndarray): Second group of angles in radians (ψ values)
+    combined = np.concatenate(sample_arrays)
+    D = np.asarray(circ_pairdist(combined, combined, metric="geodesic"), dtype=float)
 
-        Returns:
-            float: The ART test statistic
-        """
-        n = len(S1)
-        m = len(S2)
+    # Observed statistic: the first n1 pooled angles form group 1.
+    observed_stat = float(scaling_factor * D[:n1, n1:].sum())
 
-        # Compute the scaling factor ((n+m)/(nm))^(-1/2)
-        scaling_factor = np.sqrt(n * m / (n + m))
-
-        # Compute sum of all pairwise geodesic distances
-        total_distance = circ_pairdist(S1, S2, metric="geodesic", return_sum=True)
-
-        # Scale the total distance and return
-        return scaling_factor * total_distance
-
-    # 1. Compute observed test statistic T*₀
-    observed_stat = art_statistic(sample_arrays[0], sample_arrays[1])
-
-    # Initialize counter for permutations more extreme than observed
-    n_extreme = 1  # Start at 1 to count the observed statistic
-
-    # Combine samples for permutation
-    combined_data = np.concatenate(sample_arrays)
-    n1 = sample_arrays[0].size
-
-    # Perform permutation test
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
-
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
     rng = _init_rng(seed)
 
-    for _ in range(n_simulation):
-        # Randomly permute the combined data
-        permuted_data = rng.permutation(combined_data)
+    # Each permutation draws a random partition of the N pooled angles into a
+    # first group of size n1; `left`/`right` are the 0/1 group indicators.
+    order = np.argsort(rng.random((n_resamples, N)), axis=1)
+    left = np.zeros((n_resamples, N), dtype=float)
+    np.put_along_axis(left, order[:, :n1], 1.0, axis=1)
+    right = 1.0 - left
 
-        # Split into two groups of original sizes
-        perm_S1 = permuted_data[:n1]
-        perm_S2 = permuted_data[n1:]
+    perm_stats = scaling_factor * ((left @ D) * right).sum(axis=1)
 
-        # Compute test statistic for this permutation
-        perm_stat = art_statistic(perm_S1, perm_S2)
-
-        # Count if permuted statistic is >= observed (one-sided test)
-        if perm_stat >= observed_stat:
-            n_extreme += 1
-
-    # Compute p-value as in equation (4.3)
-    p_value = n_extreme / (n_simulation + 1)
+    # +1 in numerator and denominator counts the observed statistic itself
+    # (Jebur & Abushilah 2022, eq. 4.3).
+    n_extreme = 1 + int(np.count_nonzero(perm_stats >= observed_stat))
+    p_value = n_extreme / (n_resamples + 1)
 
     if verbose:
         print("Angular Randomization Test (ART) for Homogeneity")
@@ -1561,7 +2165,12 @@ def angular_randomisation_test(
         print(f"Observed Test Statistic: {observed_stat:.5f}")
         print(f"P-value: {p_value:.5f} {significance_code(p_value)}")
 
-    return AngularRandomisationTestResult(statistic=float(observed_stat), pval=float(p_value), n_simulation=n_simulation)
+    return AngularRandomisationTestResult(
+        statistic=float(observed_stat),
+        pval=float(p_value),
+        method="randomization",
+        n_resamples=n_resamples,
+    )
 
 
 #####################
@@ -1571,15 +2180,17 @@ def angular_randomisation_test(
 
 def kuiper_test(
     alpha: np.ndarray,
-    n_simulation: int = 9999,
+    n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> KuiperTestResult:
     """
     Kuiper's test for Circular Uniformity.
 
     - H0: The data in the population are distributed uniformly around the circle.
-    - H1: THe data in the population are not disbutrited uniformly around the circle.
+    - H1: The data in the population are not distributed uniformly around the circle.
 
     This method is for ungrouped data.
 
@@ -1589,22 +2200,24 @@ def kuiper_test(
     alpha: np.array
         Angles in radian.
 
-    n_simulation: int
-        Number of simulation for the p-value.
-        If n_simulation=1, the p-value is asymptotically approximated.
-        If n_simulation>1, the p-value is simulated.
-        Default is 9999.
+    n_resamples: int
+        If ``0``, the p-value is the asymptotic series approximation. If ``>= 1``
+        (default 9999), it is estimated from that many Monte-Carlo uniform samples.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for the simulation-based
+        Seed used to initialize the random number generator for the Monte-Carlo
         p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
 
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples`` (the old ``n_simulation=1`` meant asymptotic).
+
     Returns
     -------
     KuiperTestResult
-        Dataclass containing the Kuiper statistic, p-value, simulation mode, and count.
+        Dataclass containing the Kuiper statistic, p-value, ``method``
+        ("asymptotic"|"monte_carlo"), and ``n_resamples``.
 
     Note
     ----
@@ -1612,8 +2225,9 @@ def kuiper_test(
     https://rdrr.io/cran/Directional/src/R/kuiper.R
     """
 
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=True)
+    if n_resamples < 0:
+        raise ValueError("`n_resamples` must be a non-negative integer.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
@@ -1633,18 +2247,11 @@ def kuiper_test(
     n = alpha.size
     Vo, f = compute_V(alpha)
 
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if n_simulation == 1:
+    if n_resamples == 0:
         # asymptotic p-value
-        mode = "asymptotic"
+        method = "asymptotic"
         m = (np.arange(1, 50, dtype=float)) ** 2
         a1 = 4 * m * Vo**2
         a2 = np.exp(-2 * m * Vo**2)
@@ -1652,12 +2259,12 @@ def kuiper_test(
         b2 = 8 * Vo / (3 * f) * m * (a1 - 3) * a2
         pval = float(np.sum(b1 - b2))
     else:
-        mode = "simulation"
+        method = "monte_carlo"
         rng = _init_rng(seed)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_resamples))
         x = np.sort(uniforms, axis=0)
-        Vs = np.array([compute_V(x[:, i])[0] for i in range(n_simulation)])
-        pval = float((np.count_nonzero(Vs >= Vo) + 1) / (n_simulation + 1))
+        Vs = np.array([compute_V(x[:, i])[0] for i in range(n_resamples)])
+        pval = float((np.count_nonzero(Vs >= Vo) + 1) / (n_resamples + 1))
 
     if verbose:
         print("Kuiper's Test of Circular Uniformity")
@@ -1666,24 +2273,43 @@ def kuiper_test(
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
         print(f"Test Statistic: {Vo:.4f}")
-        print(f"P-value = {pval} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return KuiperTestResult(V=float(Vo), pval=float(pval), mode=mode, n_simulation=n_simulation)
+    return KuiperTestResult(V=float(Vo), pval=float(pval), method=method, n_resamples=n_resamples)
+
+
+def _watson_u2_unit(z: np.ndarray) -> float:
+    """Watson's U² for uniformity of PIT values ``z`` on [0,1) (sorted internally).
+
+    ``U² = Σ (z_(i) − (2i−1)/(2n))² − n (z̄ − ½)² + 1/(12n)``. With ``z`` the
+    probability-integral transform of the data through the hypothesised CDF
+    (``α/2π`` for the uniform null, or the fitted von Mises CDF for the von Mises
+    goodness-of-fit), this is the one-sample Watson statistic.
+    """
+    z = np.sort(np.asarray(z, dtype=float))
+    n = z.size
+    i = np.arange(1, n + 1, dtype=float)
+    return float(np.sum((z - (2 * i - 1) / (2 * n)) ** 2) - n * (z.mean() - 0.5) ** 2 + 1 / (12 * n))
 
 
 def watson_test(
     alpha: np.ndarray,
-    n_simulation: int = 9999,
+    dist: str = "uniform",
+    n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> WatsonTestResult:
     """
-    Watson's Goodness-of-Fit Testing, aka Watson one-sample U2 test.
+    Watson's one-sample U² goodness-of-fit test.
 
-    - H0: The sample data come from a population distributed uniformly around the circle.
-    - H1: The sample data do not come from a population distributed uniformly around the circle.
+    - H0: The sample is drawn from the null distribution (``dist``).
+    - H1: The sample is not drawn from the null distribution.
 
-    This method is for ungrouped data.
+    With ``dist="uniform"`` (default) this tests circular uniformity; with
+    ``dist="vonmises"`` it tests goodness-of-fit to a von Mises distribution
+    (parameters estimated from the data). This method is for ungrouped data.
 
     Parameters
     ----------
@@ -1691,21 +2317,32 @@ def watson_test(
     alpha: np.array
         Angles in radian.
 
-    n_simulation: int
-        Number of simulation for the p-value.
-        If n_simulation=1, the p-value is asymptotically approximated.
-        If n_simulation>1, the p-value is simulated.
+    dist: str
+        Null distribution to test against: ``"uniform"`` (default) or ``"vonmises"``.
+
+    n_resamples: int
+        For ``dist="uniform"``: ``0`` gives the asymptotic series p-value, ``>= 1``
+        (default 9999) a Monte-Carlo p-value from that many uniform samples. For
+        ``dist="vonmises"``: the number of parametric-bootstrap resamples (refitting
+        μ, κ on each); must be ``>= 1`` (there is no closed-form p-value).
 
     seed: SeedLike
-        Seed used to initialize the random number generator for the simulation-based
+        Seed used to initialize the random number generator for the Monte-Carlo
         p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
 
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples`` (the old ``n_simulation=1`` meant asymptotic).
+
     Returns
     -------
     WatsonTestResult
-        Dataclass containing the Watson U² statistic, p-value, and simulation details.
+        Dataclass containing the Watson U² statistic, p-value, ``method``
+        (``"asymptotic"`` or ``"monte_carlo"`` for the uniform null;
+        ``"parametric_bootstrap"`` for ``dist="vonmises"``), ``n_resamples``, the
+        ``dist`` tested, and — for the von Mises GoF — the fitted ``mu``/``kappa``
+        (``None`` for the uniform null).
 
     Note
     ----
@@ -1720,65 +2357,95 @@ def watson_test(
     kuiper_test(); rao_spacing_test()
     """
 
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    if dist not in ("uniform", "vonmises"):
+        raise ValueError("`dist` must be 'uniform' or 'vonmises'.")
+
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=True)
+    if n_resamples < 0:
+        raise ValueError("`n_resamples` must be a non-negative integer.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
         raise ValueError("`alpha` must contain at least one angle.")
-
-    def compute_U2(sample):
-        ordered = np.sort(sample)
-        n = ordered.size
-        indices = np.arange(1, n + 1, dtype=float)
-
-        u = ordered / (2 * np.pi)
-        U2 = np.sum(((u - (indices - 0.5) / n) - (np.sum(u) / n - 0.5)) ** 2) + 1 / (12 * n)
-        return float(U2)
-
     n = alpha.size
-    U2o = compute_U2(alpha)
 
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
-    if n_simulation == 1:
-        mode = "asymptotic"
-        m = np.arange(1, 51)
-        pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
+    if dist == "uniform":
+        # PIT under the uniform null is simply α / 2π.
+        U2o = _watson_u2_unit(alpha / (2 * np.pi))
+        if n_resamples == 0:
+            method = "asymptotic"
+            m = np.arange(1, 51)
+            pval = float(2 * sum((-1) ** (m - 1) * np.exp(-2 * m**2 * np.pi**2 * U2o)))
+        else:
+            method = "monte_carlo"
+            rng = _init_rng(seed)
+            uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_resamples))
+            U2s = np.array(
+                [_watson_u2_unit(uniforms[:, i] / (2 * np.pi)) for i in range(n_resamples)]
+            )
+            pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_resamples + 1))
+        mu = kappa = None
     else:
-        mode = "simulation"
+        # von Mises GoF: PIT through the ML-fitted von Mises CDF, then a parametric
+        # bootstrap (refit μ, κ on each simulated sample) — the null distribution of
+        # U² depends on the unknown κ, so the parameters must be re-estimated each time.
+        if n_resamples < 1:
+            raise ValueError(
+                "von Mises goodness-of-fit has no closed-form p-value; use n_resamples >= 1."
+            )
+        mu = float(circ_mean(alpha))
+        kappa = float(circ_kappa(circ_r(alpha)))
+        U2o = _watson_u2_unit(np.asarray(vonmises(mu=mu, kappa=kappa).cdf(alpha)))
         rng = _init_rng(seed)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n, n_simulation))
-        x = np.sort(uniforms, axis=0)
-        U2s = np.array([compute_U2(x[:, i]) for i in range(n_simulation)])
-        pval = float((np.count_nonzero(U2s >= U2o) + 1) / (n_simulation + 1))
+        null = vonmises(mu=mu, kappa=kappa)
+        count = 1  # the observed statistic counts itself
+        for _ in range(n_resamples):
+            sim = np.asarray(null.rvs(size=n, random_state=rng))
+            mb = float(circ_mean(sim))
+            kb = float(circ_kappa(circ_r(sim)))
+            if _watson_u2_unit(np.asarray(vonmises(mu=mb, kappa=kb).cdf(sim))) >= U2o:
+                count += 1
+        pval = float(count / (n_resamples + 1))
+        method = "parametric_bootstrap"
 
     if verbose:
-        print("Watson's One-Sample U2 Test of Circular Uniformity")
-        print("--------------------------------------------------")
-        print("H0: The sample is drawn from a circularly uniform distribution.")
-        print("HA: The sample is not drawn from a circularly uniform distribution.")
+        if dist == "uniform":
+            print("Watson's One-Sample U2 Test of Circular Uniformity")
+            print("--------------------------------------------------")
+            print("H0: The sample is drawn from a circularly uniform distribution.")
+            print("HA: The sample is not drawn from a circularly uniform distribution.")
+        else:
+            print("Watson's U2 Goodness-of-Fit Test for the von Mises Distribution")
+            print("--------------------------------------------------------------")
+            print("H0: The sample is drawn from a von Mises distribution.")
+            print("HA: The sample is not drawn from a von Mises distribution.")
+            print(f"Fitted parameters: mu = {mu:.4f}, kappa = {kappa:.4f}")
         print("")
         print(f"Test Statistic: {U2o:.4f}")
-        print(f"P-value = {pval} {significance_code(pval)}")
+        print(f"P-value ({method}): {pval:.5f} {significance_code(pval)}")
 
-    return WatsonTestResult(U2=float(U2o), pval=float(pval), mode=mode, n_simulation=n_simulation)
+    return WatsonTestResult(
+        U2=float(U2o),
+        pval=float(pval),
+        method=method,
+        n_resamples=n_resamples,
+        dist=dist,
+        mu=mu,
+        kappa=kappa,
+    )
 
 
 def rao_spacing_test(
     alpha: np.ndarray,
     w: Union[np.ndarray, None] = None,
     kappa: float = 1000.0,
-    n_simulation: int = 9999,
+    n_resamples: int = 9999,
     seed: SeedLike = 2046,
     verbose: bool = False,
+    *,
+    n_simulation: Optional[int] = None,
 ) -> RaoSpacingTestResult:
     """Simulation based Rao's spacing test.
 
@@ -1798,19 +2465,24 @@ def rao_spacing_test(
     kappa: float
         Concentration parameter. Only use for grouped data.
 
-    n_simulation: int
-        Number of simulations.
+    n_resamples: int
+        Number of Monte-Carlo samples for the p-value (default 9999). Must be >= 1;
+        this test has no analytic fallback.
 
     seed: SeedLike
-        Seed used to initialize the random number generator for the simulation-based
+        Seed used to initialize the random number generator for the Monte-Carlo
         p-value. Accepts integers, sequences of integers, ``numpy.random.Generator``,
         ``numpy.random.BitGenerator``, ``numpy.random.SeedSequence`` or ``None``.
         Defaults to 2046.
 
+    n_simulation: int or None
+        Deprecated alias for ``n_resamples``.
+
     Returns
     -------
     RaoSpacingTestResult
-        Dataclass containing the Rao spacing statistic (degrees), p-value, method, and simulation count.
+        Dataclass containing the Rao spacing statistic (degrees), p-value,
+        ``method="monte_carlo"``, ``data_kind`` ("grouped"|"ungrouped"), and ``n_resamples``.
 
     Reference
     ---------
@@ -1818,8 +2490,9 @@ def rao_spacing_test(
     https://movementecologyjournal.biomedcentral.com/articles/10.1186/s40462-019-0160-x
     """
 
-    if n_simulation <= 0:
-        raise ValueError("`n_simulation` must be a positive integer.")
+    n_resamples = _resolve_n_resamples(n_resamples, n_simulation=n_simulation, has_asymptotic=False)
+    if n_resamples <= 0:
+        raise ValueError("`n_resamples` must be a positive integer.")
 
     alpha = np.asarray(alpha, dtype=float)
     if alpha.size == 0:
@@ -1845,37 +2518,30 @@ def rao_spacing_test(
             raise ValueError("Sum of weights must be positive.")
         m = alpha.size
         expanded_alpha = np.repeat(alpha, w)
-        mode = "grouped"
+        data_kind = "grouped"
     else:
         expanded_alpha = alpha
         n = expanded_alpha.size
-        mode = "ungrouped"
+        data_kind = "ungrouped"
 
-    if seed is True and verbose is False:
-        warnings.warn(
-            "Passing `verbose` as a positional argument is deprecated; use keyword arguments.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        verbose = bool(seed)
-        seed = 2046
+    seed, verbose = _resolve_legacy_verbose(seed, verbose)
 
     rng = _init_rng(seed)
 
     Uo = compute_U(expanded_alpha)
     if w is not None:  # noncontinuous / grouped data
-        vm_dist = vonmises(kappa=kappa)
-        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n_simulation, n))
+        vm_dist = vonmises(mu=0.0, kappa=kappa)
+        uniforms = rng.uniform(low=0.0, high=2 * np.pi, size=(n_resamples, n))
         snapped = np.floor(uniforms * m / (2 * np.pi)) * (2 * np.pi / m)
-        noise = vm_dist.rvs(size=(n_simulation, n), random_state=rng)
+        noise = vm_dist.rvs(size=(n_resamples, n), random_state=rng)
         samples = angmod(snapped + noise)
         Us = np.array([compute_U(sample) for sample in samples])
     else:
-        samples = rng.uniform(low=0.0, high=2 * np.pi, size=(n_simulation, n))
+        samples = rng.uniform(low=0.0, high=2 * np.pi, size=(n_resamples, n))
         Us = np.array([compute_U(sample) for sample in samples])
 
     counter = np.count_nonzero(Us >= Uo)
-    pval = float((counter + 1) / (n_simulation + 1))
+    pval = float((counter + 1) / (n_resamples + 1))
 
     if verbose:
         print("Rao's Spacing Test of Circular Uniformity")
@@ -1883,18 +2549,24 @@ def rao_spacing_test(
         print("H0: The sample is drawn from a circularly uniform distribution.")
         print("HA: The sample is not drawn from a circularly uniform distribution.")
         print("")
-        print(f"Test Statistic: {Uo:.4f}")
-        print(f"P-value = {pval}\n")
+        print(f"Test Statistic: {np.rad2deg(Uo):.4f}°")
+        print(f"P-value: {pval:.5f} {significance_code(pval)}")
 
     return RaoSpacingTestResult(
         statistic=float(np.rad2deg(Uo)),
         pval=float(pval),
-        mode=mode,
-        n_simulation=n_simulation,
+        method="monte_carlo",
+        data_kind=data_kind,
+        n_resamples=n_resamples,
     )
 
 
-def circ_range_test(alpha: np.ndarray, verbose: bool = False) -> CircularRangeTestResult:
+def circ_range_test(
+    alpha: np.ndarray,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> CircularRangeTestResult:
     """
     Perform the Circular Range Test for uniformity.
 
@@ -1905,13 +2577,21 @@ def circ_range_test(alpha: np.ndarray, verbose: bool = False) -> CircularRangeTe
     ----------
     alpha : np.ndarray
         Angles in radians. Values must already be wrapped into ``[-2π, 2π]``.
+    n_resamples : int, optional
+        If ``0`` (default), the p-value is the closed-form series. If ``>= 1``, it
+        is estimated from that many Monte-Carlo uniform samples (a cross-check that
+        floors at ``1/(n_resamples+1)`` in the deep tail).
+    seed : SeedLike, optional
+        Seed (or generator) for the Monte-Carlo p-value. Default 2046.
     verbose : bool, optional
         If ``True``, prints test details and results.
 
     Returns
     -------
     CircularRangeTestResult
-        Dataclass containing the range statistic and corresponding p-value.
+        Dataclass containing the range statistic, the corresponding p-value,
+        ``method`` (``"exact"`` for the closed-form series, or ``"monte_carlo"``
+        when ``n_resamples >= 1``), and ``n_resamples``.
 
     Reference
     ---------
@@ -1938,8 +2618,19 @@ def circ_range_test(alpha: np.ndarray, verbose: bool = False) -> CircularRangeTe
         * (1 - index * (1 - range_stat / (2 * np.pi))) ** (n - 1)
     )
     p_value = float(np.sum(sequence))
+    method = "exact"
 
-    result = CircularRangeTestResult(range_stat=float(range_stat), pval=float(p_value))
+    if n_resamples >= 1:
+        # Smaller range = more clustered = more extreme, so negate for the upper-tail helper.
+        rng = _init_rng(seed)
+        p_value = _mc_uniform_pval(
+            lambda s: -circ_range(s), n, -float(range_stat), n_resamples, rng
+        )
+        method = "monte_carlo"
+
+    result = CircularRangeTestResult(
+        range_stat=float(range_stat), pval=float(p_value), method=method, n_resamples=n_resamples
+    )
 
     if verbose:
         range_deg = float(np.rad2deg(result.range_stat))
@@ -2027,13 +2718,12 @@ def binomial_test(
 def concentration_test(
     alpha1: np.ndarray,
     alpha2: np.ndarray,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> ConcentrationTestResult:
     """
-    Parametric two-sample test for concentration equality in circular data.
-
-    This test determines whether two von Mises-type samples have different
-    concentration parameters (i.e., different dispersions).
+    Two-sample test for concentration (dispersion) equality in circular data.
 
     - **H0**: The two samples have the same concentration parameter.
     - **H1**: The two samples have different concentration parameters.
@@ -2044,23 +2734,31 @@ def concentration_test(
         First sample of circular data (radians).
     alpha2 : np.ndarray
         Second sample of circular data (radians).
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from Batschelet's parametric F-test
+        (ported from MATLAB CircStat ``circ_ktest``; assumes von Mises samples with
+        combined r̄ > 0.7). If ``>= 1``, a distribution-free permutation p-value is
+        used instead: the deviations of each observation from its group mean are
+        pooled and randomly reassigned to the two groups, and the two-sided ratio
+        ``max(F, 1/F)`` is recomputed on each permutation (Pewsey et al. 2013, §7.4.3).
+        Recommended when the von Mises / high-concentration assumptions fail.
+    seed : SeedLike, optional
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If ``True``, prints test details and results.
 
     Returns
     -------
     ConcentrationTestResult
-        Dataclass with the F statistic, p-value, and associated degrees of freedom.
-
-    Notes
-    -----
-    - This test assumes that both samples follow von Mises distributions.
-    - The **resultant vector length** of the combined samples should be greater than 0.7 for validity.
-    - Based on Batschelet (1980), Section 6.9, p. 122-124.
+        Dataclass with the F statistic, p-value, degrees of freedom, ``method``
+        ("asymptotic"|"randomization"), and ``n_resamples``.
 
     References
     ----------
-    Batschelet, E. (1980). Circular Statistics in Biology. Academic Press.
+    Mardia, K. V. (1972). Statistics of Directional Data, eq. (6.3.39) & Example 6.15
+        (high-concentration F-test; degrees of freedom n1-1, n2-1).
+    Batschelet, E. (1980). Circular Statistics in Biology, Section 6.9, p. 122-124.
+    Pewsey, Neuhäuser & Ruxton (2013), §7.4.3 (randomization version).
     """
     # Ensure inputs are numpy arrays
     alpha1 = np.asarray(alpha1, dtype=float)
@@ -2075,11 +2773,10 @@ def concentration_test(
     R1 = n1 * circ_r(alpha1)
     R2 = n2 * circ_r(alpha2)
 
-    # Compute mean resultant length of combined samples
+    # The parametric F-test assumes a high combined concentration; the randomization
+    # version is precisely the remedy when that fails, so only warn for the F-test.
     rbar = (R1 + R2) / (n1 + n2)
-
-    # Warn if rbar is too low
-    if rbar < 0.7:
+    if n_resamples < 1 and rbar < 0.7:
         warnings.warn(
             "The resultant vector length should exceed 0.7 for the concentration test to be reliable.",
             RuntimeWarning,
@@ -2095,17 +2792,45 @@ def concentration_test(
         raise ValueError("Degenerate data: cannot compute concentration test statistic.")
     f_stat = numerator / denominator
 
-    # Compute p-value (adjusting for F-stat symmetry)
-    if f_stat >= 1:
-        pval = 2 * f.sf(f_stat, df1, df2)
+    if n_resamples >= 1:
+        def _kratio(groups: list[np.ndarray]) -> float:
+            g0, g1 = groups
+            num = (n2 - 1) * (n1 - n1 * circ_r(g0))
+            den = (n1 - 1) * (n2 - n2 * circ_r(g1))
+            if den <= 0 or num <= 0:
+                return np.inf  # degenerate split -> treat as extreme
+            ratio = num / den
+            return max(ratio, 1.0 / ratio)
+
+        # Pool the within-group deviations (location removed) and permute them.
+        dev = np.concatenate([
+            angmod(alpha1 - circ_mean(alpha1), bounds=[-np.pi, np.pi]),
+            angmod(alpha2 - circ_mean(alpha2), bounds=[-np.pi, np.pi]),
+        ])
+        rng = _init_rng(seed)
+        pval = _randomization_pval(
+            _kratio, dev, [n1, n2], _kratio([dev[:n1], dev[n1:]]), n_resamples, rng
+        )
+        method = "randomization"
     else:
-        pval = 2 * f.sf(1 / f_stat, df2, df1)
+        # Two-sided parametric p-value (adjusting for F-stat symmetry). Statistic and
+        # degrees of freedom follow Mardia (1972), eq. (6.3.39) & Example 6.15:
+        #   F = [(n1-R1)/(n1-1)] / [(n2-R2)/(n2-1)] ~ F_{n1-1, n2-1}.
+        # NB: MATLAB CircStat's `circ_ktest` uses df (n1, n2) here, which is a bug —
+        # do not "fix" the (n-1) df below to match it.
+        if f_stat >= 1:
+            pval = float(min(2 * f.sf(f_stat, df1, df2), 1.0))
+        else:
+            pval = float(min(2 * f.sf(1 / f_stat, df2, df1), 1.0))
+        method = "asymptotic"
 
     result = ConcentrationTestResult(
         f_stat=float(f_stat),
-        pval=float(min(pval, 1.0)),
+        pval=float(pval),
         df1=int(df1),
         df2=int(df2),
+        method=method,
+        n_resamples=n_resamples if method == "randomization" else 0,
     )
 
     if verbose:
@@ -2124,59 +2849,21 @@ def concentration_test(
     return result
 
 
-def rao_homogeneity_test(
-    samples: list,
-    alpha: float = 0.05,
-    verbose: bool = False,
-) -> RaoHomogeneityTestResult:
+def _rao_homogeneity_stats(groups: Sequence[np.ndarray]) -> tuple[float, float]:
+    """Rao's two homogeneity statistics ``(H_polar, H_disp)`` for a list of groups.
+
+    ``H_polar`` tests equality of mean directions, ``H_disp`` equality of dispersions
+    (Rao 1967; Jammalamadaka & SenGupta 2001, §7.6.1). Note: both are functions of the
+    per-group cos/sin means, so they are frame-dependent (not rotation invariant).
     """
-    Perform Rao's test for homogeneity on multiple samples of angular data.
+    n = np.array([len(s) for s in groups])
+    cos_means = np.array([np.mean(np.cos(s)) for s in groups])
+    sin_means = np.array([np.mean(np.sin(s)) for s in groups])
+    # Sample (co)variances with ddof=1 to match R's var()/cov().
+    var_cos = np.array([np.var(np.cos(s), ddof=1) for s in groups])
+    var_sin = np.array([np.var(np.sin(s), ddof=1) for s in groups])
+    cov_cos_sin = np.array([np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in groups])
 
-    - **Test 1**: Equality of Mean Directions (Polar Vectors)
-    - **Test 2**: Equality of Dispersions
-
-    Parameters
-    ----------
-    samples : list of np.ndarray
-        A list where each entry is a vector of angular values (in radians).
-    alpha : float, optional
-        Significance level for the hypothesis test. Default is 0.05.
-    verbose : bool, optional
-        If ``True``, prints test details and decisions.
-
-    Returns
-    -------
-    RaoHomogeneityTestResult
-        Dataclass containing test statistics, p-values, and rejection flags.
-
-    References
-    ----------
-    Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
-    Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
-    """
-    if not isinstance(samples, list) or not all(
-        isinstance(s, np.ndarray) for s in samples
-    ):
-        raise ValueError("Input must be a list of numpy arrays.")
-
-    k = len(samples)  # Number of samples
-    n = np.array([len(s) for s in samples])  # Sample sizes
-
-    # Compute mean cosine and sine values for each sample
-    cos_means = np.array([np.mean(np.cos(s)) for s in samples])
-    sin_means = np.array([np.mean(np.sin(s)) for s in samples])
-
-    # Compute variances
-    # Compute sample variances (use ddof=1 to match R)
-    var_cos = np.array([np.var(np.cos(s), ddof=1) for s in samples])
-    var_sin = np.array([np.var(np.sin(s), ddof=1) for s in samples])
-
-    # Compute covariance (use ddof=1 to match R's var(x, y))
-    cov_cos_sin = np.array(
-        [np.cov(np.cos(s), np.sin(s), ddof=1)[0, 1] for s in samples]
-    )
-
-    # Compute test statistics
     s_polar = (
         1
         / n
@@ -2202,19 +2889,90 @@ def rao_homogeneity_test(
         )
     )
     H_disp = np.sum(U**2 / s_disp) - (np.sum(U / s_disp) ** 2) / np.sum(1 / s_disp)
+    return float(H_polar), float(H_disp)
 
-    # Compute p-values
+
+def rao_homogeneity_test(
+    samples: Sequence[Any],
+    alpha: float = 0.05,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> RaoHomogeneityTestResult:
+    """
+    Perform Rao's test for homogeneity on multiple samples of angular data.
+
+    - **Test 1**: Equality of Mean Directions (Polar Vectors)
+    - **Test 2**: Equality of Dispersions
+
+    Parameters
+    ----------
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
+    alpha : float, optional
+        Significance level for the hypothesis test. Default is 0.05.
+    n_resamples : int, optional
+        If ``0`` (default), p-values come from Rao's large-sample χ² approximation.
+        If ``>= 1``, that many randomization (permutation) resamples are used instead:
+        under the homogeneity null the pooled angles are exchangeable, so they are
+        permuted into the original group sizes and both statistics recomputed. This
+        frees both tests from the large-sample assumption (Rao 1967 is explicitly a
+        *large-sample* test); the trade-off is that the permutation reads the two
+        statistics under a single joint "identically distributed" null.
+    seed : int or numpy.random.Generator, optional
+        Seed (or generator) for the randomization path. Default is 2046.
+    verbose : bool, optional
+        If ``True``, prints test details and decisions.
+
+    Returns
+    -------
+    RaoHomogeneityTestResult
+        Dataclass containing test statistics, p-values, and rejection flags, plus
+        ``method`` (``"asymptotic"`` for Rao's large-sample χ², or
+        ``"randomization"`` when ``n_resamples >= 1``) and ``n_resamples``.
+
+    References
+    ----------
+    Jammalamadaka, S. Rao and SenGupta, A. (2001). Topics in Circular Statistics, Section 7.6.1.
+    Rao, J.S. (1967). Large sample tests for the homogeneity of angular data, Sankhya, Ser, B., 28.
+    """
+    samples = _coerce_sample_arrays(samples)
+
+    k = len(samples)  # Number of samples
+    if k < 2:
+        raise ValueError("At least two groups are required for the test.")
+    n = np.array([len(s) for s in samples])  # Sample sizes
+    if np.any(n < 2):
+        raise ValueError("Each group must contain at least two observations.")
+
+    H_polar, H_disp = _rao_homogeneity_stats(samples)
+
     df = k - 1  # Degrees of freedom
-    pval_polar = 1 - chi2.cdf(H_polar, df)
-    pval_disp = 1 - chi2.cdf(H_disp, df)
-
-    # Determine critical values
-    crit_polar = chi2.ppf(1 - alpha, df)
-    crit_disp = chi2.ppf(1 - alpha, df)
+    if n_resamples >= 1:
+        # Under the homogeneity null (groups identically distributed) the pooled angles
+        # are exchangeable; permute them into the group sizes and recompute both stats.
+        pooled = np.concatenate(samples)
+        split_at = np.cumsum(n)[:-1]
+        rng = _init_rng(seed)
+        cnt_p = cnt_d = 1  # count the observed statistics themselves
+        for _ in range(n_resamples):
+            hp, hd = _rao_homogeneity_stats(np.split(rng.permutation(pooled), split_at))
+            if hp >= H_polar:
+                cnt_p += 1
+            if hd >= H_disp:
+                cnt_d += 1
+        pval_polar = cnt_p / (n_resamples + 1)
+        pval_disp = cnt_d / (n_resamples + 1)
+        method = "randomization"
+    else:
+        pval_polar = float(chi2.sf(H_polar, df))
+        pval_disp = float(chi2.sf(H_disp, df))
+        method = "asymptotic"
 
     # Test decisions
-    reject_polar = H_polar > crit_polar
-    reject_disp = H_disp > crit_disp
+    reject_polar = pval_polar < alpha
+    reject_disp = pval_disp < alpha
 
     result = RaoHomogeneityTestResult(
         H_polar=float(H_polar),
@@ -2223,6 +2981,8 @@ def rao_homogeneity_test(
         H_disp=float(H_disp),
         pval_disp=float(pval_disp),
         reject_disp=bool(reject_disp),
+        method=method,
+        n_resamples=n_resamples if method == "randomization" else 0,
     )
 
     if verbose:
@@ -2230,6 +2990,8 @@ def rao_homogeneity_test(
         print("----------------------")
         print("Test 1 H0: All groups share the same mean direction.")
         print("Test 2 H0: All groups share the same dispersion.")
+        print(f"P-value method: {result.method}", end="")
+        print(f" ({result.n_resamples} resamples)" if result.method == "randomization" else "")
         print("")
         print(
             f"Mean directions: H = {result.H_polar:.5f}, "
@@ -2245,21 +3007,33 @@ def rao_homogeneity_test(
     return result
 
 
-def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
+def change_point_test(
+    alpha: np.ndarray,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
+    verbose: bool = False,
+) -> ChangePointTestResult:
     """
     Perform a change point test for mean direction, concentration, or both.
 
     Parameters
     ----------
     alpha : np.ndarray
-        Vector of angular measurements in radians.
+        Vector of angular measurements in radians (in sequence order).
+    n_resamples : int, optional
+        If ``>= 1``, permutation p-values for the rmax and tmax statistics are
+        estimated from that many random reorderings of the sequence (exchangeable
+        under H0 of no change point). Default ``0`` → no p-values.
+    seed : SeedLike, optional
+        Seed for the permutation RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If ``True``, prints test details and summary statistics.
 
     Returns
     -------
     ChangePointTestResult
-        Dataclass containing the change point statistics.
+        Dataclass containing the change-point statistics and (when requested) the
+        permutation p-values ``pval_r`` (mean direction) and ``pval_t`` (concentration).
 
     References
     ----------
@@ -2291,48 +3065,63 @@ def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
         """Estimate mean resultant length (rho)."""
         return np.linalg.norm(np.sum(np.exp(1j * alpha))) / len(alpha)
 
+    alpha = np.asarray(alpha, dtype=float)
     n = len(alpha)
     if n < 4:
         raise ValueError("Sample size must be at least 4 for change point test.")
 
-    rho = est_rho(alpha)
+    def _stats(a: np.ndarray) -> tuple:
+        rho = est_rho(a)
+        R1, R2, V = np.zeros(n), np.zeros(n), np.zeros(n)
+        for k in range(1, n):
+            R1[k - 1] = est_rho(a[:k]) * k
+            R2[k - 1] = est_rho(a[k:]) * (n - k)
+            if 2 <= k <= (n - 2):
+                V[k - 1] = (k / n) * phi(R1[k - 1] / k) + ((n - k) / n) * phi(R2[k - 1] / (n - k))
+        R1[-1] = rho * n
+        R2[-1] = 0
+        R_diff = R1 + R2 - rho * n
+        # ``n >= 4`` is guaranteed by the guard above.
+        Vt = V[1 : n - 2]
+        return (
+            float(rho),
+            float(np.max(R_diff)),
+            int(np.argmax(R_diff)),
+            float(np.mean(R_diff)),
+            float(np.max(Vt)),
+            int(np.argmax(Vt)) + 1,
+            float(np.mean(Vt)),
+        )
 
-    R1, R2, V = np.zeros(n), np.zeros(n), np.zeros(n)
+    rho, rmax, k_r, rave, tmax, k_t, tave = _stats(alpha)
 
-    for k in range(1, n):
-        R1[k - 1] = est_rho(alpha[:k]) * k
-        R2[k - 1] = est_rho(alpha[k:]) * (n - k)
-
-        if 2 <= k <= (n - 2):
-            V[k - 1] = (k / n) * phi(R1[k - 1] / k) + ((n - k) / n) * phi(
-                R2[k - 1] / (n - k)
-            )
-
-    R1[-1] = rho * n
-    R2[-1] = 0
-
-    R_diff = R1 + R2 - rho * n
-    rmax = np.max(R_diff)
-    k_r = np.argmax(R_diff)
-    rave = np.mean(R_diff)
-
-    if n > 3:
-        V = V[1 : n - 2]
-        tmax = np.max(V)
-        k_t = np.argmax(V) + 1
-        tave = np.mean(V)
-    else:
-        raise ValueError("Sample size must be at least 4.")
+    pval_r = pval_t = None
+    if n_resamples >= 1:
+        # Under H0 (no change point) the sequence is exchangeable; permute the order
+        # and count reorderings whose max statistic is at least the observed one.
+        rng = _init_rng(seed)
+        cnt_r = cnt_t = 1  # count the observed statistic itself
+        for _ in range(n_resamples):
+            perm = _stats(rng.permutation(alpha))
+            if perm[1] >= rmax:
+                cnt_r += 1
+            if perm[4] >= tmax:
+                cnt_t += 1
+        pval_r = cnt_r / (n_resamples + 1)
+        pval_t = cnt_t / (n_resamples + 1)
 
     result = ChangePointTestResult(
         n=int(n),
-        rho=float(rho),
-        rmax=float(rmax),
-        k_r=int(k_r),
-        rave=float(rave),
-        tmax=float(tmax),
-        k_t=int(k_t),
-        tave=float(tave),
+        rho=rho,
+        rmax=rmax,
+        k_r=k_r,
+        rave=rave,
+        tmax=tmax,
+        k_t=k_t,
+        tave=tave,
+        pval_r=pval_r,
+        pval_t=pval_t,
+        n_resamples=n_resamples,
     )
 
     if verbose:
@@ -2343,9 +3132,11 @@ def change_point_test(alpha, verbose: bool = False) -> ChangePointTestResult:
         print("")
         print(f"Sample size: {result.n}")
         print(f"Overall resultant length (ρ): {result.rho:.5f}")
-        print(f"Max R statistic: {result.rmax:.5f} at k = {result.k_r}")
+        r_p = f" (p = {result.pval_r:.4f})" if result.pval_r is not None else ""
+        t_p = f" (p = {result.pval_t:.4f})" if result.pval_t is not None else ""
+        print(f"Max R statistic: {result.rmax:.5f} at k = {result.k_r}{r_p}")
         print(f"Average R statistic: {result.rave:.5f}")
-        print(f"Max T statistic: {result.tmax:.5f} at k = {result.k_t}")
+        print(f"Max T statistic: {result.tmax:.5f} at k = {result.k_t}{t_p}")
         print(f"Average T statistic: {result.tave:.5f}")
 
     return result
@@ -2376,6 +3167,13 @@ def harrison_kanji_test(
         Names for the two factors. Defaults to ``["A", "B"]``.
     verbose : bool, optional
         If ``True``, prints test details and results.
+
+    Returns
+    -------
+    HarrisonKanjiTestResult
+        Dataclass containing `p_values` — the (factor A, factor B, interaction)
+        p-value triple, where the interaction entry is NaN when ``inter=False`` —
+        and `anova_table`, the assembled ANOVA table as a pandas DataFrame.
     """
 
     if fn is None:
@@ -2445,7 +3243,7 @@ def harrison_kanji_test(
             ms_i = eff_i / df_i
 
             FI = ms_i / ms_r
-            pI = 1 - f.cdf(FI, df_i, df_r)  # `f.cdf` is now unambiguous
+            pI = f.sf(FI, df_i, df_r)
         else:
             eff_r = n - sum(qr**2.0 / qn) - sum(pr**2.0 / pn) + tr**2 / n
             df_r = (p - 1) * (q - 1)
@@ -2455,22 +3253,22 @@ def harrison_kanji_test(
             beta = 1
 
         F1 = beta * ms_1 / ms_r
-        p1 = 1 - f.cdf(F1, df_1, df_r)
+        p1 = f.sf(F1, df_1, df_r)
 
         F2 = beta * ms_2 / ms_r
-        p2 = 1 - f.cdf(F2, df_2, df_r)
+        p2 = f.sf(F2, df_2, df_r)
 
     else:  # Small kappa approximation
         rr = iv(1, kk) / iv(0, kk)
-        kappa_factor = 2 / (1 - rr**2)  # Renamed `f` to `kappa_factor`
+        kappa_factor = 2 / (1 - rr**2)
 
         chi1 = kappa_factor * (sum(pr**2.0 / pn) - tr**2 / n)
         df_1 = 2 * (p - 1)
-        p1 = 1 - chi2.cdf(chi1, df=df_1)
+        p1 = chi2.sf(chi1, df=df_1)
 
         chi2_val = kappa_factor * (sum(qr**2.0 / qn) - tr**2 / n)
         df_2 = 2 * (q - 1)
-        p2 = 1 - chi2.cdf(chi2_val, df=df_2)
+        p2 = chi2.sf(chi2_val, df=df_2)
 
         chiI = kappa_factor * (
             np.asarray((cr**2.0 / cn).values).sum()
@@ -2533,7 +3331,7 @@ def harrison_kanji_test(
     return result
 
 
-def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualKappaTestResult:
+def equal_kappa_test(samples: Sequence[Any], verbose: bool = False) -> EqualKappaTestResult:
     """
     Test for Homogeneity of Concentration Parameters (κ) in Circular Data.
 
@@ -2542,8 +3340,9 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        List of circular data arrays (angles in radians) for different groups.
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     verbose : bool, optional
         If `True`, prints the test summary.
 
@@ -2567,13 +3366,10 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
     """
 
     # Number of groups
-    k = len(samples)
+    arrays = _coerce_sample_arrays(samples)
+    k = len(arrays)
     if k < 2:
         raise ValueError("At least two groups are required for the test.")
-
-    arrays = [np.asarray(group, dtype=float) for group in samples]
-    if any(arr.size == 0 for arr in arrays):
-        raise ValueError("Each group must contain at least one observation.")
 
     # Sample sizes
     ns = np.array([arr.size for arr in arrays])
@@ -2626,7 +3422,7 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
 
     # Compute p-value
     df = k - 1
-    p_value = 1 - chi2.cdf(chi_square_stat, df)
+    p_value = chi2.sf(chi_square_stat, df)
 
     result = EqualKappaTestResult(
         kappa=kappas,
@@ -2657,8 +3453,10 @@ def equal_kappa_test(samples: list[np.ndarray], verbose: bool = False) -> EqualK
 
 
 def common_median_test(
-    samples: list[np.ndarray],
+    samples: Sequence[Any],
     alpha: float = 0.05,
+    n_resamples: int = 0,
+    seed: SeedLike = 2046,
     verbose: bool = False,
 ) -> CommonMedianTestResult:
     """
@@ -2669,21 +3467,30 @@ def common_median_test(
 
     Parameters
     ----------
-    samples : list of np.ndarray
-        List of circular data arrays (angles in radians) for different groups.
+    samples : sequence
+        A sequence (one entry per group) of `Circular` objects or one-dimensional
+        array-like radian samples.
     alpha : float, optional
         Significance level for deciding whether to reject the null hypothesis (default 0.05).
+    n_resamples : int, optional
+        If ``0`` (default), the p-value comes from the χ² approximation. If ``>= 1``, it is
+        estimated from that many label randomizations (recommended for small samples;
+        Pewsey et al. 2013, §7.3.2).
+    seed : SeedLike, optional
+        Seed for the randomization RNG when ``n_resamples >= 1``. Defaults to 2046.
     verbose : bool, optional
         If `True`, prints the test summary.
 
     Returns
     -------
     CommonMedianTestResult
-        Dataclass containing the common median, test statistic, p-value, and rejection flag.
+        Dataclass containing the common median, test statistic, p-value, rejection flag,
+        ``method`` ("asymptotic"|"randomization"), and ``n_resamples``.
 
     References
     ----------
     - Fisher, N. I. (1995). Statistical Analysis of Circular Data.
+    - Pewsey, Neuhäuser & Ruxton (2013), §7.3.2 (randomization version).
     - `circ_cmtest` from MATLAB's Circular Statistics Toolbox.
     """
 
@@ -2691,13 +3498,10 @@ def common_median_test(
     if not (0 < alpha < 1):
         raise ValueError("`alpha` must be between 0 and 1.")
 
-    k = len(samples)
+    arrays = _coerce_sample_arrays(samples)
+    k = len(arrays)
     if k < 2:
         raise ValueError("At least two groups are required for the test.")
-
-    arrays = [np.asarray(group, dtype=float) for group in samples]
-    if any(arr.size == 0 for arr in arrays):
-        raise ValueError("Each group must contain at least one observation.")
 
     # Sample sizes
     ns = np.array([arr.size for arr in arrays])
@@ -2706,22 +3510,33 @@ def common_median_test(
     # Compute the common circular median
     common_median = circ_median(np.hstack(arrays))
 
-    # Compute deviations from the common median
-    m = np.zeros(k, dtype=float)
-    for i, group in enumerate(arrays):
-        deviations = circ_dist(group, common_median)
-        m[i] = np.sum(deviations < 0)
+    # Per-observation indicator of falling below the (fixed) common median. The
+    # common median and these indicators are invariant under relabelling, so the
+    # randomization below only reshuffles the indicators into the group sizes.
+    below = (circ_dist(np.hstack(arrays), common_median) < 0).astype(float)
+    split_at = np.cumsum(ns)[:-1]
+    m = np.array([g.sum() for g in np.split(below, split_at)])
 
     # Compute test statistic
     M = np.sum(m)
     if M == 0 or M == N:
         raise ValueError("All observations fall on the same side of the median; test is undefined.")
 
-    P = (N**2 / (M * (N - M))) * np.sum(m**2 / ns) - (N * M) / (N - M)
+    def _pg(groups: list[np.ndarray]) -> float:
+        mk = np.array([g.sum() for g in groups])
+        return (N**2 / (M * (N - M))) * np.sum(mk**2 / ns) - (N * M) / (N - M)
+
+    P = _pg(np.split(below, split_at))
 
     # Compute p-value
     df = k - 1
-    p_value = 1 - chi2.cdf(P, df)
+    if n_resamples >= 1:
+        rng = _init_rng(seed)
+        p_value = _randomization_pval(_pg, below, ns, P, n_resamples, rng)
+        method = "randomization"
+    else:
+        p_value = float(chi2.sf(P, df))
+        method = "asymptotic"
     reject = p_value < alpha
 
     # If the null hypothesis is rejected, return NaN for the median
@@ -2733,6 +3548,8 @@ def common_median_test(
         statistic=float(P),
         pval=float(p_value),
         reject=bool(reject),
+        method=method,
+        n_resamples=n_resamples,
     )
 
     # Print results if verbose is enabled
