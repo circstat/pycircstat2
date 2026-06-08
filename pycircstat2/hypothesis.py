@@ -748,6 +748,12 @@ def one_sample_test(
     verbose: bool
         Print formatted results.
 
+    Returns
+    -------
+    OneSampleTestResult
+        Dataclass containing whether H0 is rejected, the tested `angle`, and the
+        95% confidence interval `ci = (lb, ub)` of the mean angle.
+
     Reference
     ---------
     P628, Section 27.1, Example 27.3 of Zar, 2010
@@ -1542,61 +1548,38 @@ def angular_randomisation_test(
     if any(arr.size == 0 for arr in sample_arrays):
         raise ValueError("Each sample must contain at least one observation.")
 
-    def art_statistic(S1: np.ndarray, S2: np.ndarray) -> float:
-        """
-        Compute the Angular Randomisation Test (ART) statistic for two groups of circular data.
-        Following equations (3.1) and (4.2) from Jebur & Abushilah (2022) .
+    # ART statistic (Jebur & Abushilah 2022, eq. 3.1 & 4.2): the scaled sum of
+    # all pairwise geodesic distances between the two groups,
+    #     T = sqrt(n·m / (n + m)) · Σ_{i,j} d_geo(φ_i, ψ_j).
+    # Under the permutation null the two group sizes (hence the scale) are fixed,
+    # so precompute the full N×N geodesic distance matrix once and score every
+    # permutation as a vectorized indicator quadratic form aᵀ·D·b, instead of
+    # re-summing pairwise distances in a Python loop.
+    n1, n2 = sample_arrays[0].size, sample_arrays[1].size
+    N = n1 + n2
+    scaling_factor = np.sqrt(n1 * n2 / N)
 
-        Args:
-            S1 (np.ndarray): First group of angles in radians (φ values)
-            S2 (np.ndarray): Second group of angles in radians (ψ values)
+    combined = np.concatenate(sample_arrays)
+    D = np.asarray(circ_pairdist(combined, combined, metric="geodesic"), dtype=float)
 
-        Returns:
-            float: The ART test statistic
-        """
-        n = len(S1)
-        m = len(S2)
+    # Observed statistic: the first n1 pooled angles form group 1.
+    observed_stat = float(scaling_factor * D[:n1, n1:].sum())
 
-        # Compute the scaling factor ((n+m)/(nm))^(-1/2)
-        scaling_factor = np.sqrt(n * m / (n + m))
-
-        # Compute sum of all pairwise geodesic distances
-        total_distance = circ_pairdist(S1, S2, metric="geodesic", return_sum=True)
-
-        # Scale the total distance and return
-        return scaling_factor * total_distance
-
-    # 1. Compute observed test statistic T*₀
-    observed_stat = art_statistic(sample_arrays[0], sample_arrays[1])
-
-    # Initialize counter for permutations more extreme than observed
-    n_extreme = 1  # Start at 1 to count the observed statistic
-
-    # Combine samples for permutation
-    combined_data = np.concatenate(sample_arrays)
-    n1 = sample_arrays[0].size
-
-    # Perform permutation test
     seed, verbose = _resolve_legacy_verbose(seed, verbose)
-
     rng = _init_rng(seed)
 
-    for _ in range(n_simulation):
-        # Randomly permute the combined data
-        permuted_data = rng.permutation(combined_data)
+    # Each simulation draws a random partition of the N pooled angles into a
+    # first group of size n1; `left`/`right` are the 0/1 group indicators.
+    order = np.argsort(rng.random((n_simulation, N)), axis=1)
+    left = np.zeros((n_simulation, N), dtype=float)
+    np.put_along_axis(left, order[:, :n1], 1.0, axis=1)
+    right = 1.0 - left
 
-        # Split into two groups of original sizes
-        perm_S1 = permuted_data[:n1]
-        perm_S2 = permuted_data[n1:]
+    perm_stats = scaling_factor * ((left @ D) * right).sum(axis=1)
 
-        # Compute test statistic for this permutation
-        perm_stat = art_statistic(perm_S1, perm_S2)
-
-        # Count if permuted statistic is >= observed (one-sided test)
-        if perm_stat >= observed_stat:
-            n_extreme += 1
-
-    # Compute p-value as in equation (4.3)
+    # +1 in numerator and denominator counts the observed statistic itself
+    # (Jebur & Abushilah 2022, eq. 4.3).
+    n_extreme = 1 + int(np.count_nonzero(perm_stats >= observed_stat))
     p_value = n_extreme / (n_simulation + 1)
 
     if verbose:
@@ -2401,6 +2384,13 @@ def harrison_kanji_test(
         Names for the two factors. Defaults to ``["A", "B"]``.
     verbose : bool, optional
         If ``True``, prints test details and results.
+
+    Returns
+    -------
+    HarrisonKanjiTestResult
+        Dataclass containing `p_values` — the (factor A, factor B, interaction)
+        p-value triple, where the interaction entry is NaN when ``inter=False`` —
+        and `anova_table`, the assembled ANOVA table as a pandas DataFrame.
     """
 
     if fn is None:
