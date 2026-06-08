@@ -905,3 +905,226 @@ def test_wallraff_test_grouped_matches_expanded():
         samples=[np.repeat(ang, w1), np.repeat(ang, w2)], angle=0.0
     ).U
     np.testing.assert_allclose(grouped, expanded, rtol=1e-12)
+
+
+def test_equal_kappa_regimes():
+    """equal_kappa_test routes through and labels each r̄-regime correctly
+    (small/arcsin, moderate/asinh, large/Bartlett)."""
+    for kappa, expected in [(0.6, "small"), (1.5, "moderate"), (4.0, "large")]:
+        rng = np.random.default_rng(7)
+        groups = [rng.vonmises(0.0, kappa, 60) for _ in range(3)]
+        result = equal_kappa_test(groups)
+        assert result.regime == expected, (
+            f"kappa={kappa}: expected regime {expected!r}, got {result.regime!r}"
+        )
+        assert result.df == 2
+        assert 0.0 <= result.pval <= 1.0
+
+
+def test_equal_kappa_detects_difference():
+    """Groups with clearly different concentrations are rejected."""
+    rng = np.random.default_rng(5)
+    groups = [rng.vonmises(0.0, k, 60) for k in (8, 8, 1)]
+    result = equal_kappa_test(groups)
+    assert result.pval < 0.05, f"Expected rejection, got p={result.pval}"
+
+
+def test_rao_spacing_test_grouped():
+    """Grouped (weighted) mode: the observed statistic matches the equivalent
+    weight-expanded sample, the mode is reported, and invalid weights raise."""
+    ang = np.deg2rad(np.array([10.0, 40.0, 70.0, 100.0, 200.0, 300.0]))
+    w = np.array([3, 1, 2, 1, 4, 2])
+
+    grouped = rao_spacing_test(ang, w=w, n_simulation=999, seed=1)
+    expanded = rao_spacing_test(np.repeat(ang, w), n_simulation=999, seed=1)
+    assert grouped.mode == "grouped"
+    np.testing.assert_allclose(grouped.statistic, expanded.statistic, rtol=1e-12)
+    assert 0.0 < grouped.pval <= 1.0
+
+    with pytest.raises(ValueError):  # negative weight
+        rao_spacing_test(ang, w=np.array([1, -1, 2, 1, 1, 1]), n_simulation=99)
+    with pytest.raises(ValueError):  # non-integer weight
+        rao_spacing_test(ang, w=np.array([1.0, 1.5, 2.0, 1.0, 1.0, 1.0]), n_simulation=99)
+    with pytest.raises(ValueError):  # shape mismatch
+        rao_spacing_test(ang, w=np.array([1, 2, 3]), n_simulation=99)
+
+
+def test_wheeler_watson_three_samples():
+    """The k>=3 branch matches an independent uniform-scores computation and
+    separates groups with different mean directions."""
+    from scipy.stats import rankdata
+
+    rng = np.random.default_rng(11)
+    groups = [rng.vonmises(m, 4, 25) for m in (0.0, 0.3, 0.6)]
+    result = wheeler_watson_test(groups)
+
+    # Independent reimplementation of W = 2 * Σ_g (C_g² + S_g²) / n_g.
+    pooled = np.concatenate(groups)
+    N = pooled.size
+    beta = 2 * np.pi * rankdata(pooled, method="ordinal") / N
+    W_ref, idx = 0.0, 0
+    for grp in groups:
+        b = beta[idx:idx + grp.size]
+        idx += grp.size
+        W_ref += (np.sum(np.cos(b)) ** 2 + np.sum(np.sin(b)) ** 2) / grp.size
+    W_ref *= 2.0
+
+    np.testing.assert_allclose(result.W, W_ref, rtol=1e-12)
+    assert result.df == 2 * (len(groups) - 1)
+
+    rng = np.random.default_rng(9)
+    separated = [rng.vonmises(m, 6, 30) for m in (0.0, 1.6, 3.1)]
+    assert wheeler_watson_test(separated).pval < 0.05
+
+
+def test_kuiper_test_asymptotic():
+    """Asymptotic mode (n_simulation=1) returns a valid p-value close to the
+    simulated one."""
+    d = load_data("B5", source="fisher")["θ"].values[:]
+    c = Circular(data=d, unit="degree", full_cycle=180)
+    asymp = kuiper_test(alpha=c.alpha, n_simulation=1)
+    sim = kuiper_test(alpha=c.alpha, n_simulation=9999)
+    assert asymp.mode == "asymptotic"
+    assert asymp.n_simulation == 1
+    assert 0.0 <= asymp.pval <= 1.0
+    assert abs(asymp.pval - sim.pval) < 0.05
+
+
+def test_watson_test_asymptotic():
+    """Asymptotic mode (n_simulation=1) returns a valid p-value close to the
+    simulated one."""
+    pigeon = np.array([20, 135, 145, 165, 170, 200, 300, 325, 335, 350, 350, 350, 355])
+    c = Circular(data=pigeon)
+    asymp = watson_test(alpha=c.alpha, n_simulation=1)
+    sim = watson_test(alpha=c.alpha, n_simulation=9999)
+    assert asymp.mode == "asymptotic"
+    assert asymp.n_simulation == 1
+    assert 0.0 <= asymp.pval <= 1.0
+    assert abs(asymp.pval - sim.pval) < 0.05
+
+
+def test_harrison_kanji_inter_false():
+    """inter=False on high-concentration data exercises the large-kappa,
+    no-interaction branch and suppresses the interaction term."""
+    rng = np.random.default_rng(3)
+    alpha = rng.vonmises(0, 6, 60)  # high kappa -> kk > 2 (large-kappa branch)
+    idp = rng.choice([1, 2, 3], 60)
+    idq = rng.choice([1, 2], 60)
+
+    result = harrison_kanji_test(alpha, idp, idq, inter=False)
+
+    p_a, p_b, p_inter = result.p_values
+    assert np.isnan(p_inter)  # interaction term dropped
+    assert 0.0 <= p_a <= 1.0 and 0.0 <= p_b <= 1.0
+
+    table = result.anova_table
+    assert list(table.index) == ["A", "B", "Interaction", "Residual", "Total"]
+    p, q = len(np.unique(idp)), len(np.unique(idq))
+    assert table.loc["Residual", "DoF"] == (p - 1) * (q - 1)
+
+
+def test_one_sample_test_rejects_distant_angle():
+    """An angle far from the mean direction lies outside the 95% CI -> reject."""
+    rng = np.random.default_rng(0)
+    alpha = rng.vonmises(0.0, 20, 30)  # tightly concentrated near 0
+    assert one_sample_test(angle=0.0, alpha=alpha).reject is False
+    assert one_sample_test(angle=np.pi, alpha=alpha).reject is True
+
+
+def test_watson_williams_warns_low_concentration():
+    """Watson-Williams warns when the common concentration is low (κ < 1)."""
+    rng = np.random.default_rng(2)
+    s1 = rng.uniform(0, 2 * np.pi, 40)
+    s2 = rng.uniform(0, 2 * np.pi, 40)
+    with pytest.warns(RuntimeWarning):
+        watson_williams_test([s1, s2])
+
+
+def test_circ_anova_no_correction():
+    """The f_mod=False branch (no Stephens correction factor) runs."""
+    rng = np.random.default_rng(1)
+    groups = [rng.vonmises(m, 5, 40) for m in (0.0, 0.4, 0.8)]
+    plain = circ_anova(groups, f_mod=False)
+    corrected = circ_anova(groups, f_mod=True)
+    assert 0.0 <= plain.pval <= 1.0
+    # The correction factor (1 + 3/8κ) > 1 inflates the F statistic.
+    assert corrected.statistic > plain.statistic
+
+
+def test_symmetry_test_default_median():
+    """When no median is supplied, symmetry_test computes it internally."""
+    from pycircstat2.descriptive import circ_median
+
+    data_zar_ex6_ch27 = load_data("D9", source="zar")
+    alpha = Circular(data=data_zar_ex6_ch27["θ"].values[:], unit="degree").alpha
+    auto = symmetry_test(alpha)
+    explicit = symmetry_test(alpha, median=float(circ_median(alpha)))
+    np.testing.assert_allclose(auto.statistic, explicit.statistic, rtol=1e-9)
+    np.testing.assert_allclose(auto.pval, explicit.pval, rtol=1e-9)
+
+
+def test_weighted_input_paths():
+    """The alpha+w paths (n/mean/r inferred from weighted angles) match the
+    weight-expanded sample for the single-sample tests that accept `w`."""
+    a = np.array([0.1, 0.2, 0.3, 1.0, 1.1])
+    w = np.array([2, 2, 2, 2, 2])  # total weight 10 (one_sample CI needs n >= 8)
+    exp = np.repeat(a, w)
+
+    np.testing.assert_allclose(
+        rayleigh_test(alpha=a, w=w).z, rayleigh_test(alpha=exp).z, rtol=1e-12
+    )
+    np.testing.assert_allclose(
+        V_test(angle=0.0, alpha=a, w=w).V, V_test(angle=0.0, alpha=exp).V, rtol=1e-12
+    )
+    weighted_ci = one_sample_test(angle=0.0, alpha=a, w=w)
+    expanded_ci = one_sample_test(angle=0.0, alpha=exp)
+    np.testing.assert_allclose(weighted_ci.ci, expanded_ci.ci, rtol=1e-12)
+    assert weighted_ci.reject == expanded_ci.reject
+
+
+def test_verbose_branches_smoke(capsys):
+    """verbose=True output paths run without error across representative tests
+    (including the reject / bootstrap / NaN-median display branches)."""
+    rng = np.random.default_rng(0)
+    alpha = rng.vonmises(0.0, 4, 30)
+
+    rayleigh_test(alpha=alpha, B=50, verbose=True)            # bootstrap print
+    one_sample_test(angle=0.0, alpha=alpha, verbose=True)     # reject=False branch
+    one_sample_test(angle=np.pi, alpha=alpha, verbose=True)   # reject=True branch
+    circ_range_test(alpha, verbose=True)
+    harrison_kanji_test(
+        alpha, rng.choice([1, 2, 3], 30), rng.choice([1, 2], 30), verbose=True
+    )
+    common_median_test(
+        [rng.vonmises(0, 3, 20), rng.vonmises(0.2, 3, 20)], verbose=True
+    )
+    common_median_test(  # rejection -> NaN-median display branch
+        [rng.vonmises(0, 3, 20), rng.vonmises(3.0, 3, 20)], verbose=True
+    )
+
+    assert capsys.readouterr().out  # something was printed
+
+
+def test_result_helpers():
+    """TestResult.asdict() and .significance() behave correctly."""
+    rng = np.random.default_rng(0)
+    res = rayleigh_test(alpha=rng.vonmises(0.0, 8, 40))  # strongly non-uniform
+    assert res.asdict() == {
+        "r": res.r,
+        "z": res.z,
+        "pval": res.pval,
+        "bootstrap_pval": res.bootstrap_pval,
+    }
+    assert res.significance() == "***"
+    assert res.significance("does_not_exist") is None
+    # a perfectly uniform sample is not significant -> empty stars
+    uniform = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+    assert rayleigh_test(alpha=uniform).significance() == ""
+
+
+def test_legacy_positional_verbose_warns():
+    """Passing seed=True (the formerly positional `verbose`) is deprecated but
+    still honored via the back-compat shim."""
+    alpha = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+    with pytest.warns(DeprecationWarning):
+        rayleigh_test(alpha=alpha, seed=True)
