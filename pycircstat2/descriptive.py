@@ -1275,14 +1275,14 @@ def _circ_mean_ci_bootstrap(
     if interval == "hdi":
         lb, ub = compute_hdi(bootstrap_samples, ci=ci)
     else:  # interval == "percentile" — Fisher §8.3.2 Stage 4 Technique 1
-        # γ_b = μ̂*_b − θ̄ wrapped to (−π, π]; sort and take ranks (l+1, m).
+        # γ_b = μ̂*_b − θ̄ wrapped to (−π, π]; sort and take ranks (lo+1, m).
         theta_bar = circ_mean(alpha_arr)
         gamma = (bootstrap_samples - theta_bar + np.pi) % (2 * np.pi) - np.pi
         gamma_sorted = np.sort(gamma)
-        l = int(np.floor(0.5 * B * (1 - ci) + 0.5))  # eq below 8.14
-        m = B - l
-        # Fisher's eq (8.14) is (θ̄ + γ_(l+1), θ̄ + γ_(m)) in 1-indexed notation.
-        lb = float(angmod(theta_bar + gamma_sorted[l]))
+        lo = int(np.floor(0.5 * B * (1 - ci) + 0.5))  # Fisher's l, eq below 8.14
+        m = B - lo
+        # Fisher's eq (8.14) is (θ̄ + γ_(lo+1), θ̄ + γ_(m)) in 1-indexed notation.
+        lb = float(angmod(theta_bar + gamma_sorted[lo]))
         ub = float(angmod(theta_bar + gamma_sorted[m - 1]))
 
     mean_dir = circ_mean(bootstrap_samples)

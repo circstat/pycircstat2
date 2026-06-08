@@ -1,5 +1,4 @@
 import types
-from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.integrate import quad, quad_vec
