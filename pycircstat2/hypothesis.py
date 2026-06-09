@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.special import comb, i0, iv
 from scipy.stats import chi2, f, norm, rankdata, wilcoxon
 
@@ -501,7 +501,7 @@ class ChangePointTestResult(TestResult):
 @dataclass(frozen=True)
 class HarrisonKanjiTestResult(TestResult):
     p_values: tuple[Optional[float], Optional[float], Optional[float]]
-    anova_table: pd.DataFrame
+    anova_table: pl.DataFrame
 
 
 @dataclass(frozen=True)
@@ -3173,7 +3173,7 @@ def harrison_kanji_test(
     HarrisonKanjiTestResult
         Dataclass containing `p_values` — the (factor A, factor B, interaction)
         p-value triple, where the interaction entry is NaN when ``inter=False`` —
-        and `anova_table`, the assembled ANOVA table as a pandas DataFrame.
+        and `anova_table`, the assembled ANOVA table as a polars DataFrame.
     """
 
     if fn is None:
@@ -3188,30 +3188,32 @@ def harrison_kanji_test(
     p = len(np.unique(idp))
     q = len(np.unique(idq))
 
-    # Data frame for aggregation
-    df = pd.DataFrame({fn[0]: idp, fn[1]: idq, "dependent": alpha})
-    n = len(df)
+    n = len(alpha)
 
     # Total resultant vector length
-    tr = n * circ_r(np.array(df["dependent"].values))
+    tr = n * circ_r(alpha)
     kk = circ_kappa(tr / n)
 
-    # Compute mean resultants per group
-    gr = df.groupby(fn)
-    cn = gr.count()
-    cr = gr.agg(circ_r) * cn
-    cn = cn.unstack(fn[1])
-    cr = cr.unstack(fn[1])
+    # Per-cell and per-factor resultants (numpy; replaces the pandas
+    # groupby(...).unstack()). cn/cr are p×q matrices — rows index the sorted
+    # factor-A levels, cols the sorted factor-B levels — matching the old
+    # unstacked layout; pn/pr and qn/qr are the factor-A and factor-B
+    # marginals. circ_r returns the mean resultant length, so multiplying by
+    # the group count gives the resultant length R.
+    a_levels = np.unique(idp)
+    b_levels = np.unique(idq)
+    cn = np.zeros((p, q))
+    cr = np.zeros((p, q))
+    for i, a in enumerate(a_levels):
+        for j, b in enumerate(b_levels):
+            cell = alpha[(idp == a) & (idq == b)]
+            cn[i, j] = cell.size
+            cr[i, j] = circ_r(cell) * cell.size if cell.size else 0.0
 
-    # Factor A
-    gr = df.groupby(fn[0])
-    pn = gr.count()["dependent"]
-    pr = gr.agg(circ_r)["dependent"] * pn
-
-    # Factor B
-    gr = df.groupby(fn[1])
-    qn = gr.count()["dependent"]
-    qr = gr.agg(circ_r)["dependent"] * qn
+    pn = np.array([(idp == a).sum() for a in a_levels], dtype=float)
+    pr = np.array([circ_r(alpha[idp == a]) for a in a_levels]) * pn
+    qn = np.array([(idq == b).sum() for b in b_levels], dtype=float)
+    qr = np.array([circ_r(alpha[idq == b]) for b in b_levels]) * qn
 
     if kk > 2:  # Large kappa approximation
         eff_1 = sum(pr**2 / np.sum(cn, axis=1)) - tr**2 / n
@@ -3224,17 +3226,17 @@ def harrison_kanji_test(
 
         eff_t = n - tr**2 / n
         df_t = n - 1
-        m = np.asarray(cn.values).mean()
+        m = cn.mean()
 
         if inter:
             beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk**2)))
 
-            eff_r = n - np.asarray((cr**2.0 / cn).values).sum()
+            eff_r = n - (cr**2.0 / cn).sum()
             df_r = p * q * (m - 1)
             ms_r = eff_r / df_r
 
             eff_i = (
-                np.asarray((cr**2.0 / cn).values).sum()
+                (cr**2.0 / cn).sum()
                 - sum(qr**2.0 / qn)
                 - sum(pr**2.0 / pn)
                 + tr**2 / n
@@ -3249,7 +3251,7 @@ def harrison_kanji_test(
             df_r = (p - 1) * (q - 1)
             ms_r = eff_r / df_r
 
-            eff_i, df_i, ms_i, FI, pI = None, None, None, None, np.nan
+            eff_i, df_i, ms_i, FI, pI = np.nan, np.nan, np.nan, np.nan, np.nan
             beta = 1
 
         F1 = beta * ms_1 / ms_r
@@ -3271,7 +3273,7 @@ def harrison_kanji_test(
         p2 = chi2.sf(chi2_val, df=df_2)
 
         chiI = kappa_factor * (
-            np.asarray((cr**2.0 / cn).values).sum()
+            (cr**2.0 / cn).sum()
             - sum(pr**2.0 / pn)
             - sum(qr**2.0 / qn)
             + tr**2 / n
@@ -3283,25 +3285,27 @@ def harrison_kanji_test(
 
     # Construct ANOVA Table
     if kk > 2:
-        table = pd.DataFrame(
+        table = pl.DataFrame(
             {
                 "Source": fn + ["Interaction", "Residual", "Total"],
                 "DoF": [df_1, df_2, df_i, df_r, df_t],
                 "SS": [eff_1, eff_2, eff_i, eff_r, eff_t],
                 "MS": [ms_1, ms_2, ms_i, ms_r, np.nan],
-                "F": [np.squeeze(F1), np.squeeze(F2), FI, np.nan, np.nan],
+                "F": [float(F1), float(F2), FI, np.nan, np.nan],
                 "p": list(pval) + [np.nan, np.nan],
-            }
-        ).set_index("Source")
+            },
+            strict=False,
+        )
     else:
-        table = pd.DataFrame(
+        table = pl.DataFrame(
             {
                 "Source": fn + ["Interaction"],
                 "DoF": [df_1, df_2, df_i],
-                "chi2": [chi1.squeeze(), chi2_val.squeeze(), chiI.squeeze()],
-                "p": pval,
-            }
-        ).set_index("Source")
+                "chi2": [float(chi1), float(chi2_val), float(chiI)],
+                "p": list(pval),
+            },
+            strict=False,
+        )
 
     result = HarrisonKanjiTestResult(p_values=pval, anova_table=table)
 

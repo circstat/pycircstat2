@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 
 from pycircstat2 import load_data
@@ -7,14 +8,13 @@ from pycircstat2.regression import CCRegression, CLRegression, LCRegression
 from pycircstat2.utils import A1inv
 
 
-def _lung_dataframe(drop_feb_outliers: bool = True) -> pd.DataFrame:
+def _lung_dataframe(drop_feb_outliers: bool = True) -> "pl.DataFrame":
     """Pewsey, Neuhäuser & Ruxton (2014) §8.4.1 lung-disease deaths."""
-    df = load_data("lung_deaths", source="pewsey").copy()
-    df["theta"] = (np.pi / 6) * df["month"].to_numpy()
-    df = df.rename(columns={"deaths": "y"})
+    df = load_data("lung_deaths", source="pewsey")
+    df = df.with_columns(((np.pi / 6) * pl.col("month")).alias("theta"))
+    df = df.rename({"deaths": "y"})
     if drop_feb_outliers:
-        df = df[~((df["month"] == 2) & df["year"].isin([1976, 1979]))]
-        df = df.reset_index(drop=True)
+        df = df.filter(~((pl.col("month") == 2) & pl.col("year").is_in([1976, 1979])))
     return df
 
 
@@ -23,8 +23,8 @@ def test_cc_regression_against_r():
         "milwaukee",
         source="jammalamadaka",
     )
-    ctheta = np.deg2rad(df["theta"].values)
-    cpsi = np.deg2rad(df["psi"].values)
+    ctheta = np.deg2rad(df["theta"].to_numpy())
+    cpsi = np.deg2rad(df["psi"].to_numpy())
 
     # Expected results from R for order=2
     expected_order2 = {
@@ -103,9 +103,10 @@ def test_cc_regression_against_r():
         model_order4.result["p_values"], expected_order4["p_values"], atol=1e-4
     )
 
-    df_rad = df.copy()
-    df_rad["theta"] = ctheta
-    df_rad["psi"] = cpsi
+    df_rad = df.with_columns(
+        pl.Series("theta", ctheta),
+        pl.Series("psi", cpsi),
+    )
 
     # Test formula parsing for order=2
     formula_model = CCRegression(formula="theta ~ psi", data=df_rad, order=2)
@@ -131,8 +132,8 @@ def test_cl_regression_against_r():
     # Load dataset
     df = load_data("B20", source="fisher")
 
-    X = df["x"].values
-    θ = np.deg2rad(df["θ"].values)
+    X = df["x"].to_numpy()
+    θ = np.deg2rad(df["θ"].to_numpy())
 
     data_cl = pd.DataFrame({"X": X, "θ": θ})
 
@@ -267,8 +268,8 @@ def test_cc_regression_rejects_oversize_order():
 
 def test_cc_regression_exposes_residual_kappa():
     df = load_data("milwaukee", source="jammalamadaka")
-    ctheta = np.deg2rad(df["theta"].values)
-    cpsi = np.deg2rad(df["psi"].values)
+    ctheta = np.deg2rad(df["theta"].to_numpy())
+    cpsi = np.deg2rad(df["psi"].to_numpy())
     m = CCRegression(theta=ctheta, x=cpsi, order=2)
     assert "kappa" in m.result and "A_k" in m.result
     assert np.isfinite(m.result["kappa"]) and m.result["kappa"] >= 0
@@ -308,7 +309,7 @@ def test_cl_plot_mean_model_1d():
 
     matplotlib.use("Agg")
     df = load_data("B20", source="fisher")
-    data = pd.DataFrame({"X": df["x"].values, "θ": np.deg2rad(df["θ"].values)})
+    data = pd.DataFrame({"X": df["x"].to_numpy(), "θ": np.deg2rad(df["θ"].to_numpy())})
     m = CLRegression(formula="θ ~ X", data=data, model_type="mean")
     fig = m.plot()
     titles = [ax.get_title() for ax in fig.axes]
@@ -324,7 +325,7 @@ def test_cl_plot_kappa_only_shows_kappa_curve():
 
     matplotlib.use("Agg")
     df = load_data("B20", source="fisher")
-    data = pd.DataFrame({"X": df["x"].values, "θ": np.deg2rad(df["θ"].values)})
+    data = pd.DataFrame({"X": df["x"].to_numpy(), "θ": np.deg2rad(df["θ"].to_numpy())})
     m = CLRegression(formula="θ ~ X", data=data, model_type="kappa")
     fig = m.plot()
     titles = [ax.get_title() for ax in fig.axes]
@@ -408,8 +409,8 @@ def test_cl_plot_multi_feature_fallback():
 
 def test_cc_predict_round_trip_on_training_data():
     df = load_data("milwaukee", source="jammalamadaka")
-    ctheta = np.deg2rad(df["theta"].values)
-    cpsi = np.deg2rad(df["psi"].values)
+    ctheta = np.deg2rad(df["theta"].to_numpy())
+    cpsi = np.deg2rad(df["psi"].to_numpy())
     m = CCRegression(theta=ctheta, x=cpsi, order=2)
     pred = m.predict(cpsi)
     diff = np.angle(np.exp(1j * (pred - m.result["fitted"])))
@@ -431,8 +432,8 @@ def test_cc_plot_single_feature_two_panels():
 
     matplotlib.use("Agg")
     df = load_data("milwaukee", source="jammalamadaka")
-    ctheta = np.deg2rad(df["theta"].values)
-    cpsi = np.deg2rad(df["psi"].values)
+    ctheta = np.deg2rad(df["theta"].to_numpy())
+    cpsi = np.deg2rad(df["psi"].to_numpy())
     m = CCRegression(theta=ctheta, x=cpsi, order=2)
     fig = m.plot()
     titles = [ax.get_title() for ax in fig.axes]
@@ -576,15 +577,16 @@ def test_lc_formula_validation():
         LCRegression("y ~ harmonic(theta, k=0)", df)
 
 
-def test_lc_accepts_polars_data():
-    import polars as pl
+def test_lc_accepts_pandas_data():
+    """Polars is the native input; pandas is still accepted via the soft path."""
+    pytest.importorskip("pandas")
 
-    df = _lung_dataframe(drop_feb_outliers=True)
-    m_pd = LCRegression("y ~ harmonic(theta)", df)
-    m_pl = LCRegression("y ~ harmonic(theta)", pl.from_pandas(df))
+    df_pl = _lung_dataframe(drop_feb_outliers=True)
+    m_pl = LCRegression("y ~ harmonic(theta)", df_pl)
+    m_pd = LCRegression("y ~ harmonic(theta)", df_pl.to_pandas())
     np.testing.assert_allclose(
-        list(m_pd.result["coefficients"].values()),
         list(m_pl.result["coefficients"].values()),
+        list(m_pd.result["coefficients"].values()),
         atol=1e-12,
     )
 
@@ -603,7 +605,7 @@ def test_lc_harmonic_se_and_ci_present():
 def test_lc_accepts_unicode_identifiers():
     """Greek/Unicode column names should work in formulas (e.g. `θ`)."""
     df = _lung_dataframe(drop_feb_outliers=True)
-    df_unicode = df.rename(columns={"theta": "θ"})
+    df_unicode = df.rename({"theta": "θ"})
     m = LCRegression("y ~ harmonic(θ, k=2)", df_unicode)
     assert m.expanded_formula == "y ~ cos(θ) + sin(θ) + cos(2*θ) + sin(2*θ)"
     assert np.isclose(m.result["r_squared"], 0.9094, atol=1e-3)

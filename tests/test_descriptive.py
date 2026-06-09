@@ -1,4 +1,5 @@
 import numpy as np
+import polars as pl
 import pytest
 
 from pycircstat2 import Circular, load_data
@@ -30,7 +31,7 @@ from pycircstat2.descriptive import (
 def test_circ_mean():
     # Example 26.4 (Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
-    circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values[:])
+    circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].to_numpy())
     m, r = circ_mean_and_r(alpha=circ_zar_ex4_ch26.alpha, w=circ_zar_ex4_ch26.w)
 
     np.testing.assert_approx_equal(np.rad2deg(m), 99, significant=1)
@@ -39,7 +40,7 @@ def test_circ_mean():
     # ch26 Example 5 (Zar, 2010)
     data_zar_ex5_ch26 = load_data("D2", source="zar")
     circ_zar_ex5_ch26 = Circular(
-        data=data_zar_ex5_ch26["θ"].values[:], w=data_zar_ex5_ch26["w"].values[:]
+        data=data_zar_ex5_ch26["θ"].to_numpy(), w=data_zar_ex5_ch26["w"].to_numpy()
     )
     m, r = circ_mean_and_r(alpha=circ_zar_ex5_ch26.alpha, w=circ_zar_ex5_ch26.w)
 
@@ -49,7 +50,7 @@ def test_circ_mean():
 
 def test_circ_std():
     data_zar_ex4_ch26 = load_data("D1", source="zar")
-    circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values[:])
+    circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].to_numpy())
 
     # Angular dispersion from Ch26.5 (Zar, 2010)
     # Part of Ch26 Example 4, using data from Ch26 Example 2
@@ -68,7 +69,7 @@ def test_circ_std():
 
     data_zar_ex5_ch26 = load_data("D2", source="zar")
     circ_zar_ex5_ch26 = Circular(
-        data=data_zar_ex5_ch26["θ"].values[:], w=data_zar_ex5_ch26["w"].values[:]
+        data=data_zar_ex5_ch26["θ"].to_numpy(), w=data_zar_ex5_ch26["w"].to_numpy()
     )
 
     # compute directly from r
@@ -91,7 +92,7 @@ def test_circ_std():
 def test_circ_median():
     # Ch26.6 P657 (Zar, 2010)
     data_zar_ex2_ch26 = load_data("D1", source="zar")
-    circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].values[:])
+    circ_zar_ex2_ch26 = Circular(data=data_zar_ex2_ch26["θ"].to_numpy())
     median = circ_median(
         alpha=circ_zar_ex2_ch26.alpha,
         method="deviation",
@@ -101,7 +102,7 @@ def test_circ_median():
     np.testing.assert_approx_equal(np.rad2deg(median), 103.0, significant=1)
 
     # Ch26.6 P657 (Zar, 2010) droped the first point
-    circ_zar_ex2_ch26_odd = Circular(data=data_zar_ex2_ch26["θ"].values[:][1:])
+    circ_zar_ex2_ch26_odd = Circular(data=data_zar_ex2_ch26["θ"].to_numpy()[1:])
     median = circ_median(
         alpha=circ_zar_ex2_ch26_odd.alpha,
         method="deviation",
@@ -112,7 +113,7 @@ def test_circ_median():
 
     # mallard data (mardia, 1972)
     data_mallard = load_data("mallard", source="mardia")
-    circ_mallard = Circular(data=data_mallard["θ"].values[:], w=data_mallard["w"].values[:])
+    circ_mallard = Circular(data=data_mallard["θ"].to_numpy(), w=data_mallard["w"].to_numpy())
     median = circ_median(
         alpha=circ_mallard.alpha,
         w=circ_mallard.w,
@@ -252,9 +253,9 @@ def test_circ_mean_deviation():
 
     d22 = load_data("B10", source="fisher")
 
-    d22s1 = np.deg2rad(d22[d22["set"] == 1]["θ"].values[:])
-    d22s2 = np.deg2rad(d22[d22["set"] == 2]["θ"].values[:])
-    d22s3 = np.deg2rad(d22[d22["set"] == 3]["θ"].values[:])
+    d22s1 = np.deg2rad(d22.filter(pl.col("set") == 1)["θ"].to_numpy())
+    d22s2 = np.deg2rad(d22.filter(pl.col("set") == 2)["θ"].to_numpy())
+    d22s3 = np.deg2rad(d22.filter(pl.col("set") == 3)["θ"].to_numpy())
 
     np.testing.assert_allclose(
         circ_mean_deviation(d22s1, d22s1),
@@ -275,7 +276,7 @@ def test_circ_mean_deviation():
 def test_circ_mean_ci():
     # method: approximate (from P619, Zar, 2010)
     data_zar_ex4_ch26 = load_data("D1", source="zar")
-    circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].values[:])
+    circ_zar_ex4_ch26 = Circular(data=data_zar_ex4_ch26["θ"].to_numpy())
 
     # computed directly from r and n
     lb, ub = circ_mean_ci(
@@ -299,7 +300,7 @@ def test_circ_mean_ci():
 
     # method: dispersion (from P78, Fisher, 1993)
     d_ex3 = load_data("B6", "fisher")
-    c_ex3_s2 = Circular(np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:]))
+    c_ex3_s2 = Circular(np.sort(d_ex3.filter(pl.col("set") == 2)["θ"].to_numpy()))
     lb, ub = circ_mean_ci(method="dispersion", alpha=c_ex3_s2.alpha)
     np.testing.assert_approx_equal(np.rad2deg(lb), 232.7, significant=4)
     np.testing.assert_approx_equal(np.rad2deg(ub), 262.5, significant=4)
@@ -325,14 +326,14 @@ def test_circ_mean_ci():
 def test_circ_median_ci():
     d_ex3 = load_data("B6", "fisher")
     c_ex3_s0 = Circular(
-        data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:][:10]),
+        data=np.sort(d_ex3.filter(pl.col("set") == 2)["θ"].to_numpy()[:10]),
         kwargs_median={"method": "count"},
     )
     c_ex3_s1 = Circular(
-        data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:][:20]),
+        data=np.sort(d_ex3.filter(pl.col("set") == 2)["θ"].to_numpy()[:20]),
         kwargs_median={"method": "deviation"},
     )
-    c_ex3_s2 = Circular(data=np.sort(d_ex3[d_ex3.set == 2]["θ"].values[:]))
+    c_ex3_s2 = Circular(data=np.sort(d_ex3.filter(pl.col("set") == 2)["θ"].to_numpy()))
 
     # n is too small for proper estimation of median ci
     lb, ub, ci = circ_median_ci(median=float(c_ex3_s0.median), alpha=c_ex3_s0.alpha)
@@ -361,8 +362,8 @@ def test_circ_median_ci_idx_wrap():
 
 def test_circ_mean_and_r_of_means():
     data = load_data("D4", source="zar")
-    ms = np.deg2rad(data.values[:][:, 0])
-    rs = data.values[:][:, 1]
+    ms = np.deg2rad(data.to_numpy()[:, 0])
+    rs = data.to_numpy()[:, 1]
 
     m, r = circ_mean_and_r_of_means(ms=ms, rs=rs)
     np.testing.assert_approx_equal(np.rad2deg(m), 152.0, significant=3)
@@ -370,21 +371,21 @@ def test_circ_mean_and_r_of_means():
 
 
 def test_circ_skewness():
-    b11 = load_data("B11", source="fisher")["θ"].values[:]
+    b11 = load_data("B11", source="fisher")["θ"].to_numpy()
     c11 = Circular(data=b11)
     skewness = circ_skewness(alpha=c11.alpha)
     np.testing.assert_approx_equal(skewness, -0.92, significant=2)
 
 
 def test_circ_kurtosis():
-    b11 = load_data("B11", source="fisher")["θ"].values[:]
+    b11 = load_data("B11", source="fisher")["θ"].to_numpy()
     c11 = Circular(data=b11)
     kurtosis = circ_kurtosis(alpha=c11.alpha)
     np.testing.assert_approx_equal(kurtosis, 6.64, significant=3)
 
 
 def test_circ_dispersion():
-    b11 = load_data("B11", source="fisher")["θ"].values[:]
+    b11 = load_data("B11", source="fisher")["θ"].to_numpy()
     c11 = Circular(data=b11)
     dispersion = circ_dispersion(alpha=c11.alpha)
     np.testing.assert_approx_equal(dispersion, 0.24, significant=2)
@@ -393,7 +394,7 @@ def test_circ_dispersion():
 def test_circ_moment():
     # Section 3.2, Pewsey (2014) P24
 
-    b11 = load_data("B11", source="fisher")["θ"].values[:]
+    b11 = load_data("B11", source="fisher")["θ"].to_numpy()
     c11 = Circular(data=b11)
 
     # first moment == mean
@@ -418,7 +419,7 @@ def test_circ_moment():
 def test_compute_smooth_params():
     from pycircstat2.utils import time2float
 
-    d_fisher_b1 = load_data("B1", source="fisher")["time"].values[:]
+    d_fisher_b1 = load_data("B1", source="fisher")["time"].to_numpy()
     c_fisher_b1 = Circular(time2float(d_fisher_b1), unit="hour")
     h0 = compute_smooth_params(c_fisher_b1.r, c_fisher_b1.n)
     np.testing.assert_approx_equal(h0, 1.06, significant=2)

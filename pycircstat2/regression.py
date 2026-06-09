@@ -3,9 +3,8 @@ import warnings
 from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
 import polars as pl
-from hea import lm as _hea_lm
+from hea.models import lm as _hea_lm
 from scipy.linalg import lstsq
 from scipy.special import i0e
 from scipy.stats import chi2, norm, t as student_t
@@ -13,6 +12,23 @@ from scipy.stats import chi2, norm, t as student_t
 from .utils import A1, A1inv, significance_code
 
 __all__ = ["CLRegression", "CCRegression", "LCRegression"]
+
+
+def _to_polars(data) -> "pl.DataFrame":
+    """Coerce a DataFrame to polars.
+
+    Polars frames pass through; pandas frames are accepted as a soft
+    convenience and converted via ``pl.from_pandas`` (which imports pandas
+    lazily — pandas is never a hard dependency, since a pandas input can only
+    exist if pandas is already installed).
+    """
+    if isinstance(data, pl.DataFrame):
+        return data
+    if type(data).__module__.startswith("pandas"):
+        return pl.from_pandas(data)
+    raise TypeError(
+        f"`data` must be a polars (or pandas) DataFrame; got {type(data).__name__}"
+    )
 
 
 def _safe_solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -39,8 +55,8 @@ class CLRegression:
     ----------
     formula : str, optional
         A formula string like 'θ ~ x1 + x2 + x3' specifying the model.
-    data : pd.DataFrame, optional
-        A pandas DataFrame containing the response and predictors.
+    data : polars.DataFrame, optional
+        A polars (or pandas) DataFrame containing the response and predictors.
     theta : np.ndarray, optional
         A numpy array of circular response values in radians.
     X : np.ndarray, optional
@@ -120,7 +136,7 @@ class CLRegression:
     def __init__(
         self,
         formula: Optional[str] = None,
-        data: Optional[pd.DataFrame] = None,
+        data: Optional[pl.DataFrame] = None,
         theta: Optional[np.ndarray] = None,
         X: Optional[np.ndarray] = None,
         model_type: str = "mixed",
@@ -195,8 +211,9 @@ class CLRegression:
         return theta_arr, X_arr
 
     def _parse_formula(
-        self, formula: str, data: pd.DataFrame
+        self, formula: str, data: pl.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        data = _to_polars(data)
         parts = formula.split("~")
         if len(parts) != 2:
             raise ValueError(
@@ -204,14 +221,14 @@ class CLRegression:
             )
         theta_col, x_cols = parts
         theta_series = data[theta_col.strip()]
-        if theta_series.isnull().any():
+        if theta_series.is_null().any():
             raise ValueError("Response column contains missing values.")
         theta = theta_series.to_numpy()
         x_cols = [col.strip() for col in x_cols.split("+") if col.strip()]
         if not x_cols:
             raise ValueError(f"No predictors found in formula: {formula!r}")
         X_df = data[x_cols]
-        if X_df.isnull().any().any():
+        if X_df.null_count().to_numpy().any():
             raise ValueError("Predictor columns contain missing values.")
         X = X_df.to_numpy()
         return theta, X, x_cols
@@ -878,7 +895,7 @@ class CCRegression:
     def __init__(
         self,
         formula: Optional[str] = None,
-        data: Optional[pd.DataFrame] = None,
+        data: Optional[pl.DataFrame] = None,
         theta: Optional[np.ndarray] = None,
         x: Optional[np.ndarray] = None,
         order: int = 1,
@@ -948,8 +965,9 @@ class CCRegression:
         return np.mod(arr_np, 2 * np.pi)
 
     def _parse_formula(
-        self, formula: str, data: pd.DataFrame
+        self, formula: str, data: pl.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        data = _to_polars(data)
         parts = formula.split("~")
         if len(parts) != 2:
             raise ValueError(
@@ -1368,7 +1386,7 @@ class LCRegression:
     def __init__(
         self,
         formula: str,
-        data: Union[pd.DataFrame, "pl.DataFrame"],
+        data: pl.DataFrame,
     ):
         if not isinstance(formula, str) or "~" not in formula:
             raise ValueError(
@@ -1377,20 +1395,10 @@ class LCRegression:
 
         self.formula = formula
         self.response = formula.split("~", 1)[0].strip()
-        self.data = self._to_polars(data)
+        self.data = _to_polars(data)
         self.expanded_formula = self._expand_formula(formula)
         self.lm_fit = _hea_lm(self.expanded_formula, self.data)
         self.result = self._build_result()
-
-    @staticmethod
-    def _to_polars(data: Union[pd.DataFrame, "pl.DataFrame"]) -> "pl.DataFrame":
-        if isinstance(data, pl.DataFrame):
-            return data
-        if isinstance(data, pd.DataFrame):
-            return pl.from_pandas(data)
-        raise TypeError(
-            f"`data` must be a pandas or polars DataFrame; got {type(data).__name__}"
-        )
 
     @staticmethod
     def _expand_formula(formula: str) -> str:
@@ -1507,11 +1515,11 @@ class LCRegression:
         }
 
     def predict(
-        self, data: Union[pd.DataFrame, "pl.DataFrame"]
+        self, data: pl.DataFrame
     ) -> np.ndarray:
         """Predict the linear response for new values of the regressors."""
-        new = self._to_polars(data)
-        out = self.lm_fit.predict(new=new)
+        new = _to_polars(data)
+        out = self.lm_fit.predict(newdata=new)
         if isinstance(out, pl.DataFrame):
             out = out.to_numpy().ravel()
         return np.asarray(out, dtype=float)
@@ -1530,8 +1538,9 @@ class LCRegression:
             print(f"Expanded formula: {self.expanded_formula}")
         print()
 
-        # hea.lm.summary() prints to stdout and returns None.
-        self.lm_fit.summary()
+        # hea.models.lm.summary() returns a SummaryLm whose __repr__ is the
+        # R-style regression block (it no longer prints to stdout itself).
+        print(self.lm_fit.summary())
 
         if self.result["harmonics"]:
             self._print_harmonic_table()

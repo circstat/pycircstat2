@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+import polars as pl
 import pytest
 
 from pycircstat2 import Circular, load_data
@@ -38,7 +39,7 @@ def test_rayleigh_test():
     # Ch27 Example 1 (Zar, 2010, P667)
     # Using data from Ch26 Example 2.
     data_zar_ex2_ch26 = load_data("D1", source="zar")
-    circ_zar_ex1_ch27 = Circular(data=data_zar_ex2_ch26["θ"].values[:])
+    circ_zar_ex1_ch27 = Circular(data=data_zar_ex2_ch26["θ"].to_numpy())
 
     # computed directly from r and n
     result = rayleigh_test(n=circ_zar_ex1_ch27.n, r=circ_zar_ex1_ch27.r)
@@ -54,7 +55,7 @@ def test_rayleigh_test():
 def test_V_test():
     # Ch27 Example 2 (Zar, 2010, P669)
     data_zar_ex2_ch27 = load_data("D7", source="zar")
-    circ_zar_ex2_ch27 = Circular(data=data_zar_ex2_ch27["θ"].values[:])
+    circ_zar_ex2_ch27 = Circular(data=data_zar_ex2_ch27["θ"].to_numpy())
 
     # computed directly from r and n
     result = V_test(
@@ -83,7 +84,7 @@ def test_one_sample_test():
     # Ch27 Example 3 (Zar, 2010, P669)
     # Using data from Ch27 Example 2
     data_zar_ex2_ch27 = load_data("D7", source="zar")
-    circ_zar_ex3_ch27 = Circular(data=data_zar_ex2_ch27["θ"].values[:], unit="degree")
+    circ_zar_ex3_ch27 = Circular(data=data_zar_ex2_ch27["θ"].to_numpy(), unit="degree")
 
     # computed directly from lb and ub
     result = one_sample_test(
@@ -102,7 +103,7 @@ def test_one_sample_test():
 
 def test_omnibus_test():
     data_zar_ex4_ch27 = load_data("D8", source="zar")
-    circ_zar_ex4_ch27 = Circular(data=data_zar_ex4_ch27["θ"].values[:], unit="degree")
+    circ_zar_ex4_ch27 = Circular(data=data_zar_ex4_ch27["θ"].to_numpy(), unit="degree")
 
     result = omnibus_test(alpha=circ_zar_ex4_ch27.alpha, scale=1)
 
@@ -127,7 +128,7 @@ def test_omnibus_test():
 
 def test_batschelet_test():
     data_zar_ex5_ch27 = load_data("D8", source="zar")
-    circ_zar_ex5_ch27 = Circular(data=data_zar_ex5_ch27["θ"].values[:], unit="degree")
+    circ_zar_ex5_ch27 = Circular(data=data_zar_ex5_ch27["θ"].to_numpy(), unit="degree")
 
     result = batschelet_test(
         angle=np.deg2rad(45),
@@ -139,7 +140,7 @@ def test_batschelet_test():
 
 def test_chisquare_test():
     d2 = load_data("D2", source="zar")
-    c2 = Circular(data=d2["θ"].values[:], w=d2["w"].values[:])
+    c2 = Circular(data=d2["θ"].to_numpy(), w=d2["w"].to_numpy())
 
     result = chisquare_test(c2.w)
     np.testing.assert_approx_equal(result.chi2, 66.543, significant=3)
@@ -148,7 +149,7 @@ def test_chisquare_test():
 
 def test_symmetry_test():
     data_zar_ex6_ch27 = load_data("D9", source="zar")
-    circ_zar_ex6_ch27 = Circular(data=data_zar_ex6_ch27["θ"].values[:], unit="degree")
+    circ_zar_ex6_ch27 = Circular(data=data_zar_ex6_ch27["θ"].to_numpy(), unit="degree")
 
     result = symmetry_test(
         median=float(circ_zar_ex6_ch27.median), alpha=circ_zar_ex6_ch27.alpha
@@ -158,8 +159,8 @@ def test_symmetry_test():
 
 def test_watson_williams_test():
     data = load_data("D10", source="zar")
-    s1 = Circular(data=data[data["sample"] == 1]["θ"].values[:])
-    s2 = Circular(data=data[data["sample"] == 2]["θ"].values[:])
+    s1 = Circular(data=data.filter(pl.col("sample") == 1)["θ"].to_numpy())
+    s2 = Circular(data=data.filter(pl.col("sample") == 2)["θ"].to_numpy())
     result = watson_williams_test([s1, s2])
 
     np.testing.assert_approx_equal(result.F, 1.61, significant=3)
@@ -171,9 +172,9 @@ def test_watson_williams_test():
     np.testing.assert_allclose(array_result.pval, result.pval, rtol=1e-6)
 
     data = load_data("D11", source="zar")
-    s1 = Circular(data=data[data["sample"] == 1]["θ"].values[:])
-    s2 = Circular(data=data[data["sample"] == 2]["θ"].values[:])
-    s3 = Circular(data=data[data["sample"] == 3]["θ"].values[:])
+    s1 = Circular(data=data.filter(pl.col("sample") == 1)["θ"].to_numpy())
+    s2 = Circular(data=data.filter(pl.col("sample") == 2)["θ"].to_numpy())
+    s3 = Circular(data=data.filter(pl.col("sample") == 3)["θ"].to_numpy())
 
     result = watson_williams_test([s1, s2, s3])
 
@@ -183,8 +184,8 @@ def test_watson_williams_test():
 
 def test_watson_u2_test():
     d = load_data("D12", source="zar")
-    c0 = Circular(data=d[d["sample"] == 1]["θ"].values[:])
-    c1 = Circular(data=d[d["sample"] == 2]["θ"].values[:])
+    c0 = Circular(data=d.filter(pl.col("sample") == 1)["θ"].to_numpy())
+    c1 = Circular(data=d.filter(pl.col("sample") == 2)["θ"].to_numpy())
     result = watson_u2_test([c0, c1])
 
     np.testing.assert_approx_equal(result.U2, 0.1458, significant=3)
@@ -197,10 +198,10 @@ def test_watson_u2_test():
 
     d = load_data("D13", source="zar")
     c0 = Circular(
-        data=d[d["sample"] == 1]["θ"].values[:], w=d[d["sample"] == 1]["w"].values[:]
+        data=d.filter(pl.col("sample") == 1)["θ"].to_numpy(), w=d.filter(pl.col("sample") == 1)["w"].to_numpy()
     )
     c1 = Circular(
-        data=d[d["sample"] == 2]["θ"].values[:], w=d[d["sample"] == 2]["w"].values[:]
+        data=d.filter(pl.col("sample") == 2)["θ"].to_numpy(), w=d.filter(pl.col("sample") == 2)["w"].to_numpy()
     )
     result = watson_u2_test([c0, c1])
 
@@ -239,8 +240,8 @@ def test_kuiper_two_test():
 
     # grouped data expand consistently with raw angles
     d = load_data("D12", source="zar")
-    c0 = Circular(data=d[d["sample"] == 1]["θ"].values[:])
-    c1 = Circular(data=d[d["sample"] == 2]["θ"].values[:])
+    c0 = Circular(data=d.filter(pl.col("sample") == 1)["θ"].to_numpy())
+    c1 = Circular(data=d.filter(pl.col("sample") == 2)["θ"].to_numpy())
     np.testing.assert_allclose(
         kuiper_two_test([c0, c1]).V, kuiper_two_test([c0.alpha, c1.alpha]).V, rtol=1e-9
     )
@@ -254,8 +255,8 @@ def test_kuiper_two_test():
 
 def test_wheeler_watson_test():
     d = load_data("D12", source="zar")
-    c0 = Circular(data=d[d["sample"] == 1]["θ"].values[:])
-    c1 = Circular(data=d[d["sample"] == 2]["θ"].values[:])
+    c0 = Circular(data=d.filter(pl.col("sample") == 1)["θ"].to_numpy())
+    c1 = Circular(data=d.filter(pl.col("sample") == 2)["θ"].to_numpy())
 
     result = wheeler_watson_test([c0, c1])
     np.testing.assert_approx_equal(result.W, 3.678, significant=3)
@@ -268,8 +269,8 @@ def test_wheeler_watson_test():
 
 def test_wallraff_test():
     d = load_data("D14", source="zar")
-    c0 = Circular(data=d[d["sex"] == "male"]["θ"].values[:])
-    c1 = Circular(data=d[d["sex"] == "female"]["θ"].values[:])
+    c0 = Circular(data=d.filter(pl.col("sex") == "male")["θ"].to_numpy())
+    c1 = Circular(data=d.filter(pl.col("sex") == "female")["θ"].to_numpy())
     result = wallraff_test(samples=[c0, c1], angle=np.deg2rad(135))
     np.testing.assert_approx_equal(result.U, 18.5, significant=3)
     assert result.pval > 0.20
@@ -281,8 +282,8 @@ def test_wallraff_test():
     from pycircstat2.utils import time2float
 
     d = load_data("D15", source="zar")
-    c0 = Circular(data=time2float(d[d["sex"] == "male"]["time"].values[:]))
-    c1 = Circular(data=time2float(d[d["sex"] == "female"]["time"].values[:]))
+    c0 = Circular(data=time2float(d.filter(pl.col("sex") == "male")["time"].to_numpy()))
+    c1 = Circular(data=time2float(d.filter(pl.col("sex") == "female")["time"].to_numpy()))
     result = wallraff_test(
         angle=np.deg2rad(time2float(["7:55", "8:15"])),
         samples=[c0, c1],
@@ -293,7 +294,7 @@ def test_wallraff_test():
 
 
 def test_kuiper_test():
-    d = load_data("B5", source="fisher")["θ"].values[:]
+    d = load_data("B5", source="fisher")["θ"].to_numpy()
     c = Circular(data=d, unit="degree", full_cycle=180)
     result = kuiper_test(alpha=c.alpha)
     np.testing.assert_approx_equal(result.V, 1.5864, significant=3)
@@ -695,7 +696,7 @@ def test_harrison_kanji_vs_pycircstat():
         q = len(np.unique(idq))
         df = pd.DataFrame({fn[0]: idp, fn[1]: idq, "dependent": alpha})
         n = len(df)
-        tr = n * circ_r(np.asarray(df["dependent"].values))
+        tr = n * circ_r(np.asarray(df["dependent"].to_numpy()))
         kk = circ_kappa(tr / n)
 
         # both factors
@@ -730,19 +731,19 @@ def test_harrison_kanji_vs_pycircstat():
             # total effect
             eff_t = n - tr**2 / n
             df_t = n - 1
-            m = cn.values[:].mean()
+            m = cn.to_numpy().mean()
 
             if inter:
                 # correction factor for improved F statistic
                 beta = 1 / (1 - 1 / (5 * kk) - 1 / (10 * (kk**2)))
                 # residual effects
-                eff_r = n - (cr**2.0 / cn).values[:].sum()
+                eff_r = n - (cr**2.0 / cn).to_numpy().sum()
                 df_r = p * q * (m - 1)
                 ms_r = eff_r / df_r
 
                 # interaction effects
                 eff_i = (
-                    (cr**2.0 / cn).values[:].sum()
+                    (cr**2.0 / cn).to_numpy().sum()
                     - sum(qr**2.0 / qn)
                     - sum(pr**2.0 / pn)
                     + tr**2 / n
@@ -789,7 +790,7 @@ def test_harrison_kanji_vs_pycircstat():
             p2 = 1 - stats.chi2.cdf(chi2, df=df_2)
 
             chiI = f * (
-                (cr**2.0 / cn).values[:].sum()
+                (cr**2.0 / cn).to_numpy().sum()
                 - sum(pr**2.0 / pn)
                 - sum(qr**2.0 / qn)
                 + tr**2 / n
@@ -843,7 +844,7 @@ def test_harrison_kanji_vs_pycircstat():
 
     # Compare ANOVA table values (ignoring index differences)
     table_orig_values = table_orig.to_numpy()
-    table_new_values = table_new.to_numpy()
+    table_new_values = table_new.drop("Source").to_numpy()
 
     assert np.allclose(
         table_orig_values, table_new_values, atol=1e-6, equal_nan=True
@@ -1078,7 +1079,7 @@ def test_wheeler_watson_three_samples():
 def test_kuiper_test_asymptotic():
     """Asymptotic mode (n_resamples=0) returns a valid p-value close to the
     Monte-Carlo one."""
-    d = load_data("B5", source="fisher")["θ"].values[:]
+    d = load_data("B5", source="fisher")["θ"].to_numpy()
     c = Circular(data=d, unit="degree", full_cycle=180)
     asymp = kuiper_test(alpha=c.alpha, n_resamples=0)
     sim = kuiper_test(alpha=c.alpha, n_resamples=9999)
@@ -1118,9 +1119,9 @@ def test_harrison_kanji_inter_false():
     assert 0.0 <= p_a <= 1.0 and 0.0 <= p_b <= 1.0
 
     table = result.anova_table
-    assert list(table.index) == ["A", "B", "Interaction", "Residual", "Total"]
+    assert table["Source"].to_list() == ["A", "B", "Interaction", "Residual", "Total"]
     p, q = len(np.unique(idp)), len(np.unique(idq))
-    assert table.loc["Residual", "DoF"] == (p - 1) * (q - 1)
+    assert table.filter(pl.col("Source") == "Residual")["DoF"].item() == (p - 1) * (q - 1)
 
 
 def test_one_sample_test_rejects_distant_angle():
@@ -1156,7 +1157,7 @@ def test_symmetry_test_default_median():
     from pycircstat2.descriptive import circ_median
 
     data_zar_ex6_ch27 = load_data("D9", source="zar")
-    alpha = Circular(data=data_zar_ex6_ch27["θ"].values[:], unit="degree").alpha
+    alpha = Circular(data=data_zar_ex6_ch27["θ"].to_numpy(), unit="degree").alpha
     auto = symmetry_test(alpha)
     explicit = symmetry_test(alpha, median=float(circ_median(alpha)))
     np.testing.assert_allclose(auto.statistic, explicit.statistic, rtol=1e-9)
@@ -1270,7 +1271,7 @@ def test_common_median_randomization():
     """common_median_test randomization reproduces the book's ant-data result and
     the χ² asymptotic value (Pewsey et al. 2013, §7.3.2; data = B10)."""
     df = load_data("B10", source="fisher")  # desert-ant directions, 3 groups
-    groups = [np.deg2rad(df[df["set"] == s]["θ"].values.astype(float)) for s in (1, 2, 3)]
+    groups = [np.deg2rad(df.filter(pl.col("set") == s)["θ"].to_numpy().astype(float)) for s in (1, 2, 3)]
 
     asy = common_median_test(groups)
     assert asy.method == "asymptotic"
@@ -1290,8 +1291,8 @@ def test_watson_u2_randomization():
     """watson_u2_test randomization reproduces the book's ant-data result
     (control vs 2nd treatment; Pewsey et al. 2013, §7.5.5; data = B10)."""
     df = load_data("B10", source="fisher")
-    s1 = np.deg2rad(df[df["set"] == 1]["θ"].values.astype(float))
-    s3 = np.deg2rad(df[df["set"] == 3]["θ"].values.astype(float))
+    s1 = np.deg2rad(df.filter(pl.col("set") == 1)["θ"].to_numpy().astype(float))
+    s3 = np.deg2rad(df.filter(pl.col("set") == 3)["θ"].to_numpy().astype(float))
 
     rnd = watson_u2_test([s1, s3], n_resamples=9999, seed=1)
     assert rnd.method == "randomization" and rnd.n_resamples == 9999
@@ -1308,7 +1309,7 @@ def test_wheeler_watson_randomization_with_ties():
     """wheeler_watson_test now handles tied data via midranks, and its randomization
     p-value tracks the χ² approximation (Pewsey et al. 2013, §7.5.3; data = B10)."""
     df = load_data("B10", source="fisher")  # ant data, 3 groups, contains ties
-    groups = [np.deg2rad(df[df["set"] == s]["θ"].values.astype(float)) for s in (1, 2, 3)]
+    groups = [np.deg2rad(df.filter(pl.col("set") == s)["θ"].to_numpy().astype(float)) for s in (1, 2, 3)]
 
     asy = wheeler_watson_test(groups)  # previously crashed on ties
     rnd = wheeler_watson_test(groups, n_resamples=9999, seed=1)
@@ -1359,7 +1360,7 @@ def test_symmetry_test_pewsey():
     matches R's `circular` package and the bootstrap reproduces the book's cross-bed
     azimuth result (Pewsey et al. 2013, §5.2; data = B6/set1)."""
     b6 = load_data("B6", source="fisher")
-    s1 = np.deg2rad(b6[b6["set"] == 1]["θ"].values.astype(float))
+    s1 = np.deg2rad(b6.filter(pl.col("set") == 1)["θ"].to_numpy().astype(float))
 
     large = symmetry_test(s1, method="pewsey")
     assert large.method == "pewsey"
@@ -1386,7 +1387,7 @@ def test_one_sample_specified_mean():
 
     # B1 intensive-care times with the proper hh:mm -> decimal-hour conversion (== R's
     # fisherB1c). NB: the book's published 9.126e-5 used raw fisherB1 (8.45-as-decimal).
-    b1 = time2float(load_data("B1", source="fisher")["time"].values) * 2 * np.pi / 24
+    b1 = time2float(load_data("B1", source="fisher")["time"].to_numpy()) * 2 * np.pi / 24
 
     r = one_sample_test(angle=3.9270, alpha=b1, symmetric=True)  # H0: mean = 15:00
     assert r.method == "asymptotic"
@@ -1439,7 +1440,7 @@ def test_mc_uniform_pvalues():
     assert v_a.method == "asymptotic" and v_m.method == "monte_carlo" and v_m.n_resamples == 9999
     assert abs(v_a.pval - v_m.pval) < 0.02
 
-    d8 = Circular(data=load_data("D8", source="zar")["θ"].values[:], unit="degree")
+    d8 = Circular(data=load_data("D8", source="zar")["θ"].to_numpy(), unit="degree")
     o_m = omnibus_test(d8.alpha, n_resamples=9999, seed=1)
     assert o_m.method == "monte_carlo" and o_m.pval < 0.05  # book/asymptotic ~0.0043
     # MC handles the degenerate (maximally uniform) case the analytic formula clamps.

@@ -585,8 +585,8 @@ wheels = [
 
 [[package]]
 name = "hea"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.3"
+source = { editable = "../hea" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -597,9 +597,27 @@ dependencies = [
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/47/a0/8c51cf9fb94ff12742b5ca418b4df26022283c10ce0d6da49a697d8aba66/hea-0.1.2.tar.gz", hash = "sha256:6f3a2ead1b7705a31b3c91f99b8d14fece60cf7d3b88a91b22233103d787cba5", size = 41589870, upload-time = "2026-05-05T10:37:39.929Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/ec/607eed39dd02363ad42ca2db9131732bd42591a859d50ca584898f1a52a4/hea-0.1.2-py3-none-any.whl", hash = "sha256:fb96f553ad9bacf683672696d7e38389bc6e2382351884b33580d17d1acc62cc", size = 377775, upload-time = "2026-05-05T10:37:37.643Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "matplotlib", specifier = ">=3.10.0" },
+    { name = "numpy", specifier = ">=2.2.2" },
+    { name = "polars", specifier = "==1.40.1" },
+    { name = "pyarrow", specifier = ">=24.0.0" },
+    { name = "rdatasets", specifier = ">=0.2.10" },
+    { name = "scikit-sparse", marker = "extra == 'fast'", specifier = ">=0.5.0" },
+    { name = "scipy", specifier = ">=1.15.1" },
+]
+provides-extras = ["fast"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "flake8", specifier = ">=7.1.1" },
+    { name = "ipykernel", specifier = ">=7.2.0" },
+    { name = "nbconvert", specifier = ">=7.17.1" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ruff", specifier = ">=0.15.13" },
 ]
 
 [[package]]
@@ -1821,8 +1839,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "polars" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -1834,7 +1851,8 @@ dev = [
     { name = "mkdocs-material" },
     { name = "mkdocs-material-extensions" },
     { name = "mkdocstrings", extra = ["python"] },
-    { name = "polars" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "watermark" },
@@ -1842,7 +1860,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hea", specifier = ">=0.1.2" },
+    { name = "hea", editable = "../hea" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.31.0" },
     { name = "matplotlib" },
     { name = "mkdocs", marker = "extra == 'dev'" },
@@ -1850,8 +1868,8 @@ requires-dist = [
     { name = "mkdocs-material-extensions", marker = "extra == 'dev'" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'dev'" },
     { name = "numpy" },
-    { name = "pandas" },
-    { name = "polars", marker = "extra == 'dev'" },
+    { name = "pandas", marker = "extra == 'dev'" },
+    { name = "polars" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
