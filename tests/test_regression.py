@@ -511,7 +511,8 @@ def test_lc_marker_matches_explicit():
         list(explicit.result["coefficients"].values()),
         atol=1e-10,
     )
-    assert marker.expanded_formula == explicit.expanded_formula
+    # marker lowers to hea's harmonic() term, explicit writes cos/sin directly:
+    # different design-column names, identical fit and harmonic decomposition.
     np.testing.assert_allclose(
         [h["amplitude"] for h in marker.result["harmonics"]],
         [h["amplitude"] for h in explicit.result["harmonics"]],
@@ -607,7 +608,7 @@ def test_lc_accepts_unicode_identifiers():
     df = _lung_dataframe(drop_feb_outliers=True)
     df_unicode = df.rename({"theta": "θ"})
     m = LCRegression("y ~ harmonic(θ, k=2)", df_unicode)
-    assert m.expanded_formula == "y ~ cos(θ) + sin(θ) + cos(2*θ) + sin(2*θ)"
+    assert "harmonic(θ, k=2" in m.expanded_formula  # lowered to hea's harmonic() term
     assert np.isclose(m.result["r_squared"], 0.9094, atol=1e-3)
     assert all(h["variable"] == "θ" for h in m.result["harmonics"])
 
@@ -647,10 +648,11 @@ def test_lc_plot_with_extra_covariate_holds_at_mean():
     # At the curve midpoint of θ, the value should match the analytical
     # "fit at theta=π, temp=mean" prediction within numerical tolerance.
     coefs = m.result["coefficients"]
+    h = m.result["harmonics"][0]
     expected_at_pi = (
         coefs["(Intercept)"]
-        + coefs["cos(theta)"] * np.cos(np.pi)
-        + coefs["sin(theta)"] * np.sin(np.pi)
+        + h["cos_coef"] * np.cos(np.pi)
+        + h["sin_coef"] * np.sin(np.pi)
         + coefs["temp"] * float(temp.mean())
     )
     idx = np.argmin(np.abs(xs - np.pi))

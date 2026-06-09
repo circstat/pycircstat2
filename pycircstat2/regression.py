@@ -5,7 +5,6 @@ from typing import Iterable, List, Optional, Tuple, Union
 import numpy as np
 import polars as pl
 from hea.models import lm as _hea_lm
-from scipy.linalg import lstsq
 from scipy.special import i0e
 from scipy.stats import chi2, norm, t as student_t
 
@@ -43,6 +42,36 @@ def _safe_inverse(matrix: np.ndarray) -> np.ndarray:
         return np.linalg.inv(matrix)
     except np.linalg.LinAlgError:
         return np.linalg.pinv(matrix)
+
+
+def _ravel(v) -> np.ndarray:
+    """Flatten an ``hea.lm`` output (polars frame or ndarray) to 1-D float."""
+    if isinstance(v, pl.DataFrame):
+        return v.to_numpy().ravel()
+    return np.asarray(v, dtype=float).ravel()
+
+
+def _harmonic_block_order(by_name: dict, feats: list, order: int) -> np.ndarray:
+    """Reorder per-coefficient values keyed by hea coefficient name into the
+    legacy CCRegression design order ``[intercept | cos-block | sin-block]``,
+    each block feature-major then harmonic-minor. ``by_name`` maps a name
+    (``"(Intercept)"`` or ``harmonic(<var>, k=…, period=…)cos{j}``) → value; the
+    ``cos{j}``/``sin{j}`` suffix makes the reorder robust to hea's interleaved
+    column order. (``_LC_HARMONIC_COEF_RE`` is defined in the LC markers below.)
+    """
+    lut: dict = {}
+    intercept = 0.0
+    for name, val in by_name.items():
+        if name == "(Intercept)":
+            intercept = float(val)
+            continue
+        m = _LC_HARMONIC_COEF_RE.match(name)
+        if m:
+            lut[(m.group("var"), m.group("trig"), int(m.group("order")))] = float(val)
+    out = [intercept]
+    out += [lut[(f, "cos", k)] for f in feats for k in range(1, order + 1)]
+    out += [lut[(f, "sin", k)] for f in feats for k in range(1, order + 1)]
+    return np.asarray(out, dtype=float)
 
 
 class CLRegression:
@@ -981,63 +1010,70 @@ class CCRegression:
         X = data[x_cols].to_numpy()
         return theta, X, x_cols
 
-    def _design_matrix(self, x: np.ndarray) -> np.ndarray:
-        """Harmonic design matrix [1 | cos(kx_j) | sin(kx_j)] for given x."""
-        if x.ndim == 1:
-            x = x[:, None]
-        n, n_features = x.shape
-        cos_terms, sin_terms = [], []
-        for j in range(n_features):
-            for k in range(1, self.order + 1):
-                cos_terms.append(np.cos(k * x[:, j]))
-                sin_terms.append(np.sin(k * x[:, j]))
-        return np.column_stack([np.ones(n)] + cos_terms + sin_terms)
-
     def _fit(self):
         n = self.x.shape[0]
         order = self.order
         n_features = self.x.shape[1]
+        feats = list(self.feature_names)
 
-        # Track which (feature, harmonic) each design column corresponds to.
-        cos_labels: List[Tuple[int, int]] = []
-        sin_labels: List[Tuple[int, int]] = []
-        for j in range(n_features):
-            for k in range(1, order + 1):
-                cos_labels.append((j, k))
-                sin_labels.append((j, k))
+        # (feature, harmonic) labels for each cos/sin block column.
+        cos_labels: List[Tuple[int, int]] = [
+            (j, k) for j in range(n_features) for k in range(1, order + 1)
+        ]
+        sin_labels = list(cos_labels)
 
         Y_cos = np.cos(self.theta)
         Y_sin = np.sin(self.theta)
 
-        X = self._design_matrix(self.x)
-        beta_cos, _, _, _ = lstsq(X, Y_cos)
-        beta_sin, _, _, _ = lstsq(X, Y_sin)
+        # Two OLS fits via hea.lm on a harmonic design (period=2π — x is angular):
+        # the cos/sin embedding of the circular response. β/SE are reordered from
+        # hea's interleaved columns into the legacy [intercept | cos-block |
+        # sin-block] order via the cos{j}/sin{j} suffixes. The circular reassembly
+        # (μ̂, ρ, residual κ̂, higher-order test) stays here in pycircstat2.
+        df_fit = pl.DataFrame(
+            {**{f: self.x[:, i] for i, f in enumerate(feats)},
+             "cos_t": Y_cos, "sin_t": Y_sin}
+        )
+        rhs = " + ".join(
+            f"harmonic({f}, k={order}, period={2 * np.pi})" for f in feats
+        )
+        self._lm_cos = _hea_lm(f"cos_t ~ {rhs}", df_fit)
+        self._lm_sin = _hea_lm(f"sin_t ~ {rhs}", df_fit)
+        self._feature_cols = feats
 
-        # Fitted values
-        cos_fit = X @ beta_cos
-        sin_fit = X @ beta_sin
+        beta_cos = _harmonic_block_order(
+            dict(zip(self._lm_cos.bhat.columns, self._lm_cos.bhat.row(0))), feats, order
+        )
+        beta_sin = _harmonic_block_order(
+            dict(zip(self._lm_sin.bhat.columns, self._lm_sin.bhat.row(0))), feats, order
+        )
+
+        cos_fit = _ravel(self._lm_cos.yhat)
+        sin_fit = _ravel(self._lm_sin.yhat)
         fitted = np.mod(np.arctan2(sin_fit, cos_fit), 2 * np.pi)
 
         # Residuals (angular for diagnostics + raw OLS residuals on cos/sin)
         residuals = np.angle(np.exp(1j * (self.theta - fitted)))
-        residual_cos = Y_cos - cos_fit
-        residual_sin = Y_sin - sin_fit
+        residual_cos = _ravel(self._lm_cos.residuals)
+        residual_sin = _ravel(self._lm_sin.residuals)
 
         # Circular correlation coefficient
         rho = float(np.clip(np.sqrt(np.mean(cos_fit**2 + sin_fit**2)), 0.0, 1.0))
 
-        # Per-coefficient OLS SEs for the cos/sin sub-models. Used by summary()
-        # to print a CL/LC-style coefficient table; not part of the R parity
-        # surface (lm.circular.cc returns only the coefficient matrix).
-        XtX_inv = _safe_inverse(X.T @ X)
-        diag_inv = np.maximum(np.diag(XtX_inv), 0.0)
-        df_resid = max(n - X.shape[1], 1)
-        sigma2_cos = float(residual_cos @ residual_cos) / df_resid
-        sigma2_sin = float(residual_sin @ residual_sin) / df_resid
-        se_beta_cos = np.sqrt(sigma2_cos * diag_inv)
-        se_beta_sin = np.sqrt(sigma2_sin * diag_inv)
+        # Per-coefficient SEs straight from each lm's covariance (V_bhat =
+        # σ̂²(XᵀX)⁻¹), reordered to the same block order as the coefficients.
+        def _se_by_name(lm_fit):
+            cov = np.asarray(lm_fit.V_bhat, dtype=float)
+            return {nm: float(np.sqrt(max(cov[i, i], 0.0)))
+                    for i, nm in enumerate(lm_fit.column_names)}
 
-        # Test higher-order terms
+        se_beta_cos = _harmonic_block_order(_se_by_name(self._lm_cos), feats, order)
+        se_beta_sin = _harmonic_block_order(_se_by_name(self._lm_sin), feats, order)
+        df_resid = max(n - (1 + 2 * n_features * order), 1)
+
+        # Higher-order test (Jammalamadaka & Sengupta 2001): do the order+1
+        # harmonics add signal? Uses the fitted design's hat matrix (projection
+        # is column-order-invariant, so hea's interleaved X is fine) + residuals.
         higher_order_cos = []
         higher_order_sin = []
         for j in range(n_features):
@@ -1049,12 +1085,10 @@ class CCRegression:
         else:
             W = np.empty((n, 0))
 
-        # Projection matrix for the current model
         if W.size:
-            M = X @ XtX_inv @ X.T
-            H = W.T @ (np.eye(n) - M) @ W
-            H_inv = _safe_inverse(H)
-            N = W @ H_inv @ W.T
+            X = np.asarray(self._lm_cos.X.to_numpy(), dtype=float)
+            M = X @ _safe_inverse(X.T @ X) @ X.T
+            N = W @ _safe_inverse(W.T @ (np.eye(n) - M) @ W) @ W.T
 
             denom_cos = float(residual_cos @ residual_cos)
             denom_sin = float(residual_sin @ residual_sin)
@@ -1143,9 +1177,11 @@ class CCRegression:
                 f"{x_arr.shape[1]}."
             )
         x_arr = np.mod(x_arr, 2 * np.pi)
-        design = self._design_matrix(x_arr)
-        cos_pred = design @ self.result["coefficients"]["cos"]
-        sin_pred = design @ self.result["coefficients"]["sin"]
+        newdata = pl.DataFrame(
+            {f: x_arr[:, i] for i, f in enumerate(self._feature_cols)}
+        )
+        cos_pred = _ravel(self._lm_cos.predict(newdata=newdata))
+        sin_pred = _ravel(self._lm_sin.predict(newdata=newdata))
         return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
 
     def plot(
@@ -1311,8 +1347,17 @@ _LC_HARMONIC_RE = re.compile(
     rf"harmonic\s*\(\s*({_LC_IDENT})\s*(?:,\s*(?:k\s*=\s*)?(\d+)\s*)?\)"
 )
 _LC_UNSUPPORTED_RE = re.compile(r"\b(skew|flat)\s*\(")
-# Coefficient-name pattern as emitted by hea: e.g. "cos(theta)",
-# "sin(2 * theta)", or "cos(theta * 2)" — multiplier may appear on either side.
+# Coefficient-name pattern as emitted by hea's ``harmonic()`` term, e.g.
+# "harmonic(theta, 2, period = 6.283185307179586)cos1". The (var, order, cos|sin)
+# structure is read straight off the wrapper + the ``cos{j}``/``sin{j}`` suffix —
+# no fragile multiplier parsing.
+_LC_HARMONIC_COEF_RE = re.compile(
+    rf"^harmonic\(\s*(?P<var>{_LC_IDENT})\s*,\s*(?:k\s*=\s*)?\d+\s*,\s*period\s*=\s*[^)]+\)"
+    rf"(?P<trig>cos|sin)(?P<order>\d+)$"
+)
+# Explicit cos/sin coefficient names, for formulas that write the trig terms
+# directly ("y ~ cos(theta) + sin(theta)") instead of via harmonic():
+# "cos(theta)", "sin(2 * theta)", "cos(theta * 2)" — multiplier on either side.
 _LC_TRIG_RE = re.compile(
     rf"^(cos|sin)\(\s*"
     rf"(?:(?P<lmult>\d+)\s*\*\s*(?P<lvar>{_LC_IDENT})"
@@ -1414,13 +1459,11 @@ class LCRegression:
             k = int(match.group(2)) if match.group(2) else 1
             if k < 1:
                 raise ValueError(f"harmonic(..., k={k}): k must be a positive integer.")
-            terms = []
-            for j in range(1, k + 1):
-                if j == 1:
-                    terms.append(f"cos({col}) + sin({col})")
-                else:
-                    terms.append(f"cos({j}*{col}) + sin({j}*{col})")
-            return " + ".join(terms)
+            # Lower to hea's native ``harmonic()`` term (hea 0.1.3) with explicit
+            # ``k=`` so the expanded formula reads ``harmonic(θ, k=2, period=…)``;
+            # circular predictors are angles in radians, so the period is always
+            # 2π — hard-coded here, never user-facing.
+            return f"harmonic({col}, k={k}, period={2 * np.pi})"
 
         expanded_rhs = _LC_HARMONIC_RE.sub(_expand, rhs)
         return f"{lhs.strip()} ~ {expanded_rhs.strip()}"
@@ -1438,16 +1481,20 @@ class LCRegression:
         # Group cos/sin terms by (variable, multiplier).
         groups: dict = {}
         for name, value in coefficients.items():
-            m = _LC_TRIG_RE.match(name)
-            if not m:
-                continue
-            func = m.group(1)
-            if m.group("lvar") is not None:
-                var = m.group("lvar")
-                k = int(m.group("lmult"))
+            m = _LC_HARMONIC_COEF_RE.match(name)
+            if m:
+                func, var, k = m.group("trig"), m.group("var"), int(m.group("order"))
             else:
-                var = m.group("rvar")
-                k = int(m.group("rmult")) if m.group("rmult") else 1
+                # explicit cos()/sin() terms written directly in the formula
+                m = _LC_TRIG_RE.match(name)
+                if not m:
+                    continue
+                func = m.group(1)
+                if m.group("lvar") is not None:
+                    var, k = m.group("lvar"), int(m.group("lmult"))
+                else:
+                    var = m.group("rvar")
+                    k = int(m.group("rmult")) if m.group("rmult") else 1
             slot = groups.setdefault((var, k), {})
             slot[func] = (name, value)
 
