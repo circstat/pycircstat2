@@ -511,8 +511,8 @@ def test_lc_marker_matches_explicit():
         list(explicit.result["coefficients"].values()),
         atol=1e-10,
     )
-    # marker lowers to hea's harmonic() term, explicit writes cos/sin directly:
-    # different design-column names, identical fit and harmonic decomposition.
+    # marker expands to the same explicit cos/sin terms (identical fit and
+    # harmonic decomposition); the marker is shorthand for the explicit form.
     np.testing.assert_allclose(
         [h["amplitude"] for h in marker.result["harmonics"]],
         [h["amplitude"] for h in explicit.result["harmonics"]],
@@ -608,7 +608,7 @@ def test_lc_accepts_unicode_identifiers():
     df = _lung_dataframe(drop_feb_outliers=True)
     df_unicode = df.rename({"theta": "θ"})
     m = LCRegression("y ~ harmonic(θ, k=2)", df_unicode)
-    assert "harmonic(θ, k=2" in m.expanded_formula  # lowered to hea's harmonic() term
+    assert "cos(θ)" in m.expanded_formula  # expands to explicit cos/sin terms
     assert np.isclose(m.result["r_squared"], 0.9094, atol=1e-3)
     assert all(h["variable"] == "θ" for h in m.result["harmonics"])
 
@@ -673,3 +673,173 @@ def test_lc_summary_includes_lm_block_and_harmonic_table(capsys):
     assert "Harmonic decomposition" in out
     assert "amplitude" in out
     assert "phase" in out
+
+
+# --- A.1: GAM backend (smooth-term dispatch) ---------------------------------
+
+
+def _smooth_lc_data(n: int = 160, seed: int = 2) -> "pl.DataFrame":
+    """Linear response over a circular predictor (LC), smooth in θ."""
+    rng = np.random.default_rng(seed)
+    x = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    y = 2 * np.sin(x) + 0.5 * np.cos(2 * x) + rng.normal(0, 0.3, n)
+    return pl.DataFrame({"x": x, "y": y})
+
+
+def _smooth_cc_data(n: int = 160, seed: int = 4) -> "pl.DataFrame":
+    """Circular response with a cyclic-in-x mean direction (CC)."""
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 2 * np.pi, n)
+    theta = np.mod(x + 0.6 * np.sin(x) + 0.25 * rng.standard_normal(n), 2 * np.pi)
+    return pl.DataFrame({"x": x, "theta": theta})
+
+
+def test_lc_gam_dispatch_on_smooth_term():
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    assert m.backend == "gam"
+    assert m.lm_fit is None and m.gam_fit is not None
+    # smooth backend → no harmonic decomposition, but edf + fit metrics present
+    assert m.result["harmonics"] == []
+    assert m.result["edf_total"] > 1.0
+    assert "s(x)" in m.result["edf_by_smooth"]
+    assert 0.0 < m.result["deviance_explained"] <= 1.0
+    n = df.height
+    assert m.result["fitted"].shape == (n,)
+    assert m.result["residuals"].shape == (n,)
+
+
+def test_lc_parametric_still_uses_lm():
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ harmonic(x, k=2)", df)
+    assert m.backend == "lm"
+    assert m.gam_fit is None and m.lm_fit is not None
+    assert len(m.result["harmonics"]) == 2
+
+
+def test_lc_gam_cyclic_period_continuity():
+    """A cc smooth wraps at the period: f(0) == f(2π)."""
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    ends = m.predict(pl.DataFrame({"x": [0.0, 2 * np.pi]}))
+    assert np.isclose(ends[0], ends[1], atol=1e-6)
+
+
+def test_lc_gam_predict_matches_in_sample_fit():
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    pred = m.predict(df.select("x"))
+    assert np.allclose(pred, m.result["fitted"], atol=1e-6)
+
+
+def test_lc_gam_knots_rejected_on_parametric_formula():
+    df = _smooth_lc_data()
+    with pytest.raises(ValueError, match="smooth"):
+        LCRegression("y ~ harmonic(x)", df, knots={"x": [0.0, 2 * np.pi]})
+
+
+def test_lc_gam_plot_two_panels_and_polar():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Fit overlay" in titles
+    assert "Residuals vs fitted" in titles
+    figp = m.plot(polar=True)
+    overlay = next(ax for ax in figp.axes if ax.get_title() == "Fit overlay")
+    assert overlay.name == "polar"
+
+
+def test_lc_gam_summary_shows_smooth_block(capsys):
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    m.summary()
+    out = capsys.readouterr().out
+    assert "Linear-Circular Regression" in out
+    # mgcv-style gam block printed by hea.gam.summary()
+    assert "smooth terms" in out
+
+
+def test_cc_gam_dispatch_and_result():
+    df = _smooth_cc_data()
+    m = CCRegression("theta ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    assert m.backend == "gam"
+    # no harmonic coefficients / no higher-order χ² test on the smooth backend
+    assert m.result["coefficients"] is None
+    assert np.all(np.isnan(m.result["p_values"]))
+    assert set(m.result["edf_total"]) == {"cos", "sin"}
+    assert 0.0 <= m.result["rho"] <= 1.0
+    assert np.isfinite(m.result["kappa"])
+    assert m.result["fitted"].shape == (df.height,)
+
+
+def test_cc_gam_predict_is_circular_and_cyclic():
+    df = _smooth_cc_data()
+    m = CCRegression("theta ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    pred = m.predict(np.array([0.0, 2 * np.pi]))
+    assert np.all((pred >= 0) & (pred < 2 * np.pi + 1e-9))
+    # cyclic smooths → μ̂(0) == μ̂(2π) (allowing a wrap of exactly 2π)
+    gap = abs(pred[0] - pred[1])
+    assert min(gap, 2 * np.pi - gap) < 1e-3
+
+
+def test_cc_gam_plot_and_summary(capsys):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df = _smooth_cc_data()
+    m = CCRegression("theta ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    fig = m.plot()
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "Fit overlay" in titles
+    m.summary()
+    out = capsys.readouterr().out
+    assert "gam backend" in out
+    assert "rho" in out.lower()
+
+
+def test_cc_gam_knots_rejected_on_parametric():
+    df = _smooth_cc_data()
+    with pytest.raises(ValueError, match="smooth"):
+        CCRegression(
+            theta=df["theta"].to_numpy(),
+            x=df["x"].to_numpy(),
+            knots={"x": [0.0, 2 * np.pi]},
+        )
+
+
+def test_lc_gam_cyclic_knots_default_to_period():
+    """A cyclic smooth wraps at [0, 2π] without the caller passing knots —
+    identical to the explicit knots, and f(0) == f(2π)."""
+    df = _smooth_lc_data()
+    auto = LCRegression("y ~ s(x, bs='cc')", df)
+    explicit = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    assert np.allclose(auto.result["fitted"], explicit.result["fitted"], atol=1e-9)
+    ends = auto.predict(pl.DataFrame({"x": [0.0, 2 * np.pi]}))
+    assert np.isclose(ends[0], ends[1], atol=1e-6)
+
+
+def test_lc_gam_knots_override_period():
+    """An explicit knots= overrides the default circular period."""
+    df = _smooth_lc_data()
+    default = LCRegression("y ~ s(x, bs='cc')", df)
+    other = LCRegression("y ~ s(x, bs='cc')", df, knots={"x": [0.0, 12.0]})
+    assert not np.allclose(default.result["fitted"], other.result["fitted"])
+
+
+def test_lc_noncyclic_smooth_gets_no_default_knots():
+    """Only cyclic bases get the [0, 2π] default; a plain smooth fits fine."""
+    df = _smooth_lc_data()
+    m = LCRegression("y ~ s(x)", df)
+    assert m.backend == "gam"
+    assert m.result["edf_total"] > 1.0
+
+
+def test_cc_gam_cyclic_knots_default_to_period():
+    df = _smooth_cc_data()
+    auto = CCRegression("theta ~ s(x, bs='cc')", df)
+    explicit = CCRegression("theta ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
+    assert np.allclose(auto.result["fitted"], explicit.result["fitted"], atol=1e-9)

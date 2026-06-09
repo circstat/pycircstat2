@@ -35,14 +35,6 @@ dev = [
 packages = {find = {}}
 include-package-data = true
 
-# Dev-only source override: build/iterate against the local editable hea
-# (branch `knots`, 0.1.3) so the GAM/knots work and the hea.models API are
-# available before hea 0.1.3 is published to PyPI. This is NOT part of the
-# published wheel metadata — end users resolve `hea>=0.1.3` from PyPI per
-# [project.dependencies]. Publish hea 0.1.3 before releasing pycircstat2.
-[tool.uv.sources]
-hea = { path = "../hea", editable = true }
-
 [tool.pytest.ini_options]
 # Only collect the project's own tests; skip the vendored reference copy of the
 # original pycircstat under dev/ref (it depends on `nose`).

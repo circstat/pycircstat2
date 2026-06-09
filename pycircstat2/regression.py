@@ -4,7 +4,7 @@ from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
-from hea.models import lm as _hea_lm
+from hea.models import gam as _hea_gam, lm as _hea_lm
 from scipy.special import i0e
 from scipy.stats import chi2, norm, t as student_t
 
@@ -72,6 +72,99 @@ def _harmonic_block_order(by_name: dict, feats: list, order: int) -> np.ndarray:
     out += [lut[(f, "cos", k)] for f in feats for k in range(1, order + 1)]
     out += [lut[(f, "sin", k)] for f in feats for k in range(1, order + 1)]
     return np.asarray(out, dtype=float)
+
+
+# --- backend dispatch: parametric (hea.lm) vs smooth (hea.gam) ---------------
+# A smooth term — s()/te()/ti()/t2(), mgcv's smooth constructors — routes the
+# fit to ``hea.models.gam`` (a penalized REML/GCV smooth); a purely parametric
+# RHS (``harmonic()`` / ``cos()+sin()`` / linear) stays on ``hea.models.lm``.
+# GAM is a *basis/backend axis, not a taxonomy axis*: a cyclic smooth is the
+# nonparametric counterpart of a harmonic on the same (response, predictor)
+# category, so it folds into LC/CC rather than a separate class. The ``\b``
+# keeps the trailing ``s(`` of ``cos(``/``sin(`` from matching the ``s`` smooth
+# constructor (no word boundary between ``o`` and ``s``).
+_SMOOTH_RE = re.compile(r"\b(?:s|te|ti|t2)\s*\(")
+_SMOOTH_VAR_RE = re.compile(r"\b(?:s|te|ti|t2)\s*\(\s*([^\W\d_]\w*)")
+
+
+def _has_smooth(formula: str) -> bool:
+    """True if the formula RHS contains a smooth term (→ gam backend)."""
+    rhs = formula.split("~", 1)[1] if "~" in formula else formula
+    return bool(_SMOOTH_RE.search(rhs))
+
+
+def _smooth_vars(rhs: str) -> List[str]:
+    """First-argument variable of each smooth term, in formula order."""
+    return [m.group(1) for m in _SMOOTH_VAR_RE.finditer(rhs)]
+
+
+# Cyclic smooth bases (mgcv): bs='cc' (cyclic cubic) / bs='cp' (cyclic p-spline).
+# Their boundary knots set the *period*; for circular predictors that is 2π, so
+# LC/CC supply it by default. hea stays general — mgcv defaults cyclic knots to
+# the data range, which collapses f(0)=f(period) for angles (the lung-deaths
+# Dec≡Jan bug). This default is pycircstat2's circular knowledge, not hea's.
+_SMOOTH_TERM_RE = re.compile(r"\b(?:s|te|ti|t2)\s*\(([^)]*)\)")
+_CYCLIC_BS_RE = re.compile(r"""bs\s*=\s*['"](?:cc|cp)['"]""")
+_TERM_VAR_RE = re.compile(r"\s*([^\W\d_]\w*)")
+
+
+def _cyclic_smooth_vars(rhs: str) -> List[str]:
+    """Variables of cyclic smooths (``bs='cc'``/``'cp'``) in a formula RHS."""
+    out = []
+    for m in _SMOOTH_TERM_RE.finditer(rhs):
+        body = m.group(1)
+        if _CYCLIC_BS_RE.search(body):
+            vm = _TERM_VAR_RE.match(body)
+            if vm:
+                out.append(vm.group(1))
+    return out
+
+
+def _resolve_cyclic_knots(formula: str, user_knots: Optional[dict]) -> Optional[dict]:
+    """Default each cyclic smooth's boundary knots to the circular period
+    ``[0, 2π]`` so callers need not spell it out; explicit ``user_knots`` win
+    per variable. Returns ``None`` when there is nothing to set.
+    """
+    rhs = formula.split("~", 1)[1] if "~" in formula else formula
+    merged = {v: [0.0, 2 * np.pi] for v in _cyclic_smooth_vars(rhs)}
+    if user_knots:
+        merged.update(user_knots)
+    return merged or None
+
+
+def _gam_predict_ci(gam_fit, newdata: "pl.DataFrame", level: float):
+    """Point prediction + Wald confidence band from an ``hea.gam`` fit.
+
+    Returns ``(yhat, lo, hi)`` on the response scale; ``lo``/``hi`` are ``None``
+    when ``level`` is falsy. The band is ``fit ± z·se.fit`` with the Gaussian
+    quantile — mgcv's default across-the-function smooth confidence interval.
+    """
+    pred = gam_fit.predict(newdata=newdata, se_fit=bool(level))
+    yhat = np.asarray(pred["fit"].to_numpy(), dtype=float)
+    if not level:
+        return yhat, None, None
+    se = np.asarray(pred["se.fit"].to_numpy(), dtype=float)
+    z = float(norm.ppf(0.5 + level / 2.0))
+    return yhat, yhat - z * se, yhat + z * se
+
+
+def _two_panel_axes(plt, figsize, polar: bool, axes):
+    """Create or validate the (overlay, residual) axis pair for a fit plot.
+
+    When the caller supplies no axes, the overlay (left) axis is made polar
+    iff ``polar``; the residual (right) axis is always cartesian. A
+    caller-provided ``axes`` pair is used as-is (the caller owns its
+    projection).
+    """
+    if axes is None:
+        fig = plt.figure(figsize=figsize or (11, 4.5))
+        ax0 = fig.add_subplot(1, 2, 1, projection="polar" if polar else None)
+        ax1 = fig.add_subplot(1, 2, 2)
+        return fig, ax0, ax1
+    axes = list(axes)
+    if len(axes) != 2:
+        raise ValueError("`axes` must be a sequence of length 2.")
+    return axes[0].figure, axes[0], axes[1]
 
 
 class CLRegression:
@@ -867,7 +960,10 @@ class CCRegression:
     """
     Circular-Circular Regression.
 
-    Fits a circular response to circular predictors using a specified order of harmonics.
+    Fits a circular response to circular predictors. A harmonic formula
+    (``"theta ~ psi"``, ``order=K``) uses two ``hea.lm`` fits; a **smooth**
+    formula (``"theta ~ s(psi, bs='cc')"``) dispatches to two ``hea.gam`` fits
+    on the cos/sin embedding — the nonparametric counterpart.
 
     Parameters
     ----------
@@ -877,8 +973,16 @@ class CCRegression:
         A numpy array of circular predictor values in radians.
     order : int, optional
         Order of harmonics to include in the model (default is 1).
+        Parametric backend only.
     level : float, optional
         Significance level for testing higher-order terms (default is 0.05).
+    knots : dict, optional
+        Smooth-backend only. Per-variable boundary knots for ``hea.gam``;
+        cyclic smooths (``bs='cc'``/``'cp'``) default to the period
+        ``[0, 2π]`` (override via this argument).
+    method : str, optional
+        Smooth-backend only. Smoothing-parameter selection for ``hea.gam``
+        (default ``"REML"``).
 
     Attributes
     ----------
@@ -929,14 +1033,58 @@ class CCRegression:
         x: Optional[np.ndarray] = None,
         order: int = 1,
         level: float = 0.05,
+        *,
+        knots: Optional[dict] = None,
+        method: str = "REML",
+        **gam_kwargs,
     ):
-        if formula and data is not None:
+        self.formula = formula
+        # Backend dispatch: a smooth term (s()/te()/…) in the formula → two
+        # cyclic-smooth gam fits on the cos/sin embedding; otherwise the
+        # parametric harmonic path (two hea.lm fits). Same embedding + circular
+        # reassembly either way — gam is a basis swap, not a new model.
+        self.backend = "gam" if (formula and _has_smooth(formula)) else "lm"
+        self._knots = knots
+        self._method = method
+        self._gam_kwargs = gam_kwargs
+
+        if self.backend == "gam":
+            if data is None:
+                raise ValueError(
+                    "The smooth (gam) backend requires a formula and data."
+                )
+            self.data = _to_polars(data)
+            self._gam_response = formula.split("~", 1)[0].strip()
+            self._gam_rhs = formula.split("~", 1)[1].strip()
+            self.feature_names = _smooth_vars(self._gam_rhs)
+            if not self.feature_names:
+                raise ValueError(
+                    f"No smooth predictor found in formula: {formula!r}"
+                )
+            # Default cyclic-smooth knots to the circular period [0, 2π].
+            self._knots = _resolve_cyclic_knots(self._gam_rhs, knots)
+            theta_arr = self.data[self._gam_response].to_numpy()
+            x_arr = self.data[self.feature_names].to_numpy()
+            self.theta = self._validate_input(theta_arr)
+            self.x = self._validate_input(x_arr)
+            if self.x.ndim == 1:
+                self.x = self.x[:, None]
+        elif formula and data is not None:
+            if knots is not None or gam_kwargs:
+                raise ValueError(
+                    "knots=/gam options only apply to smooth formulas "
+                    "(s()/te()/…); this harmonic formula uses hea.lm."
+                )
             theta_arr, x_arr, self.feature_names = self._parse_formula(formula, data)
             self.theta = self._validate_input(theta_arr)
             self.x = self._validate_input(x_arr)
             if self.x.ndim == 1:
                 self.x = self.x[:, None]
         elif theta is not None and x is not None:
+            if knots is not None or gam_kwargs:
+                raise ValueError(
+                    "knots=/gam options require a formula with a smooth term."
+                )
             self.theta = self._validate_input(theta)
             self.x = self._validate_input(x)
             if self.x.ndim == 1:
@@ -960,12 +1108,16 @@ class CCRegression:
         if not (0 < self.level < 1):
             raise ValueError("`level` must lie between 0 and 1.")
 
-        n_params = 1 + 2 * self.x.shape[1] * self.order
-        if self.theta.size <= n_params:
-            raise ValueError(
-                f"order={self.order} requires more than {n_params} observations "
-                f"(got {self.theta.size}); reduce `order` or provide more data."
-            )
+        # The harmonic order / observation-count check is specific to the
+        # parametric backend; the smooth backend's complexity is set by edf,
+        # not by `order`.
+        if self.backend == "lm":
+            n_params = 1 + 2 * self.x.shape[1] * self.order
+            if self.theta.size <= n_params:
+                raise ValueError(
+                    f"order={self.order} requires more than {n_params} observations "
+                    f"(got {self.theta.size}); reduce `order` or provide more data."
+                )
 
         # Fit the model
         self.result = self._fit()
@@ -1011,6 +1163,8 @@ class CCRegression:
         return theta, X, x_cols
 
     def _fit(self):
+        if self.backend == "gam":
+            return self._fit_gam()
         n = self.x.shape[0]
         order = self.order
         n_features = self.x.shape[1]
@@ -1154,6 +1308,76 @@ class CCRegression:
             "message": message,
         }
 
+    def _fit_gam(self) -> dict:
+        """Smooth (gam) backend: two cyclic-smooth Gaussian gam fits on the
+        cos/sin embedding of the circular response, reassembled into
+        ``μ̂ = arctan2(sin_fit, cos_fit)`` with a residual concentration κ̂.
+
+        Identical embedding to the parametric path, with penalized smooths
+        instead of harmonics; ``knots``/``method``/options pass straight to
+        ``hea.gam``. The higher-order harmonic χ² test does not apply (smooth
+        complexity is selected by REML/GCV), so ``p_values`` are NaN.
+        """
+        Y_cos = np.cos(self.theta)
+        Y_sin = np.sin(self.theta)
+        df_fit = self.data.with_columns(
+            pl.Series("cos_t", Y_cos), pl.Series("sin_t", Y_sin)
+        )
+        self._gam_cos = _hea_gam(
+            f"cos_t ~ {self._gam_rhs}", df_fit,
+            knots=self._knots, method=self._method, **self._gam_kwargs,
+        )
+        self._gam_sin = _hea_gam(
+            f"sin_t ~ {self._gam_rhs}", df_fit,
+            knots=self._knots, method=self._method, **self._gam_kwargs,
+        )
+
+        cos_fit = np.asarray(self._gam_cos.fitted_values, dtype=float)
+        sin_fit = np.asarray(self._gam_sin.fitted_values, dtype=float)
+        fitted = np.mod(np.arctan2(sin_fit, cos_fit), 2 * np.pi)
+        residuals = np.angle(np.exp(1j * (self.theta - fitted)))
+
+        rho = float(np.clip(np.sqrt(np.mean(cos_fit**2 + sin_fit**2)), 0.0, 1.0))
+
+        A_k = float(np.mean(np.cos(residuals)))
+        if A_k < 0:
+            warnings.warn(
+                f"Mean residual cosine A_k={A_k:.4f} is negative — residuals "
+                "are systematically anti-aligned with the fitted direction. "
+                "κ has been clamped to 0; check for sign errors or model "
+                "misspecification.",
+                UserWarning,
+                stacklevel=3,
+            )
+        kappa_residual = float(A1inv(A_k))
+
+        return {
+            "rho": rho,
+            "fitted": fitted,
+            "residuals": residuals,
+            "coefficients": None,
+            "se_coefficients": None,
+            "edf_total": {
+                "cos": float(self._gam_cos.edf_total),
+                "sin": float(self._gam_sin.edf_total),
+            },
+            "edf_by_smooth": {
+                "cos": {k: float(v) for k, v in dict(self._gam_cos.edf_by_smooth).items()},
+                "sin": {k: float(v) for k, v in dict(self._gam_sin.edf_by_smooth).items()},
+            },
+            "deviance_explained": {
+                "cos": float(self._gam_cos.deviance_explained),
+                "sin": float(self._gam_sin.deviance_explained),
+            },
+            "p_values": np.array([np.nan, np.nan], dtype=float),
+            "A_k": A_k,
+            "kappa": kappa_residual,
+            "message": (
+                "Smooth (gam) backend: the higher-order harmonic test does not "
+                "apply; smoothness is selected by REML/GCV per coordinate."
+            ),
+        }
+
     def predict(self, x: np.ndarray) -> np.ndarray:
         """Predict the circular response at new predictor values.
 
@@ -1177,6 +1401,13 @@ class CCRegression:
                 f"{x_arr.shape[1]}."
             )
         x_arr = np.mod(x_arr, 2 * np.pi)
+        if self.backend == "gam":
+            newdata = pl.DataFrame(
+                {f: x_arr[:, i] for i, f in enumerate(self.feature_names)}
+            )
+            cos_pred = self._gam_cos.predict(newdata=newdata)["fit"].to_numpy()
+            sin_pred = self._gam_sin.predict(newdata=newdata)["fit"].to_numpy()
+            return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
         newdata = pl.DataFrame(
             {f: x_arr[:, i] for i, f in enumerate(self._feature_cols)}
         )
@@ -1279,6 +1510,8 @@ class CCRegression:
         """
         Print a summary of the regression results.
         """
+        if self.backend == "gam":
+            return self._summary_gam()
         print("\nCircular-Circular Regression\n")
         print(f"Circular Correlation Coefficient (rho): {self.result['rho']:.5f}")
         print(f"Mean Residual Cosine (A_k):             {self.result['A_k']:.5f}")
@@ -1337,6 +1570,24 @@ class CCRegression:
             "test uses χ² (Jammalamadaka & Sengupta 2001).\n"
         )
 
+    def _summary_gam(self) -> None:
+        """Summary for the smooth (gam) backend: circular correlation, residual
+        concentration, and the per-coordinate smooth effective dof / deviance
+        explained (no harmonic coefficient table, no higher-order χ² test)."""
+        print("\nCircular-Circular Regression (smooth / gam backend)\n")
+        print(f"Circular Correlation Coefficient (rho): {self.result['rho']:.5f}")
+        print(f"Mean Residual Cosine (A_k):             {self.result['A_k']:.5f}")
+        print(f"Residual Concentration (kappa):         {self.result['kappa']:.5f}\n")
+
+        print("Per-coordinate smooths:\n")
+        for coord in ("cos", "sin"):
+            edf = self.result["edf_by_smooth"][coord]
+            dev = self.result["deviance_explained"][coord]
+            terms = ", ".join(f"{name} edf={val:.2f}" for name, val in edf.items())
+            print(f"  {coord}(θ):  {terms};  deviance explained {dev * 100:.1f}%")
+
+        print(f"\n{self.result['message']}\n")
+
 
 # Markers used by LCRegression's formula parser.
 # `[^\W\d_]\w*` matches a Python-style identifier including Unicode letters
@@ -1384,6 +1635,9 @@ class LCRegression:
       fully explicit; useful for non-contiguous harmonic orders
     - ``"y ~ harmonic(theta, k=2) + temperature"`` — mix marker with extra
       linear covariates
+    - ``"y ~ s(theta, bs='cc')"`` — a **smooth** term dispatches the fit to
+      ``hea.models.gam`` (penalized spline) instead of ``hea.lm``; a cyclic
+      basis's period defaults to ``[0, 2π]`` (override via ``knots=``).
 
     Markers ``skew(theta)`` and ``flat(theta)`` are reserved for the
     nonlinear models in §8.4.3 / §8.4.4 and currently raise
@@ -1396,6 +1650,14 @@ class LCRegression:
         R-style formula. See above.
     data : pandas.DataFrame or polars.DataFrame
         Input data. Pandas inputs are converted to polars internally.
+    knots : dict, optional
+        Smooth-backend only. Per-variable boundary knots forwarded to
+        ``hea.gam``. Cyclic smooths (``bs='cc'``/``'cp'``) default to the
+        circular period ``[0, 2π]`` — pass this only to override (e.g. a
+        different period). Rejected for parametric formulas.
+    method : str, optional
+        Smooth-backend only. Smoothing-parameter selection for ``hea.gam``
+        (default ``"REML"``).
 
     Attributes
     ----------
@@ -1432,6 +1694,10 @@ class LCRegression:
         self,
         formula: str,
         data: pl.DataFrame,
+        *,
+        knots: Optional[dict] = None,
+        method: str = "REML",
+        **gam_kwargs,
     ):
         if not isinstance(formula, str) or "~" not in formula:
             raise ValueError(
@@ -1442,7 +1708,29 @@ class LCRegression:
         self.response = formula.split("~", 1)[0].strip()
         self.data = _to_polars(data)
         self.expanded_formula = self._expand_formula(formula)
-        self.lm_fit = _hea_lm(self.expanded_formula, self.data)
+
+        # Backend dispatch: a smooth term (s()/te()/…) → penalized hea.gam;
+        # a parametric RHS (harmonic()/cos()+sin()) → hea.lm. The circular
+        # semantics (amplitude/phase for lm; the cyclic smooth for gam) and a
+        # single circular-aware plot()/summary() wrap whichever backend ran.
+        self.backend = "gam" if _has_smooth(self.expanded_formula) else "lm"
+        if self.backend == "gam":
+            self.lm_fit = None
+            self.gam_fit = _hea_gam(
+                self.expanded_formula,
+                self.data,
+                knots=_resolve_cyclic_knots(self.expanded_formula, knots),
+                method=method,
+                **gam_kwargs,
+            )
+        else:
+            if knots is not None or gam_kwargs:
+                raise ValueError(
+                    "knots=/gam options only apply to smooth formulas "
+                    "(s()/te()/…); this parametric formula uses hea.lm."
+                )
+            self.gam_fit = None
+            self.lm_fit = _hea_lm(self.expanded_formula, self.data)
         self.result = self._build_result()
 
     @staticmethod
@@ -1459,16 +1747,24 @@ class LCRegression:
             k = int(match.group(2)) if match.group(2) else 1
             if k < 1:
                 raise ValueError(f"harmonic(..., k={k}): k must be a positive integer.")
-            # Lower to hea's native ``harmonic()`` term (hea 0.1.3) with explicit
-            # ``k=`` so the expanded formula reads ``harmonic(θ, k=2, period=…)``;
-            # circular predictors are angles in radians, so the period is always
-            # 2π — hard-coded here, never user-facing.
-            return f"harmonic({col}, k={k}, period={2 * np.pi})"
+            # Expand to explicit cos/sin terms (cos(θ) + sin(θ) + cos(2 * θ) + …)
+            # so the fitted coefficient names read cleanly in lm.summary() —
+            # ``cos(θ)``, ``sin(2 * θ)`` — rather than hea's verbose
+            # ``harmonic(θ, k=…, period=…)cos1`` labels. The fit is identical
+            # either way (same cos/sin design); only the names differ.
+            terms = []
+            for j in range(1, k + 1):
+                factor = col if j == 1 else f"{j} * {col}"
+                terms.append(f"cos({factor})")
+                terms.append(f"sin({factor})")
+            return " + ".join(terms)
 
         expanded_rhs = _LC_HARMONIC_RE.sub(_expand, rhs)
         return f"{lhs.strip()} ~ {expanded_rhs.strip()}"
 
     def _build_result(self) -> dict:
+        if self.backend == "gam":
+            return self._build_result_gam()
         bhat_df = self.lm_fit.bhat
         coef_names = list(bhat_df.columns)
         coef_values = list(bhat_df.row(0))
@@ -1561,11 +1857,38 @@ class LCRegression:
             "residuals": np.asarray(residuals, dtype=float),
         }
 
+    def _build_result_gam(self) -> dict:
+        """Result dict for the smooth (gam) backend.
+
+        Mirrors the lm result's common keys (``fitted``/``residuals``/fit
+        metrics) so downstream code is backend-agnostic, and adds the smooth
+        summaries (``edf_total``, ``edf_by_smooth``, ``deviance_explained``).
+        There is no harmonic amplitude/phase decomposition — that is specific
+        to the parametric backend — so ``harmonics`` is empty.
+        """
+        g = self.gam_fit
+        return {
+            "coefficients": dict(zip(g.bhat.columns, g.bhat.row(0))),
+            "harmonics": [],
+            "edf_total": float(g.edf_total),
+            "edf_by_smooth": {k: float(v) for k, v in dict(g.edf_by_smooth).items()},
+            "sigma": float(g.sigma),
+            "r_squared": float(g.r_squared),
+            "deviance_explained": float(g.deviance_explained),
+            "aic": float(g.AIC),
+            "bic": float(g.BIC),
+            "fitted": np.asarray(g.fitted_values, dtype=float),
+            "residuals": np.asarray(g.residuals, dtype=float),
+        }
+
     def predict(
         self, data: pl.DataFrame
     ) -> np.ndarray:
         """Predict the linear response for new values of the regressors."""
         new = _to_polars(data)
+        if self.backend == "gam":
+            out = self.gam_fit.predict(newdata=new)["fit"].to_numpy()
+            return np.asarray(out, dtype=float)
         out = self.lm_fit.predict(newdata=new)
         if isinstance(out, pl.DataFrame):
             out = out.to_numpy().ravel()
@@ -1584,6 +1907,13 @@ class LCRegression:
             print(f"User formula:     {self.formula}")
             print(f"Expanded formula: {self.expanded_formula}")
         print()
+
+        if self.backend == "gam":
+            # hea.gam.summary() prints the mgcv-style block itself (parametric
+            # coefficients + approximate smooth significance with edf + deviance
+            # explained). No harmonic table — the smooth replaces the harmonics.
+            self.gam_fit.summary()
+            return
 
         # hea.models.lm.summary() returns a SummaryLm whose __repr__ is the
         # R-style regression block (it no longer prints to stdout itself).
@@ -1643,6 +1973,7 @@ class LCRegression:
         ci: bool = True,
         pi: bool = False,
         level: float = 0.95,
+        polar: bool = False,
         axes=None,
     ):
         """Two-panel diagnostic figure.
@@ -1663,9 +1994,13 @@ class LCRegression:
             Number of θ points used to draw the fitted curve.
         ci, pi : bool
             Whether to shade a confidence band (``ci``) and/or prediction
-            band (``pi``) at the requested ``level``.
+            band (``pi``) at the requested ``level``. The prediction band
+            (``pi``) is only available for the parametric (lm) backend.
         level : float
             Coverage probability for the bands (default 0.95).
+        polar : bool
+            Draw the left panel on polar axes (θ as angle, response as
+            radius) — natural for a circular predictor over its full period.
         axes : sequence of matplotlib Axes, optional
             Two pre-existing axes to draw into. If omitted, a fresh figure
             is created.
@@ -1675,6 +2010,16 @@ class LCRegression:
         matplotlib.figure.Figure
         """
         import matplotlib.pyplot as plt
+
+        if self.backend == "gam":
+            return self._plot_gam(
+                figsize=figsize,
+                n_curve=n_curve,
+                ci=ci,
+                level=level,
+                polar=polar,
+                axes=axes,
+            )
 
         if not self.result["harmonics"]:
             raise ValueError(
@@ -1715,43 +2060,109 @@ class LCRegression:
             arr = self.lm_fit.compute_pi_yhat(yhat=yhat_df, Xnew=grid_df, alpha=alpha).to_numpy()
             pi_lo, pi_hi = arr[:, 0], arr[:, 1]
 
-        if axes is None:
-            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 4.5))
-        else:
-            axes = list(axes)
-            if len(axes) != 2:
-                raise ValueError("`axes` must be a sequence of length 2.")
-            fig = axes[0].figure
-
-        ax = axes[0]
+        bands = []
         if pi_lo is not None:
-            ax.fill_between(
-                theta_grid, pi_lo, pi_hi,
-                color="C1", alpha=0.15, label=f"{int(level*100)}% PI",
-            )
+            bands.append((pi_lo, pi_hi, 0.15, f"{int(level * 100)}% PI"))
         if ci_lo is not None:
-            ax.fill_between(
-                theta_grid, ci_lo, ci_hi,
-                color="C1", alpha=0.30, label=f"{int(level*100)}% CI",
-            )
+            bands.append((ci_lo, ci_hi, 0.30, f"{int(level * 100)}% CI"))
+
+        fig, ax0, ax1 = _two_panel_axes(plt, figsize, polar, axes)
+        self._draw_fit_panel(
+            ax0, theta_var, theta_data, y_data, theta_grid, yhat, bands, polar
+        )
+
+        ax1.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+        ax1.axhline(0.0, color="k", lw=0.5)
+        ax1.set_xlabel("Fitted")
+        ax1.set_ylabel("Residual")
+        ax1.set_title("Residuals vs fitted")
+
+        fig.tight_layout()
+        return fig
+
+    def _draw_fit_panel(
+        self, ax, theta_var, theta_data, y_data, theta_grid, yhat, bands, polar
+    ) -> None:
+        """Draw the left 'Fit overlay' panel shared by both backends.
+
+        Data scatter + fitted response-scale curve, with optional shaded
+        ``bands`` — each a ``(lo, hi, alpha, label)`` tuple, drawn in order so
+        a wider PI sits under a narrower CI. Cartesian by default; ``polar``
+        puts θ on the angular axis and the response on the radius.
+        """
+        for lo, hi, band_alpha, label in bands:
+            ax.fill_between(theta_grid, lo, hi, color="C1", alpha=band_alpha, label=label)
         ax.plot(theta_grid, yhat, color="C1", lw=2, label="fit")
-        ax.scatter(theta_data, y_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
-        ax.set_xlabel(theta_var)
-        ax.set_ylabel(self.response)
+        ax.scatter(
+            theta_data, y_data, color="C0", s=20, alpha=0.6,
+            edgecolors="none", label="data",
+        )
         ax.set_title("Fit overlay")
         ax.legend(loc="best", frameon=False)
+        if polar:
+            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2])
+            ax.set_xticklabels(["0", "π/2", "π", "3π/2"])
+        else:
+            ax.set_xlabel(theta_var)
+            ax.set_ylabel(self.response)
+            # If the grid covers a full 2π span, mark the canonical ticks.
+            if float(theta_grid.min()) <= 0 and float(theta_grid.max()) >= 2 * np.pi:
+                ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+                ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
 
-        # If the grid covers a full 2π span, mark the canonical ticks.
-        if t_lo <= 0 and t_hi >= 2 * np.pi:
-            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+    def _gam_predictor(self) -> str:
+        """The (first) smooth predictor variable — the θ axis for plotting."""
+        vs = _smooth_vars(self.expanded_formula.split("~", 1)[1])
+        if not vs:
+            raise ValueError("No smooth predictor found in the formula.")
+        return vs[0]
 
-        ax = axes[1]
-        ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
-        ax.axhline(0.0, color="k", lw=0.5)
-        ax.set_xlabel("Fitted")
-        ax.set_ylabel("Residual")
-        ax.set_title("Residuals vs fitted")
+    def _plot_gam(self, figsize, n_curve, ci, level, polar, axes):
+        """Circular-aware overlay for the smooth (gam) backend.
+
+        The response-scale smooth is drawn over the raw scatter on a
+        period-aware grid ``[0, 2π]`` (a cyclic smooth is defined over the full
+        period), with a Wald confidence band from ``se.fit``; the right panel
+        is residuals vs fitted. Extra covariates are held at their column mean
+        (numeric) or mode (categorical).
+        """
+        import matplotlib.pyplot as plt
+
+        theta_var = self._gam_predictor()
+        theta_data = self.data[theta_var].to_numpy()
+        y_data = self.data[self.response].to_numpy()
+        fitted = self.result["fitted"]
+        residuals = self.result["residuals"]
+
+        theta_grid = np.linspace(0.0, 2 * np.pi, n_curve)
+        grid: dict = {theta_var: theta_grid}
+        for col in self.data.columns:
+            if col in (theta_var, self.response):
+                continue
+            series = self.data[col]
+            if series.dtype.is_numeric():
+                grid[col] = np.full(n_curve, float(series.mean()))
+            else:
+                grid[col] = [series.mode()[0]] * n_curve
+        grid_df = pl.DataFrame(grid)
+
+        yhat, ci_lo, ci_hi = _gam_predict_ci(
+            self.gam_fit, grid_df, level if ci else 0.0
+        )
+        bands = []
+        if ci_lo is not None:
+            bands.append((ci_lo, ci_hi, 0.30, f"{int(level * 100)}% CI"))
+
+        fig, ax0, ax1 = _two_panel_axes(plt, figsize, polar, axes)
+        self._draw_fit_panel(
+            ax0, theta_var, theta_data, y_data, theta_grid, yhat, bands, polar
+        )
+
+        ax1.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+        ax1.axhline(0.0, color="k", lw=0.5)
+        ax1.set_xlabel("Fitted")
+        ax1.set_ylabel("Residual")
+        ax1.set_title("Residuals vs fitted")
 
         fig.tight_layout()
         return fig
