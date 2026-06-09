@@ -3,7 +3,7 @@ from importlib import resources as importlib_resources
 from typing import Union
 
 import numpy as np
-import polars as pl
+import hea.io
 from scipy.special import i0e, i1e
 
 
@@ -137,7 +137,7 @@ def load_data(
     name: str,
     source: str = "fisher",
     print_meta: bool = False,
-) -> pl.DataFrame:
+) -> "hea.DataFrame":
     __source__ = ["fisher", "zar", "mardia", "pewsey", "jammalamadaka"]
 
     # check source
@@ -149,13 +149,18 @@ def load_data(
     # load data
     data_files = importlib_resources.files("pycircstat2")
     csv_path = str(data_files / f"data/{source}/{name}.csv")
-    csv_data = pl.read_csv(csv_path)
+    # ``hea.io.read_csv`` returns a tidyverse-capable ``hea.DataFrame`` (an IS-A
+    # subclass of ``pl.DataFrame``), so loaded datasets support tidy verbs
+    # (``mutate``/``filter``/``summarize``/``count``/…) directly — convenient in
+    # the example notebooks — while staying drop-in for any polars / array use.
+    csv_data = hea.io.read_csv(csv_path)
     # pandas loaded these with index_col=0: the first column was the row index,
     # excluded from the data. Polars has no index, so drop the first column to
-    # preserve that layout (named columns line up by name and position with the
-    # old pandas DataFrames). For most files this column is an unnamed 1-based
-    # counter; for a few (e.g. zar/D4) it is a sample id pandas used as the index.
-    csv_data = csv_data.drop(csv_data.columns[0])
+    # preserve that layout (columns line up by name and position with the old
+    # pandas frames). For most files this is an unnamed 1-based counter; for a
+    # few (e.g. zar/D4) it is a sample id pandas used as the index. Re-wrap so
+    # the hea.DataFrame subclass survives the native ``drop``.
+    csv_data = hea.DataFrame(csv_data.drop(csv_data.columns[0]))
 
     json_path = str(data_files / f"data/{source}/{name}.csv-metadata.json")
     with open(json_path) as f:
