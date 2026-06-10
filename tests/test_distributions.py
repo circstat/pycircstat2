@@ -1769,3 +1769,118 @@ def test_wrapstable_alpha_extremes(alpha):
     theta = np.linspace(0, 2 * np.pi, 257)
     _check_pdf_normalizes(dist, params=None, atol=5e-5 if alpha < 0.01 else 1e-6)
     _assert_monotonic_cdf_ppf(dist, theta, np.linspace(0, 1, 257), cdf_tol=1e-9, ppf_tol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 regression contract: role overlay + analytic log-density derivatives
+# ---------------------------------------------------------------------------
+
+from pycircstat2.distributions import _RegressionReady  # noqa: E402
+from pycircstat2.utils import A1, A1prime  # noqa: E402
+
+
+def test_vonmises_regression_overlay():
+    """The role overlay derives both directions and attaches the right links."""
+    assert isinstance(vonmises, _RegressionReady)
+    assert vonmises.param_roles == {"mu": "location", "kappa": "concentration"}
+    # role -> name(s), one-to-many
+    assert vonmises.params_by_role() == {
+        "location": ["mu"],
+        "concentration": ["kappa"],
+    }
+    # name -> role -> default link
+    assert vonmises.link_for("mu") == "tanhalf"
+    assert vonmises.link_for("kappa") == "log"
+
+
+def test_A1prime_matches_finite_difference_and_limit():
+    """A1'(κ) = 1 − A1/κ − A1², with the removable κ→0 limit A1'(0)=1/2."""
+    assert A1prime(0.0) == pytest.approx(0.5)
+    kappa = np.array([0.05, 0.5, 1.0, 3.0, 8.0, 25.0])
+    h = 1e-6
+    fd = (A1(kappa + h) - A1(kappa - h)) / (2 * h)
+    np.testing.assert_allclose(A1prime(kappa), fd, atol=1e-7)
+
+
+def _logpdf_vm(x, mu, kappa):
+    return vonmises.logpdf(x, mu, kappa)
+
+
+@pytest.mark.parametrize("kappa", [0.3, 1.0, 4.0, 12.0])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_vonmises_dlogpdf_matches_finite_difference(mu, kappa):
+    """l1: ∂logpdf/∂μ and ∂logpdf/∂κ against central differences of logpdf."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    grad = vonmises.dlogpdf(x, mu, kappa)
+
+    hm, hk = 1e-6, 1e-6
+    d_mu = (_logpdf_vm(x, mu + hm, kappa) - _logpdf_vm(x, mu - hm, kappa)) / (2 * hm)
+    d_kappa = (_logpdf_vm(x, mu, kappa + hk) - _logpdf_vm(x, mu, kappa - hk)) / (2 * hk)
+
+    np.testing.assert_allclose(grad["mu"], d_mu, atol=1e-6)
+    np.testing.assert_allclose(grad["kappa"], d_kappa, atol=1e-6)
+
+
+@pytest.mark.parametrize("kappa", [0.3, 1.0, 4.0, 12.0])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_vonmises_d2logpdf_matches_finite_difference(mu, kappa):
+    """l2: the three unique second partials against finite differences of l1."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    hess = vonmises.d2logpdf(x, mu, kappa)
+    hm, hk = 1e-6, 1e-6
+
+    # ∂²/∂μ² and ∂²/∂μ∂κ from differencing the μ-score; ∂²/∂κ² from the κ-score.
+    def g_mu(m, k):
+        return vonmises.dlogpdf(x, m, k)["mu"]
+
+    def g_kappa(m, k):
+        return vonmises.dlogpdf(x, m, k)["kappa"]
+
+    d_mumu = (g_mu(mu + hm, kappa) - g_mu(mu - hm, kappa)) / (2 * hm)
+    d_mukappa = (g_mu(mu, kappa + hk) - g_mu(mu, kappa - hk)) / (2 * hk)
+    d_kappakappa = (g_kappa(mu, kappa + hk) - g_kappa(mu, kappa - hk)) / (2 * hk)
+
+    np.testing.assert_allclose(hess[("mu", "mu")], d_mumu, atol=1e-6)
+    np.testing.assert_allclose(hess[("mu", "kappa")], d_mukappa, atol=1e-6)
+    np.testing.assert_allclose(hess[("kappa", "kappa")], d_kappakappa, atol=1e-6)
+    # mixed partial is symmetric: differencing the κ-score in μ agrees
+    d_kappamu = (g_kappa(mu + hm, kappa) - g_kappa(mu - hm, kappa)) / (2 * hm)
+    np.testing.assert_allclose(hess[("mu", "kappa")], d_kappamu, atol=1e-6)
+
+
+def test_vonmises_derivatives_vectorize_over_per_obs_params():
+    """logpdf and its derivatives broadcast over per-observation μ, κ arrays —
+    the hard requirement for concentration smoothing."""
+    rng = np.random.default_rng(0)
+    n = 50
+    x = rng.uniform(0, 2 * np.pi, n)
+    mu = rng.uniform(0, 2 * np.pi, n)
+    kappa = rng.uniform(0.2, 10.0, n)
+
+    grad = vonmises.dlogpdf(x, mu, kappa)
+    hess = vonmises.d2logpdf(x, mu, kappa)
+    assert grad["mu"].shape == (n,)
+    assert hess[("kappa", "kappa")].shape == (n,)
+    # per-obs result equals the scalar call element-by-element
+    for i in (0, 17, 49):
+        gi = vonmises.dlogpdf(x[i], mu[i], kappa[i])
+        assert gi["mu"] == pytest.approx(grad["mu"][i])
+        assert gi["kappa"] == pytest.approx(grad["kappa"][i])
+
+
+def test_vonmises_dlogpdf_equals_CL_inline_score():
+    """Pins the §3.2 equivalence: the distribution's scores are exactly the
+    expressions CLRegression computes inline (κ sin(θ−μ); cos(θ−μ) − A1(κ))."""
+    rng = np.random.default_rng(1)
+    x = rng.uniform(0, 2 * np.pi, 40)
+    mu, kappa = 1.3, 3.7
+    grad = vonmises.dlogpdf(x, mu, kappa)
+    np.testing.assert_allclose(grad["mu"], kappa * np.sin(x - mu), atol=1e-12)
+    np.testing.assert_allclose(grad["kappa"], np.cos(x - mu) - A1(kappa), atol=1e-12)
+    # CL's μ-weight is the Fisher information −E[∂²_{μμ}ℓ] = κ A1(κ); the
+    # expectation is over the model, so integrate against the vM density.
+    grid = np.linspace(0.0, 2 * np.pi, 20001)
+    f = vonmises.pdf(grid, mu, kappa)
+    obs_info = -vonmises.d2logpdf(grid, mu, kappa)[("mu", "mu")]
+    fisher_info = np.trapezoid(obs_info * f, grid)
+    assert fisher_info == pytest.approx(kappa * A1(kappa), rel=1e-3)

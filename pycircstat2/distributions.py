@@ -24,7 +24,7 @@ from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
 from .descriptive import circ_kappa, circ_mean_and_r
-from .utils import angmod
+from .utils import A1, A1prime, angmod
 
 __all__ = [
     "circularuniform",
@@ -100,6 +100,48 @@ OPTIMIZERS = [
     "trust-exact",
     "trust-krylov",
 ]
+
+
+class _RegressionReady:
+    """Regression overlay for a circular distribution (read by the regression
+    engine only; descriptive use never sees it).
+
+    A distribution opts in by composing this mixin and declaring two class
+    dicts in **book-named** parameters:
+
+    - ``param_roles``  : ``{book_name -> role}``  (e.g. ``{"mu": "location"}``)
+    - ``default_links`` : ``{role -> link_name}`` (e.g. ``{"location": "tanhalf"}``)
+
+    The mixin derives the inverse views for free — nothing is renamed; values
+    always flow in the distribution's own book-named dicts. Roles exist only so
+    a generic engine can find the mean-direction vs concentration vs shape
+    parameters and attach each one's default link. See the Phase 1 contract in
+    ``dev/plans/circular_gam_integration.md``.
+
+    Derivatives (optional, tiered) keep book names too:
+
+    - ``dlogpdf(x, **params) -> {name: ∂logpdf/∂name}``                  (l1)
+    - ``d2logpdf(x, **params) -> {(name_i, name_j): ∂²logpdf/∂i∂j}``     (l2)
+
+    only the unique unordered pairs are stored in ``d2logpdf``.
+    """
+
+    param_roles: dict = {}
+    default_links: dict = {}
+
+    @classmethod
+    def params_by_role(cls) -> dict:
+        """``{role -> [book_name, ...]}`` — one-to-many (e.g. several shape
+        params), insertion-ordered by ``param_roles``."""
+        out: dict = {}
+        for name, role in cls.param_roles.items():
+            out.setdefault(role, []).append(name)
+        return out
+
+    @classmethod
+    def link_for(cls, name: str) -> str:
+        """Default link name for a parameter, via its role."""
+        return cls.default_links[cls.param_roles[name]]
 
 
 class CircularContinuous(rv_continuous):
@@ -3258,7 +3300,7 @@ class wrapcauchy_gen(CircularContinuous):
 wrapcauchy = wrapcauchy_gen(name="wrapcauchy")
 
 
-class vonmises_gen(CircularContinuous):
+class vonmises_gen(_RegressionReady, CircularContinuous):
     """Von Mises Distribution
 
     ![vonmises](../images/circ-mod-vonmises.png)
@@ -3308,10 +3350,59 @@ class vonmises_gen(CircularContinuous):
         The frozen distribution instance with fixed parameters.
     """
 
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/kappa are preserved; roles attach the default links. ---
+    param_roles = {"mu": "location", "kappa": "concentration"}
+    default_links = {"location": "tanhalf", "concentration": "log"}
+
     def __call__(self, *args, **kwds):
         return self.freeze(*args, **kwds)
 
     __call__.__doc__ = _freeze_doc
+
+    def dlogpdf(self, x, mu, kappa):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        For the von Mises log-density
+        ``ℓ = κ cos(θ − μ) − log(2π I_0(κ))``:
+
+        $$\frac{\partial\ell}{\partial\mu} = \kappa\sin(\theta-\mu),\qquad
+          \frac{\partial\ell}{\partial\kappa} = \cos(\theta-\mu) - A_1(\kappa).$$
+
+        Vectorizes over per-observation ``mu``/``kappa`` arrays. Returns a
+        book-named dict ``{"mu": …, "kappa": …}``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        kappa = np.asarray(kappa, dtype=float)
+        d = x - mu
+        return {
+            "mu": kappa * np.sin(d),
+            "kappa": np.cos(d) - A1(kappa),
+        }
+
+    def d2logpdf(self, x, mu, kappa):
+        r"""Second derivatives of ``logpdf`` (l2), as *observed* (not Fisher)
+        derivatives — only the unique unordered pairs:
+
+        $$\partial^2_{\mu\mu}\ell = -\kappa\cos(\theta-\mu),\quad
+          \partial^2_{\mu\kappa}\ell = \sin(\theta-\mu),\quad
+          \partial^2_{\kappa\kappa}\ell = -A_1'(\kappa).$$
+
+        (The von Mises Fisher information for ``μ`` is ``κ A_1(κ) =
+        −E[∂²_{μμ}ℓ]``; ``CLRegression`` uses that expected form for Fisher
+        scoring. The contract exposes the honest observed derivatives, which is
+        what a general-likelihood Newton step — and hea's ``gam.fit5`` — want.)
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        kappa = np.asarray(kappa, dtype=float)
+        d = x - mu
+        return {
+            ("mu", "mu"): -kappa * np.cos(d),
+            ("mu", "kappa"): np.sin(d),
+            ("kappa", "kappa"): -A1prime(kappa),
+        }
 
     def _argcheck(self, mu, kappa):
         try:

@@ -245,6 +245,20 @@ def A1(kappa: np.ndarray) -> np.ndarray:
     # i1e(κ)/i0e(κ) = (i1(κ) e^-κ)/(i0(κ) e^-κ) — stable for large κ where i0/i1 overflow.
     return i1e(kappa) / i0e(kappa)
 
+def A1prime(kappa: np.ndarray) -> np.ndarray:
+    r"""Derivative of the mean-resultant function ``A1(κ) = I_1(κ)/I_0(κ)``.
+
+    ``A1'(κ) = 1 − A1(κ)/κ − A1(κ)²`` — equivalently ``-∂²/∂κ² log I_0(κ)``'s
+    negative, i.e. the von Mises Fisher information for the concentration. As
+    ``κ → 0`` the ``A1/κ`` term is the removable singularity ``A1(κ)/κ → 1/2``,
+    so ``A1'(0) = 1/2``; the limit is filled in explicitly to avoid 0/0.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    a1 = A1(kappa)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = 1.0 - np.where(kappa == 0.0, 0.5, a1 / kappa) - a1**2
+    return out[()] if out.ndim == 0 else out
+
 def A1inv(R: float) -> float:
     # A1 maps kappa>=0 to [0, 1); clamp R to that range to avoid the
     # singularity at R=1 in the high-concentration branch.
