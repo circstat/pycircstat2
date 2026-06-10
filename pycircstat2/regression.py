@@ -8,7 +8,8 @@ from hea.models import gam as _hea_gam, lm as _hea_lm
 from scipy.special import i0e
 from scipy.stats import chi2, norm, t as student_t
 
-from .utils import A1, A1inv, significance_code
+from .distributions import vonmises
+from .utils import A1, A1inv, A1prime, significance_code
 
 __all__ = ["CLRegression", "CCRegression", "LCRegression"]
 
@@ -356,11 +357,6 @@ class CLRegression:
         return theta, X, x_cols
 
     @staticmethod
-    def _A1_prime(kappa: np.ndarray) -> np.ndarray:
-        a1 = A1(kappa)
-        return 1 - a1 / kappa - a1**2
-
-    @staticmethod
     def _safe_exp_kappa(eta: np.ndarray) -> np.ndarray:
         # Bound the log-concentration to avoid exp overflow during iterations.
         # exp(±50) ≈ {5e21, 2e-22}, comfortably finite.
@@ -407,11 +403,14 @@ class CLRegression:
                 kappa = float(A1inv(R))
                 mu = np.arctan2(S, C)
 
-                # Step 2: Update beta
+                # Step 2: Update beta. Score from the von Mises regression
+                # contract (vonmises.dlogpdf — the §3.2 lift); the IRLS weight
+                # is the *expected* (Fisher) information −E[∂²_{μμ}ℓ] = κ A1(κ),
+                # distinct from the observed d2logpdf.
                 denom = 1 + (X @ beta) ** 2
                 G = 2 * X / denom[:, None]
                 weight = float(kappa * A1(kappa))
-                u = kappa * np.sin(raw_deviation - mu)
+                u = vonmises.dlogpdf(raw_deviation, mu, kappa)["mu"]
                 XtX = G.T @ G
                 rhs = G.T @ u + weight * XtX @ beta
                 mat = weight * XtX + ridge_X
@@ -430,12 +429,12 @@ class CLRegression:
                 C = float(np.sum(kappa * np.cos(theta)))
                 mu = np.arctan2(S, C)
 
-                # Step 2: Update gamma
-                a1_kappa = A1(kappa)
-                # Floor A1'(κ) to keep the IRLS step finite when some κ_i are
-                # very large (A1'(κ) → 0 as κ → ∞ ⇒ y_gamma blows up).
-                a1_prime = np.maximum(self._A1_prime(kappa), 1e-12)
-                residuals_gamma = np.cos(theta - mu) - a1_kappa
+                # Step 2: Update gamma. κ-score from the contract
+                # (vonmises.dlogpdf — cos(θ−μ) − A1(κ)); the IRLS weight uses
+                # the expected info A1'(κ). Floor A1'(κ) to keep the step finite
+                # when some κ_i are large (A1'(κ) → 0 as κ → ∞ ⇒ y_gamma blows up).
+                a1_prime = np.maximum(A1prime(kappa), 1e-12)
+                residuals_gamma = vonmises.dlogpdf(theta, mu, kappa)["kappa"]
                 y_gamma = residuals_gamma / (a1_prime * kappa)
                 weights = (kappa**2) * a1_prime
                 XtWX = X1.T @ (weights[:, None] * X1)
@@ -457,6 +456,11 @@ class CLRegression:
                 C = np.sum(kappa * np.cos(raw_deviation))
                 mu = np.arctan2(S, C)
 
+                # Both scores from the contract (vonmises.dlogpdf) at the
+                # de-trended angle; the IRLS weights are the expected (Fisher)
+                # information κ A1(κ) for β and A1'(κ) for γ.
+                score = vonmises.dlogpdf(raw_deviation, mu, kappa)
+
                 # Step 2: Update beta — Fisher scoring step from current β.
                 # Score s(β) = Gᵀ (κ ⊙ sin(rdev − μ)); info I(β) = Gᵀ diag(κ A1(κ)) G.
                 # β_new solves I β_new = I β + s.
@@ -464,14 +468,13 @@ class CLRegression:
                 G = 2 * X / denom[:, None]
                 weights_beta = kappa * A1(kappa)
                 XtWX_beta = G.T @ (weights_beta[:, None] * G)
-                u_beta = kappa * np.sin(raw_deviation - mu)
+                u_beta = score["mu"]
                 rhs_beta = G.T @ u_beta + XtWX_beta @ beta
                 beta_new = _safe_solve(XtWX_beta + ridge_X, rhs_beta)
 
                 # Step 3: Update gamma
-                a1_kappa = A1(kappa)
-                a1_prime = np.maximum(self._A1_prime(kappa), 1e-12)
-                residuals_gamma = np.cos(raw_deviation - mu) - a1_kappa
+                a1_prime = np.maximum(A1prime(kappa), 1e-12)
+                residuals_gamma = score["kappa"]
                 y_gamma = residuals_gamma / (a1_prime * kappa)
                 weights_gamma = (kappa**2) * a1_prime
                 XtWX = X1.T @ (weights_gamma[:, None] * X1)
@@ -556,7 +559,7 @@ class CLRegression:
         elif self.model_type == "kappa":
             # Concentration Parameter Model
             X1 = np.column_stack((np.ones(n), X))  # Add intercept
-            weights = (kappa**2) * self._A1_prime(kappa)
+            weights = (kappa**2) * A1prime(kappa)
             XtWX = X1.T @ (weights[:, None] * X1)
 
             cov_gamma_alpha = _safe_inverse(XtWX)
@@ -589,7 +592,7 @@ class CLRegression:
             se_beta = np.sqrt(np.diag(cov_beta))
 
             X1 = np.column_stack((np.ones(n), X))  # Add intercept
-            weights_gamma = (kappa**2) * self._A1_prime(kappa)
+            weights_gamma = (kappa**2) * A1prime(kappa)
             XtWX_gamma = X1.T @ (weights_gamma[:, None] * X1)
 
             cov_gamma_alpha = _safe_inverse(XtWX_gamma)
