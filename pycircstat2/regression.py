@@ -1,9 +1,11 @@
 import re
 import warnings
+from itertools import combinations_with_replacement
 from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
+from hea.family import GeneralFamily, gamlss_etamu, gamlss_gH, trind_generator
 from hea.models import gam as _hea_gam, lm as _hea_lm
 from scipy.special import i0e
 from scipy.stats import chi2, norm, t as student_t
@@ -11,7 +13,7 @@ from scipy.stats import chi2, norm, t as student_t
 from .distributions import get_link, vonmises
 from .utils import A1, A1inv, A1prime, significance_code
 
-__all__ = ["CLRegression", "CCRegression", "LCRegression"]
+__all__ = ["CircularLL", "CLRegression", "CCRegression", "LCRegression"]
 
 
 def _to_polars(data) -> "pl.DataFrame":
@@ -168,16 +170,267 @@ def _two_panel_axes(plt, figsize, polar: bool, axes):
     return axes[0].figure, axes[0], axes[1]
 
 
+# --- the hea bridge: a circular distribution as an mgcv-style general family --
+
+
+class CircularLL(GeneralFamily):
+    """A regression-ready circular distribution as a hea/mgcv **general
+    family** — the Phase-2 bridge of ``dev/plans/circular_gam_integration.md``.
+
+    Mirrors ``hea.family.gaulss``: one linear predictor per modelable
+    distribution parameter, in the order the distribution declares them
+    (von Mises: μ via ``tanhalf``, log κ via ``log``; wrapped Cauchy: μ, logit
+    ρ; projected normal: identity μ₁, μ₂). ``ll()`` fills the packed
+    per-datum derivative arrays ``l1..l4`` from the distribution's contract
+    methods (``dlogpdf``..``d4logpdf`` — derivatives w.r.t. the *distribution
+    parameters*, never pre-chained through links) and delegates the link
+    chain rule and gradient/Hessian assembly to ``gamlss_etamu`` /
+    ``gamlss_gH``. hea never learns "circular"; pycircstat2 never learns
+    penalties or REML.
+
+        gam(["theta ~ s(x, bs='cc')",   # LP1 → μ      (tanhalf)
+             "      ~ s(z)"],           # LP2 → log κ  (log)
+            data, family=CircularLL(vonmises), method="REML")
+
+    Note the mgcv parameterization: every LP's intercept lives *inside* the
+    link — μ = 2·atan(β₀ + …) — unlike the parametric ``CLRegression``'s
+    Fisher–Lee offset ``μ₀ + 2·atan(Xβ)``. The two coincide for
+    intercept-only models; with covariates they are different (both valid)
+    parameterizations, so compare fitted curves, not coefficients.
+    """
+
+    scale_known = True
+    n_theta = 0
+
+    def __init__(self, dist, links=None):
+        roles = getattr(dist, "param_roles", None)
+        if not roles:
+            raise TypeError(
+                f"{getattr(dist, 'name', dist)!r} is not regression-ready: it "
+                "declares no `param_roles` overlay (see the Phase 1 contract)."
+            )
+        self.dist = dist
+        self.params = list(roles)  # book-named, declaration order = LP order
+        self.n_lp = len(self.params)
+        if links is None:
+            links = [get_link(dist.link_for(p)) for p in self.params]
+        else:
+            if len(links) != self.n_lp:
+                raise ValueError(
+                    f"expected {self.n_lp} links (one per LP), got {len(links)}"
+                )
+            links = [get_link(lnk) for lnk in links]
+        # Contract depth gates the outer-Newton mode hea may use:
+        # l4 → full Newton (2), l3 → gradient-only outer (1), l2 → EFS (0).
+        self.available_derivs = (
+            2 if hasattr(dist, "d4logpdf")
+            else 1 if hasattr(dist, "d3logpdf")
+            else 0
+        )
+        self.tri = trind_generator(self.n_lp)
+        self.name = f"CircularLL({getattr(dist, 'name', 'dist')})"
+        super().__init__(links)
+
+    def _etas(self, X, coef, jj, offset):
+        etas = []
+        for j in range(self.n_lp):
+            eta = X[:, jj[j]] @ coef[jj[j]]
+            if offset is not None and len(offset) > j and offset[j] is not None:
+                eta = eta + offset[j]
+            etas.append(eta)
+        return etas
+
+    def _param_values(self, etas):
+        """Inverse-link each LP into a book-named parameter dict. A tanhalf
+        LP is a principal-branch angle in (−π, π); wrap it to [0, 2π) so the
+        distribution's own domain checks pass (every tanhalf consumer is
+        2π-periodic in that parameter, so this changes nothing else)."""
+        out = {}
+        for name, link, eta in zip(self.params, self.links, etas):
+            val = link.linkinv(eta)
+            if link.name == "tanhalf":
+                val = np.mod(val, 2.0 * np.pi)
+            out[name] = val
+        return out
+
+    def ll(self, y, X, coef, wt=None, *, lpi, offset=None, deriv: int = 0,
+           d1b=None, d2b=None, fh=None, D=None) -> dict:
+        y = np.asarray(y, dtype=float)
+        X = np.asarray(X, dtype=float)
+        coef = np.asarray(coef, dtype=float)
+        jj = [np.asarray(ix, dtype=int) for ix in lpi]
+        etas = self._etas(X, coef, jj, offset)
+        params = self._param_values(etas)
+
+        l0 = np.asarray(self.dist.logpdf(y, **params), dtype=float)
+        ret: dict = {"l": float(np.sum(l0)), "l0": l0}
+        if deriv == 0:
+            return ret
+
+        names = self.params
+        shape = y.shape
+        d1 = self.dist.dlogpdf(y, **params)
+        d2 = self.dist.d2logpdf(y, **params)
+        l1 = np.column_stack([np.broadcast_to(d1[p], shape) for p in names])
+        l2 = np.column_stack(
+            [np.broadcast_to(d2[k], shape)
+             for k in combinations_with_replacement(names, 2)]
+        )
+        ig1 = np.column_stack(
+            [link.mu_eta(eta) for link, eta in zip(self.links, etas)]
+        )
+        g2 = np.column_stack(
+            [link.d2link(params[name])
+             for link, name in zip(self.links, names)]
+        )
+        l3 = l4 = g3 = g4 = None
+        if deriv > 1:
+            d3 = self.dist.d3logpdf(y, **params)
+            l3 = np.column_stack(
+                [np.broadcast_to(d3[k], shape)
+                 for k in combinations_with_replacement(names, 3)]
+            )
+            g3 = np.column_stack(
+                [link.d3link(params[name])
+                 for link, name in zip(self.links, names)]
+            )
+        if deriv > 3:
+            d4 = self.dist.d4logpdf(y, **params)
+            l4 = np.column_stack(
+                [np.broadcast_to(d4[k], shape)
+                 for k in combinations_with_replacement(names, 4)]
+            )
+            g4 = np.column_stack(
+                [link.d4link(params[name])
+                 for link, name in zip(self.links, names)]
+            )
+
+        tri = self.tri
+        de = gamlss_etamu(l1, l2, l3, l4, ig1, g2, g3, g4,
+                          tri["i2"], tri["i3"], tri["i4"], deriv - 1)
+        gh = gamlss_gH(X, jj, de["l1"], de["l2"], tri["i2"],
+                       l3=de["l3"], i3=tri["i3"], l4=de["l4"], i4=tri["i4"],
+                       d1b=d1b, d2b=d2b, deriv=deriv - 1, fh=fh, D=D)
+        ret.update(gh)
+        return ret
+
+    def initialize_coef(self, y, X, lpi, E=None, offset=None,
+                        use_unscaled: bool = False) -> np.ndarray:
+        """Null-model start, mgcv-flavoured but circular-safe: fit the
+        *distribution itself* to ``y`` (its own ``fit`` — analytic or
+        moment-seeded MLE), then least-squares each LP onto the constant
+        target ``link(param̂)`` with the penalty root ``E`` stacked as a
+        regularizer. gaulss regresses transformed *data* per LP and needs
+        pen.reg's edf search; a constant target has no df to overfit, so the
+        plain stacked solve serves both ``use_unscaled`` branches.
+        """
+        y = np.asarray(y, dtype=float)
+        X = np.asarray(X, dtype=float)
+        jj = [np.asarray(ix, dtype=int) for ix in lpi]
+        n, p = X.shape
+        if E is None:
+            E = np.zeros((0, p))
+        param_hat = np.atleast_1d(self.dist.fit(y))
+        start = np.zeros(p)
+        for j, (link, par0) in enumerate(zip(self.links, param_hat)):
+            # clip guards the tanhalf pole at μ̂ ≡ π (η → ∞)
+            eta0 = float(np.clip(link.link(float(par0)), -1e6, 1e6))
+            target = np.full(n, eta0)
+            if offset is not None and len(offset) > j and offset[j] is not None:
+                target = target - offset[j]
+            cols = jj[j]
+            xa = np.vstack([X[:, cols], E[:, cols]])
+            ta = np.concatenate([target, np.zeros(E.shape[0])])
+            b, *_ = np.linalg.lstsq(xa, ta, rcond=None)
+            b[~np.isfinite(b)] = 0.0
+            start[cols] = b
+        return start
+
+    def _fitted_direction(self, fitted):
+        """Fitted mean direction from the (n, n_lp) parameter matrix —
+        role-aware: a single location parameter *is* the angle; the projected
+        normal's two Cartesian location components combine via atan2."""
+        loc = self.dist.params_by_role().get("location", [])
+        idx = [self.params.index(nm) for nm in loc]
+        if len(idx) == 1:
+            return np.asarray(fitted)[:, idx[0]]
+        if len(idx) == 2:
+            f = np.asarray(fitted)
+            return np.arctan2(f[:, idx[1]], f[:, idx[0]])
+        raise NotImplementedError(
+            f"{self.name}: cannot derive a direction from location "
+            f"parameters {loc!r}"
+        )
+
+    def postproc(self, y, fitted) -> dict:
+        """Null deviance for the summary's "deviance explained": the
+        distribution's own intercept-only fit pushed through the same
+        deviance-residual convention as :meth:`residuals` (twice the
+        log-likelihood gap to the fitted-mode saturated reference)."""
+        y = np.asarray(y, dtype=float)
+        par0 = np.atleast_1d(self.dist.fit(y)).astype(float)
+        fitted0 = np.broadcast_to(par0, (y.shape[0], self.n_lp))
+        r0 = self.residuals(y, fitted0, type="deviance")
+        return {"null_deviance": float(np.sum(r0 * r0))}
+
+    def residuals(self, y, fitted, type: str = "deviance") -> np.ndarray:
+        """Angular residuals. ``response`` = the wrapped difference
+        ``y − μ̂(x)`` in (−π, π]; ``deviance``/``pearson`` =
+        ``sign·√(2·max(ℓ_mode − ℓ, 0))`` with the saturated value taken at
+        the fitted direction (the density mode for every Tier-1 family).
+        ``fitted`` is the (n, n_lp) matrix of inverse-linked parameters."""
+        y = np.asarray(y, dtype=float)
+        fitted = np.asarray(fitted, dtype=float)
+        mu_hat = self._fitted_direction(fitted)
+        rsd = np.angle(np.exp(1j * (y - mu_hat)))
+        if type == "response":
+            return rsd
+        params = {
+            name: (np.mod(fitted[:, j], 2.0 * np.pi)
+                   if self.links[j].name == "tanhalf" else fitted[:, j])
+            for j, name in enumerate(self.params)
+        }
+        l_obs = np.asarray(self.dist.logpdf(y, **params), dtype=float)
+        l_sat = np.asarray(
+            self.dist.logpdf(np.mod(mu_hat, 2.0 * np.pi), **params), dtype=float
+        )
+        return np.sign(rsd) * np.sqrt(2.0 * np.clip(l_sat - l_obs, 0.0, None))
+
+    def __repr__(self):
+        links = ", ".join(repr(lnk.name) for lnk in self.links)
+        return f"{self.name} (links: {links})"
+
+
 class CLRegression:
     """
     Circular-Linear Regression.
 
-    Fits a circular response to linear predictors using iterative optimization.
+    Two backends behind one surface (mirroring LC/CC):
+
+    - **parametric** (default for plain formulas / theta+X arrays): the
+      Fisher–Lee von Mises MLE below — ``μ_i = μ₀ + 2·atan(x_iᵀβ)``,
+      ``κ_i = exp(α + x_iᵀγ)`` — fast and dependency-light.
+    - **distributional gam** (a formula *list*, or any ``s()``/``te()``
+      smooth): ``hea.gam`` with a :class:`CircularLL` general family — one
+      formula per linear predictor, REML-penalized smooth μ(x) *and*
+      κ(z), e.g. ``CLRegression(["θ ~ s(x)", "~ s(z)"], data)``. A single
+      smooth formula implies a constant second LP (``"~ 1"``). ``family=``
+      selects the response distribution (default ``vonmises``; any
+      regression-ready distribution or a ``CircularLL`` works — use
+      ``projectednormal`` when μ(x) must sweep the full circle, since the
+      tanhalf link cannot cross ±π).
+
+    The two parameterizations differ with covariates: the gam backend
+    follows mgcv (every LP's intercept *inside* the link), the parametric
+    path keeps Fisher–Lee's offset outside. They coincide for
+    intercept-only models; otherwise compare fitted curves, not
+    coefficients.
 
     Parameters
     ----------
-    formula : str, optional
-        A formula string like 'θ ~ x1 + x2 + x3' specifying the model.
+    formula : str or list of str, optional
+        A formula string like 'θ ~ x1 + x2 + x3' (parametric), or a formula
+        list / smooth formula for the distributional gam backend.
     data : polars.DataFrame, optional
         A polars (or pandas) DataFrame containing the response and predictors.
     theta : np.ndarray, optional
@@ -258,7 +511,7 @@ class CLRegression:
 
     def __init__(
         self,
-        formula: Optional[str] = None,
+        formula: Union[str, List[str], None] = None,
         data: Optional[pl.DataFrame] = None,
         theta: Optional[np.ndarray] = None,
         X: Optional[np.ndarray] = None,
@@ -269,10 +522,44 @@ class CLRegression:
         tol: float = 1e-8,
         max_iter: int = 100,
         verbose: bool = False,
+        *,
+        family=None,
+        knots: Optional[dict] = None,
+        method: str = "REML",
+        **gam_kwargs,
     ):
         self.verbose = verbose
         self.tol = tol
         self.max_iter = max_iter
+
+        # --- backend dispatch (mirrors LC/CC; plan §5). A formula LIST (one
+        # formula per linear predictor) or any smooth term routes to the
+        # distributional gam backend — hea.gam with a CircularLL general
+        # family, REML-penalized smooth μ(x) and κ(z). A parametric formula
+        # string (or theta/X arrays) keeps the Fisher–Lee MLE below. Note the
+        # parameterizations differ with covariates: the gam backend follows
+        # mgcv (intercept inside the link, μ = 2·atan(β₀ + …)); the
+        # parametric path is Fisher–Lee (offset outside, μ₀ + 2·atan(Xβ)).
+        if isinstance(formula, (list, tuple)) or (
+            isinstance(formula, str) and _has_smooth(formula)
+        ):
+            if data is None:
+                raise ValueError(
+                    "The distributional (gam) backend requires `data`."
+                )
+            self.backend = "gam"
+            self.model_type = None  # the formula list plays this role
+            self._init_gam(formula, data, family, knots, method, gam_kwargs)
+            return
+        if family is not None or knots is not None or gam_kwargs:
+            raise ValueError(
+                "family=/knots=/gam options apply only to the smooth "
+                "(distributional gam) backend — pass a formula list or s() "
+                "terms."
+            )
+        self.backend = "parametric"
+        self.gam_fit = None
+        self.family = None
         self.model_type = model_type
 
         # Parse inputs
@@ -306,6 +593,105 @@ class CLRegression:
 
         # Fit the model
         self.result = self._fit()
+
+    def _init_gam(self, formula, data, family, knots, method, gam_kwargs):
+        """Fit the distributional gam backend: one formula per linear
+        predictor, ``hea.gam`` + a :class:`CircularLL` family, REML by
+        default. A single formula gets a constant second LP (``"~ 1"``) —
+        smooth μ(x), constant concentration."""
+        if family is None:
+            family = CircularLL(vonmises)
+        elif not isinstance(family, CircularLL):
+            family = CircularLL(family)  # a regression-ready distribution
+        formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
+        if len(formulas) == 1 and family.n_lp == 2:
+            formulas.append("~ 1")
+        if len(formulas) != family.n_lp:
+            raise ValueError(
+                f"{family.name} has {family.n_lp} linear predictors; got "
+                f"{len(formulas)} formulas."
+            )
+        self.formula = formulas
+        self.family = family
+        self.data = _to_polars(data)
+        response = formulas[0].split("~", 1)[0].strip()
+        if not response:
+            raise ValueError(f"First formula must name the response: {formulas[0]!r}")
+        self.feature_names = None
+        self.theta = np.mod(
+            np.asarray(self.data[response].to_numpy(), dtype=float), 2.0 * np.pi
+        )
+
+        # Cyclic smooths (bs='cc'/'cp') on circular predictors default their
+        # boundary knots to the period [0, 2π] — same circular knowledge the
+        # LC/CC backends supply; explicit user knots win per variable.
+        merged: dict = {}
+        for f in formulas:
+            merged.update(_resolve_cyclic_knots(f, None) or {})
+        if knots:
+            merged.update(knots)
+
+        self.gam_fit = _hea_gam(
+            formulas,
+            self.data,
+            family=family,
+            knots=merged or None,
+            method=method,
+            **gam_kwargs,
+        )
+        self.result = self._build_result_gam()
+
+    def _build_result_gam(self) -> dict:
+        """Result dict for the distributional gam backend. Keys shared with
+        the parametric path keep their meaning (``mu``/``kappa`` become
+        per-observation fitted values; ``log_likelihood`` is the penalized
+        fit's log-likelihood); smooth-specific summaries are added."""
+        g = self.gam_fit
+        fam = self.family
+        fv = np.asarray(g.fitted_values, dtype=float)
+        mu = np.mod(fam._fitted_direction(fv), 2.0 * np.pi)
+        conc = fam.dist.params_by_role().get("concentration", [])
+        kappa = fv[:, fam.params.index(conc[0])] if conc else None
+        out = {
+            "backend": "gam",
+            "param_names": list(fam.params),
+            "fitted_params": fv,
+            "mu": mu,
+            "kappa": kappa,
+            "coefficients": dict(zip(g.bhat.columns, g.bhat.row(0))),
+            "log_likelihood": float(g.logLik),
+            "aic": float(g.AIC),
+            "bic": float(g.BIC),
+            "reml": float(g.REML_criterion),
+            "edf_total": float(g.edf_total),
+            "residuals": np.asarray(g.residuals, dtype=float),
+            "n": fv.shape[0],
+        }
+        edf_by = getattr(g, "edf_by_smooth", None)
+        if edf_by is not None:
+            out["edf_by_smooth"] = {k: float(v) for k, v in dict(edf_by).items()}
+        return out
+
+    def predict_params(self, data) -> dict:
+        """Per-observation fitted distribution parameters at new data
+        (gam backend only): a book-named dict, one entry per linear
+        predictor, on the parameter scale (tanhalf angles wrapped to
+        ``[0, 2π)``)."""
+        if self.backend != "gam":
+            raise ValueError(
+                "predict_params() is for the distributional gam backend; the "
+                "parametric path exposes predict()/predict_kappa()."
+            )
+        new = _to_polars(data)
+        pred = self.gam_fit.predict(newdata=new)
+        cols = list(pred.columns)
+        out = {}
+        for j, name in enumerate(self.family.params):
+            v = np.asarray(pred[cols[j]].to_numpy(), dtype=float)
+            if self.family.links[j].name == "tanhalf":
+                v = np.mod(v, 2.0 * np.pi)
+            out[name] = v
+        return out
 
     @staticmethod
     def _coerce_vector(vec: Optional[np.ndarray], length: int, name: str) -> np.ndarray:
@@ -626,6 +1012,10 @@ class CLRegression:
         if self.result is None:
             raise ValueError("Model must be fitted before calculating AIC.")
 
+        if self.backend == "gam":
+            # hea's general-family AIC (edf-corrected, mgcv convention).
+            return self.result["aic"]
+
         log_likelihood = self.result["log_likelihood"]
         if self.model_type == "mean":
             n_params = len(self.result["beta"])  # Only beta
@@ -647,6 +1037,9 @@ class CLRegression:
         if self.result is None:
             raise ValueError("Model must be fitted before calculating BIC.")
 
+        if self.backend == "gam":
+            return self.result["bic"]
+
         log_likelihood = self.result["log_likelihood"]
         n = len(self.theta)
         if self.model_type == "mean":
@@ -664,12 +1057,14 @@ class CLRegression:
 
     def predict(self, X_new):
         """
-        Predict circular response values for new predictor values.
+        Predict circular response values (fitted mean direction) for new
+        predictor values.
 
         Parameters
         ----------
-        X_new: array-like, shape (n_samples, n_features)
-            New predictor data.
+        X_new: array-like, shape (n_samples, n_features), or a DataFrame
+            New predictor data. The gam backend takes a DataFrame with the
+            formula variables; the parametric path takes the design array.
 
         Returns
         -------
@@ -678,6 +1073,11 @@ class CLRegression:
         """
         if self.result is None:
             raise ValueError("Model must be fitted before making predictions.")
+
+        if self.backend == "gam":
+            params = self.predict_params(X_new)
+            fv = np.column_stack([params[nm] for nm in self.family.params])
+            return np.mod(self.family._fitted_direction(fv), 2.0 * np.pi)
 
         X_arr = np.asarray(X_new, dtype=float)
         if X_arr.ndim == 1:
@@ -715,6 +1115,15 @@ class CLRegression:
         -------
         np.ndarray, shape (n_samples,)
         """
+        if self.backend == "gam":
+            conc = self.family.dist.params_by_role().get("concentration", [])
+            if not conc:
+                raise ValueError(
+                    f"{self.family.name} has no 'concentration' parameter; "
+                    "use predict_params() for the fitted parameters."
+                )
+            return self.predict_params(X_new)[conc[0]]
+
         if self.model_type == "mean":
             raise ValueError(
                 "predict_kappa() is for model_type in {'kappa', 'mixed'}; "
@@ -759,6 +1168,9 @@ class CLRegression:
         matplotlib.figure.Figure
         """
         import matplotlib.pyplot as plt
+
+        if self.backend == "gam":
+            return self._plot_gam(plt, figsize, n_curve, axes)
 
         n_features = self.X.shape[1]
         is_1d = n_features == 1
@@ -826,12 +1238,96 @@ class CLRegression:
         return fig
 
     def _fitted_mean(self) -> np.ndarray:
-        """Conditional mean angle at the training X (constant μ for kappa-only)."""
+        """Conditional mean angle at the training data (constant μ for
+        kappa-only; per-observation fitted direction for the gam backend)."""
+        if self.backend == "gam":
+            return self.result["mu"]
         mu = self.result["mu"]
         if self.model_type == "kappa":
             return np.full(self.theta.shape, mu)
         beta = self.result["beta"]
         return mu + self._mu_link.linkinv(self.X @ beta)
+
+    def _gam_variables(self) -> List[str]:
+        """Data columns referenced by the gam formulas' RHSs, formula order."""
+        cols = set(self.data.columns)
+        seen: List[str] = []
+        for f in self.formula:
+            rhs = f.split("~", 1)[1] if "~" in f else f
+            for m in re.finditer(r"[A-Za-z_]\w*", rhs):
+                v = m.group(0)
+                if v in cols and v not in seen:
+                    seen.append(v)
+        return seen
+
+    def _plot_gam(self, plt, figsize, n_curve, axes):
+        """Two-panel figure for the distributional gam backend.
+
+        One shared predictor: fit overlay (data + μ̂(x) curve, replicated at
+        +2π) and the fitted concentration curve — κ̂(x) for a concentration
+        family, ‖μ̂(x)‖ for the projected normal. Multiple predictors: the
+        residual diagnostic pair instead.
+        """
+        if axes is None:
+            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
+        else:
+            axes = list(axes)
+            if len(axes) != 2:
+                raise ValueError("`axes` must be a sequence of length 2.")
+            fig = axes[0].figure
+
+        variables = self._gam_variables()
+        if len(variables) != 1:
+            self._plot_residual_diagnostic(axes)
+            fig.tight_layout()
+            return fig
+
+        var = variables[0]
+        x_data = np.asarray(self.data[var].to_numpy(), dtype=float)
+        theta_data = np.mod(self.theta, 2 * np.pi)
+        x_grid = np.linspace(x_data.min(), x_data.max(), n_curve)
+        params = self.predict_params(pl.DataFrame({var: x_grid}))
+        fv = np.column_stack([params[nm] for nm in self.family.params])
+        curve = np.mod(self.family._fitted_direction(fv), 2 * np.pi)
+
+        ax = axes[0]
+        curve_plot = curve.astype(float).copy()
+        jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
+        curve_plot[jumps] = np.nan
+        ax.plot(x_grid, curve_plot, color="C1", lw=2, label="fit")
+        ax.plot(x_grid, curve_plot + 2 * np.pi, color="C1", lw=2)
+        ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
+        ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
+        ax.set_ylim(0, 4 * np.pi)
+        ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
+        ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
+        ax.set_xlabel(var)
+        ax.set_ylabel("θ")
+        ax.set_title(f"Fit overlay ({self.family.name})")
+        ax.legend(loc="best", frameon=False)
+
+        ax = axes[1]
+        roles = self.family.dist.params_by_role()
+        conc = roles.get("concentration", [])
+        loc = roles.get("location", [])
+        if conc:
+            ax.plot(x_grid, params[conc[0]], color="C1", lw=2)
+            ax.set_ylabel(f"{conc[0]}̂({var})")
+            ax.set_title("Fitted concentration")
+        elif len(loc) == 2:
+            ax.plot(x_grid, np.hypot(params[loc[0]], params[loc[1]]), color="C1", lw=2)
+            ax.set_ylabel(f"‖μ̂‖({var})")
+            ax.set_title("Fitted resultant length (concentration proxy)")
+        else:
+            residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
+            ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
+            ax.axhline(0.0, color="k", lw=0.5)
+            ax.set_ylabel("Residual (rad)")
+            ax.set_title("Residuals vs " + var)
+        ax.set_xlabel(var)
+
+        fig.tight_layout()
+        return fig
 
     def _plot_residual_diagnostic(self, axes) -> None:
         residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
@@ -859,6 +1355,26 @@ class CLRegression:
     def summary(self):
         if self.result is None:
             raise ValueError("Model must be fitted before summarizing.")
+
+        if self.backend == "gam":
+            # hea.gam.summary() prints the mgcv-style block (parametric
+            # coefficients + approximate smooth significance); prepend the
+            # LP ↔ parameter mapping and append the fitted-parameter ranges.
+            print("\nCircular-Linear Regression — distributional gam backend")
+            print(f"Family: {self.family!r}")
+            for f, nm in zip(self.formula, self.family.params):
+                print(f"  LP[{nm}]: {f.strip()}")
+            print()
+            self.gam_fit.summary()
+            fv = self.result["fitted_params"]
+            print("\nFitted parameters (per observation):")
+            for j, nm in enumerate(self.family.params):
+                col = fv[:, j]
+                print(
+                    f"  {nm:<6s} min {np.min(col): .4f}   "
+                    f"median {np.median(col): .4f}   max {np.max(col): .4f}"
+                )
+            return
 
         # Title based on model type
         if self.model_type == "mean":

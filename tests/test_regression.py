@@ -906,3 +906,155 @@ def test_cc_gam_cyclic_knots_default_to_period():
     auto = CCRegression("theta ~ s(x, bs='cc')", df)
     explicit = CCRegression("theta ~ s(x, bs='cc')", df, knots={"x": [0.0, 2 * np.pi]})
     assert np.allclose(auto.result["fitted"], explicit.result["fitted"], atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: CircularLL — circular distributions as hea general families
+# ---------------------------------------------------------------------------
+
+from hea.models import gam as hea_gam  # noqa: E402
+
+from pycircstat2.distributions import (  # noqa: E402
+    projectednormal,
+    vonmises,
+    wrapcauchy,
+)
+from pycircstat2.regression import CircularLL  # noqa: E402
+
+
+def test_circularll_requires_regression_ready():
+    from pycircstat2.distributions import cardioid
+
+    with pytest.raises(TypeError, match="regression-ready"):
+        CircularLL(cardioid)
+
+
+def test_circularll_vonmises_intercept_only_matches_mle():
+    """gam(["theta ~ 1", "~ 1"], family=CircularLL(vonmises)) is the
+    unpenalized von Mises MLE — pins the whole ll() derivative stack
+    (Newton lands on the score root) and initialize_coef."""
+    rng = np.random.default_rng(1)
+    theta = np.mod(rng.vonmises(1.0, 3.0, 500), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta})
+    m = hea_gam(
+        ["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises), method="REML"
+    )
+    assert m.converged
+    coef = np.asarray(m.coefficients, dtype=float)
+    mu_mle, kappa_mle = vonmises.fit(theta)
+    assert np.mod(2 * np.arctan(coef[0]), 2 * np.pi) == pytest.approx(mu_mle, abs=1e-4)
+    assert np.exp(coef[1]) == pytest.approx(kappa_mle, rel=1e-3)
+
+
+def test_circularll_wrapcauchy_intercept_only_matches_mle():
+    """Same MLE-equivalence through the logit-linked wrapped Cauchy."""
+    theta = np.asarray(wrapcauchy.rvs(2.2, 0.55, size=800, random_state=11))
+    df = pl.DataFrame({"theta": theta})
+    m = hea_gam(
+        ["theta ~ 1", "~ 1"], data=df, family=CircularLL(wrapcauchy), method="REML"
+    )
+    assert m.converged
+    coef = np.asarray(m.coefficients, dtype=float)
+    mu_mle, rho_mle = wrapcauchy.fit(theta)
+    assert np.mod(2 * np.arctan(coef[0]), 2 * np.pi) == pytest.approx(mu_mle, abs=1e-3)
+    assert 1.0 / (1.0 + np.exp(-coef[1])) == pytest.approx(rho_mle, abs=1e-3)
+
+
+def test_circularll_vonmises_recovers_smooth_mu_and_kappa():
+    """The §5 target: smooth μ(x) AND log κ(z) by REML, jointly. True curves
+    stay inside the tanhalf principal branch (the link cannot cross ±π)."""
+    rng = np.random.default_rng(7)
+    n = 2000
+    x = rng.uniform(0, 1, n)
+    z = rng.uniform(0, 1, n)
+    mu_true = np.pi / 2 + 1.2 * np.sin(2 * np.pi * x)
+    kap_true = np.exp(0.8 + 1.2 * z)
+    theta = np.mod(mu_true + rng.vonmises(0.0, kap_true, n), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta, "x": x, "z": z})
+
+    m = hea_gam(
+        ["theta ~ s(x)", "~ s(z)"], data=df, family=CircularLL(vonmises),
+        method="REML",
+    )
+    assert m.converged
+    fv = np.asarray(m.fitted_values)
+    circ_err = np.abs(np.angle(np.exp(1j * (fv[:, 0] - mu_true))))
+    logk_err = np.abs(np.log(fv[:, 1]) - np.log(kap_true))
+    assert circ_err.mean() < 0.08
+    assert logk_err.mean() < 0.10
+
+
+def test_circularll_projectednormal_fits_full_circle_sweep():
+    """A full-circle μ(x) sweep — unrepresentable through tanhalf (pole at
+    ±π) — fits cleanly through the projected normal's two identity LPs."""
+    rng = np.random.default_rng(3)
+    n = 3000
+    x = rng.uniform(0, 1, n)
+    gamma = 2.0
+    mu1, mu2 = gamma * np.cos(2 * np.pi * x), gamma * np.sin(2 * np.pi * x)
+    theta = np.mod(
+        np.arctan2(mu2 + rng.standard_normal(n), mu1 + rng.standard_normal(n)),
+        2 * np.pi,
+    )
+    df = pl.DataFrame({"theta": theta, "x": x})
+    m = hea_gam(
+        ["theta ~ s(x)", "~ s(x)"], data=df,
+        family=CircularLL(projectednormal), method="REML",
+    )
+    assert m.converged
+    fv = np.asarray(m.fitted_values)
+    dir_hat = np.arctan2(fv[:, 1], fv[:, 0])
+    dir_true = np.arctan2(mu2, mu1)
+    err = np.abs(np.angle(np.exp(1j * (dir_hat - dir_true))))
+    assert err.mean() < 0.05
+
+
+def _cl_gam_sim(n=900, seed=7):
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 1, n)
+    z = rng.uniform(0, 1, n)
+    mu = np.pi / 2 + 1.2 * np.sin(2 * np.pi * x)
+    kap = np.exp(0.8 + 1.2 * z)
+    theta = np.mod(mu + rng.vonmises(0.0, kap, n), 2 * np.pi)
+    return pl.DataFrame({"theta": theta, "x": x, "z": z}), mu
+
+
+def test_cl_gam_dispatch_and_surfaces():
+    """A formula list routes CLRegression onto the CircularLL gam backend:
+    smooth μ(x) recovered, result keys populated, predict/AIC/BIC work."""
+    df, mu_true = _cl_gam_sim()
+    m = CLRegression(["theta ~ s(x)", "~ s(z)"], df)
+    assert m.backend == "gam"
+    err = np.abs(np.angle(np.exp(1j * (m.result["mu"] - mu_true))))
+    assert err.mean() < 0.1
+    assert m.result["edf_total"] > 2
+    assert np.isfinite(m.AIC()) and np.isfinite(m.BIC())
+    new = pl.DataFrame({"x": [0.25], "z": [0.5]})
+    assert 0.0 <= float(m.predict(new)[0]) < 2 * np.pi
+    assert float(m.predict_kappa(new)[0]) > 0
+
+
+def test_cl_gam_single_formula_implies_constant_kappa():
+    df, _ = _cl_gam_sim()
+    m = CLRegression("theta ~ s(x)", df)
+    assert m.backend == "gam"
+    assert m.formula == ["theta ~ s(x)", "~ 1"]
+    k = m.result["kappa"]
+    assert np.allclose(k, k[0])
+
+
+def test_cl_gam_family_kwarg_and_parametric_guard():
+    """family= accepts a regression-ready distribution (auto-wrapped); gam
+    options on the parametric path raise."""
+    from pycircstat2.distributions import projectednormal
+
+    df, _ = _cl_gam_sim()
+    m = CLRegression("theta ~ s(x)", df, family=projectednormal)
+    assert m.result["param_names"] == ["mu1", "mu2"]
+    assert m.result["kappa"] is None
+    with pytest.raises(ValueError, match="gam"):
+        CLRegression(
+            theta=np.array([0.1, 0.5, 1.0]),
+            X=np.array([[0.0], [0.5], [1.0]]),
+            family=projectednormal,
+        )
