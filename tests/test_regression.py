@@ -1058,3 +1058,46 @@ def test_cl_gam_family_kwarg_and_parametric_guard():
             X=np.array([[0.0], [0.5], [1.0]]),
             family=projectednormal,
         )
+
+
+def test_cl_gam_plot_draws_both_bands_with_toggles():
+    """The gam overlay draws a CI band (μ̂ ± z·se, like LC) and a κ-implied
+    ±1 circ-SD dispersion band (like CC), each independently toggleable;
+    projected normal (derived direction, no κ role) draws neither, no crash."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from pycircstat2.distributions import projectednormal
+
+    df, _ = _cl_gam_sim(n=400)
+    m = CLRegression("theta ~ s(x)", df)
+
+    def _labels(fig):
+        return {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
+
+    assert {"95% CI", "±1 circ-SD"} <= _labels(m.plot())
+    assert "95% CI" not in _labels(m.plot(ci=False))
+    assert "±1 circ-SD" not in _labels(m.plot(pi=False))
+    assert _labels(m.plot(level=0.80)) >= {"80% CI"}
+
+    mp = CLRegression("theta ~ s(x)", df, family=projectednormal)
+    assert _labels(mp.plot()) == {"fit", "data"}  # no bands, but renders
+
+
+@pytest.mark.parametrize("model_type", ["mean", "kappa", "mixed"])
+def test_cl_parametric_plot_draws_both_bands(model_type):
+    """The parametric overlays (mean/kappa/mixed) carry the same CI +
+    dispersion bands as the gam backend, each toggleable."""
+    import matplotlib
+    matplotlib.use("Agg")
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(120, 1))
+    theta = np.mod(0.7 + 2 * np.arctan(0.9 * X[:, 0]) + rng.vonmises(0, 5.0, 120), 2 * np.pi)
+    m = CLRegression(theta=theta, X=X, model_type=model_type, tol=1e-8, max_iter=300)
+
+    def _labels(fig):
+        return {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
+
+    assert {"95% CI", "±1 circ-SD"} <= _labels(m.plot())
+    assert "95% CI" not in _labels(m.plot(ci=False))
+    assert "±1 circ-SD" not in _labels(m.plot(pi=False))

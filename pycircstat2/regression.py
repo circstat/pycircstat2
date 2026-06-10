@@ -1151,17 +1151,41 @@ class CLRegression:
         self,
         figsize: Optional[Tuple[float, float]] = None,
         n_curve: int = 200,
+        ci: bool = True,
+        pi: bool = True,
+        level: float = 0.95,
         axes=None,
     ):
         """Two-panel diagnostic figure.
 
-        Layout depends on ``model_type`` and the number of predictors:
+        Parametric backend — layout depends on ``model_type`` and the number
+        of predictors:
 
         - 1D X, ``model_type`` in ``{"mean", "mixed"}``: fit overlay
           (data and curve replicated at θ and θ+2π) and residuals vs X.
         - 1D X, ``model_type`` == ``"kappa"``: data scatter with the
           constant μ line, plus fitted κ_i = exp(α + X_iᵀγ) on the right.
         - Multi-D X: residuals vs fitted angle, plus residual histogram.
+
+        The 1D overlays carry the same two bands as the gam backend: a
+        ``level`` CI band on μ̂(X) (``ci``; delta method through the link,
+        approximating μ₀ ⟂ β) and a ±1 circular-SD dispersion band from κ̂
+        (``pi``). κ̂ is the constant scalar for ``"mean"`` and exp(α + Xγ)
+        for ``"kappa"``/``"mixed"``.
+
+        Distributional gam backend (single shared predictor) — fit overlay
+        with two optional bands on μ̂(x), plus the fitted concentration curve:
+
+        - ``ci`` (default on): a ``level`` confidence band ``μ̂ ± z·se`` from
+          hea's delta-method se of the direction LP (the LCRegression-style
+          band). Available when the mean direction is a single fitted
+          parameter (von Mises, wrapped Cauchy).
+        - ``pi`` (default on): a ``±1`` circular-SD *dispersion* band implied
+          by the fitted concentration (the CCRegression-style band),
+          ``circ-SD = √(−2 ln R̂(x))`` with ``R̂ = A1(κ̂)`` (von Mises) or
+          ``ρ̂`` (wrapped Cauchy). Visualizes the modeled κ(x) on the overlay.
+
+        (``ci``/``pi``/``level`` are ignored by the parametric backend.)
 
         Returns
         -------
@@ -1170,7 +1194,7 @@ class CLRegression:
         import matplotlib.pyplot as plt
 
         if self.backend == "gam":
-            return self._plot_gam(plt, figsize, n_curve, axes)
+            return self._plot_gam(plt, figsize, n_curve, ci, pi, level, axes)
 
         n_features = self.X.shape[1]
         is_1d = n_features == 1
@@ -1199,14 +1223,34 @@ class CLRegression:
         if self.model_type in ("mean", "mixed"):
             mu = self.result["mu"]
             beta = self.result["beta"]
-            curve = np.mod(mu + self._mu_link.linkinv(x_grid * beta[0]), 2 * np.pi)
-            curve_plot = curve.astype(float).copy()
+            eta = x_grid * beta[0]
+            curve = np.mod(mu + self._mu_link.linkinv(eta), 2 * np.pi)
             jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
+            # CI band on μ̂(X): delta method through the link, treating μ₀ and β
+            # as independent (the fit estimates them in separate steps and stores
+            # no cross-covariance — an approximation, unlike the gam backend's
+            # full-covariance se). ∂μ̂/∂β = mu_eta(βX)·X. Dispersion band from κ̂.
+            se_dir = None
+            if self.result.get("se_beta") is not None and self.result.get("se_mu") is not None:
+                g = self._mu_link.mu_eta(eta) * x_grid
+                se_dir = np.sqrt(self.result["se_mu"] ** 2 + (g * self.result["se_beta"][0]) ** 2)
+            kappa = self.result["kappa"] if self.model_type == "mean" else self._predict_kappa(x_grid_2d)
+            circ_sd = np.sqrt(-2.0 * np.log(np.clip(A1(np.asarray(kappa, dtype=float)), 1e-12, 1.0)))
+            self._fill_mu_bands(ax, x_grid, curve, jumps, ci=ci, pi=pi, level=level,
+                                se_dir=se_dir, circ_sd=circ_sd)
+            curve_plot = curve.astype(float).copy()
             curve_plot[jumps] = np.nan
             ax.plot(x_grid, curve_plot, color="C1", lw=2, label="fit")
             ax.plot(x_grid, curve_plot + 2 * np.pi, color="C1", lw=2)
         else:  # kappa-only: conditional mean is the constant μ.
             mu = self.result["mu"]
+            curve = np.full_like(x_grid, np.mod(mu, 2 * np.pi))
+            se_dir = (np.full_like(x_grid, self.result["se_mu"])
+                      if self.result.get("se_mu") is not None else None)
+            kappa = self._predict_kappa(x_grid_2d)
+            circ_sd = np.sqrt(-2.0 * np.log(np.clip(A1(kappa), 1e-12, 1.0)))
+            self._fill_mu_bands(ax, x_grid, curve, np.array([], dtype=int),
+                                ci=ci, pi=pi, level=level, se_dir=se_dir, circ_sd=circ_sd)
             ax.axhline(mu, color="C1", lw=2, label=f"μ = {mu:.3f}")
             ax.axhline(mu + 2 * np.pi, color="C1", lw=2)
 
@@ -1260,13 +1304,68 @@ class CLRegression:
                     seen.append(v)
         return seen
 
-    def _plot_gam(self, plt, figsize, n_curve, axes):
+    def _fill_mu_bands(self, ax, x_grid, curve, jumps, *, ci, pi, level,
+                       se_dir=None, circ_sd=None) -> None:
+        """Draw ±band(s) around a (possibly wrapping) μ̂(x) curve on the
+        ``[0, 4π]`` overlay, shared by the parametric and gam backends: a ±1
+        circular-SD *dispersion* band (``pi``, wide, from ``circ_sd``) and/or
+        a ``level`` *confidence* band (``ci``, narrow, from ``se_dir``), each
+        replicated at +2π and broken at the same wrap points as the curve.
+        A band whose width array is ``None`` is skipped."""
+        def _fill(delta, color, alpha, label):
+            lo = (curve - delta).astype(float)
+            hi = (curve + delta).astype(float)
+            lo[jumps] = np.nan
+            hi[jumps] = np.nan
+            ax.fill_between(x_grid, lo, hi, color=color, alpha=alpha, lw=0, label=label)
+            ax.fill_between(x_grid, lo + 2 * np.pi, hi + 2 * np.pi, color=color, alpha=alpha, lw=0)
+
+        if pi and circ_sd is not None:
+            _fill(np.broadcast_to(circ_sd, x_grid.shape), "C1", 0.12, "±1 circ-SD")
+        if ci and se_dir is not None:
+            z = float(norm.ppf(0.5 + level / 2.0))
+            _fill(z * np.broadcast_to(se_dir, x_grid.shape), "C3", 0.25,
+                  f"{int(round(level * 100))}% CI")
+
+    def _gam_direction_se(self, grid_df) -> Optional[np.ndarray]:
+        """Delta-method se of the fitted mean direction on the grid, in
+        radians — hea's ``se.fit`` for the location LP. Returns ``None`` when
+        the direction is not a single fitted parameter (e.g. projected
+        normal, where it is ``atan2`` of two LPs and would need a joint delta
+        method)."""
+        loc = self.family.dist.params_by_role().get("location", [])
+        if len(loc) != 1:
+            return None
+        li = self.family.params.index(loc[0])
+        pred = self.gam_fit.predict(newdata=grid_df, se_fit=True)
+        cols = pred.columns  # [fit_0..fit_{k-1}, se_0..se_{k-1}]
+        return np.asarray(
+            pred[cols[self.family.n_lp + li]].to_numpy(), dtype=float
+        )
+
+    def _gam_resultant_length(self, params) -> Optional[np.ndarray]:
+        """Mean resultant length R̂(x) from the fitted concentration, for the
+        ±1 circular-SD dispersion band. ``A1(κ̂)`` for a κ-concentration
+        (von Mises), ``ρ̂`` itself for a ρ-concentration (wrapped Cauchy);
+        ``None`` when there is no concentration role mapping known."""
+        conc = self.family.dist.params_by_role().get("concentration", [])
+        if not conc:
+            return None
+        name = conc[0]
+        if name == "kappa":
+            return A1(np.asarray(params[name], dtype=float))
+        if name == "rho":
+            return np.asarray(params[name], dtype=float)
+        return None
+
+    def _plot_gam(self, plt, figsize, n_curve, ci, pi, level, axes):
         """Two-panel figure for the distributional gam backend.
 
         One shared predictor: fit overlay (data + μ̂(x) curve, replicated at
-        +2π) and the fitted concentration curve — κ̂(x) for a concentration
-        family, ‖μ̂(x)‖ for the projected normal. Multiple predictors: the
-        residual diagnostic pair instead.
+        +2π) with an optional confidence band (``ci``) and ±1 circular-SD
+        dispersion band (``pi``), and the fitted concentration curve — κ̂(x)
+        for a concentration family, ‖μ̂(x)‖ for the projected normal.
+        Multiple predictors: the residual diagnostic pair instead.
         """
         if axes is None:
             fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
@@ -1286,13 +1385,21 @@ class CLRegression:
         x_data = np.asarray(self.data[var].to_numpy(), dtype=float)
         theta_data = np.mod(self.theta, 2 * np.pi)
         x_grid = np.linspace(x_data.min(), x_data.max(), n_curve)
-        params = self.predict_params(pl.DataFrame({var: x_grid}))
+        grid_df = pl.DataFrame({var: x_grid})
+        params = self.predict_params(grid_df)
         fv = np.column_stack([params[nm] for nm in self.family.params])
         curve = np.mod(self.family._fitted_direction(fv), 2 * np.pi)
+        jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
 
         ax = axes[0]
+        # Bands first (under the curve and data). Dispersion (wide) below CI.
+        R = self._gam_resultant_length(params) if pi else None
+        circ_sd = None if R is None else np.sqrt(-2.0 * np.log(np.clip(R, 1e-12, 1.0)))
+        se_dir = self._gam_direction_se(grid_df) if ci else None
+        self._fill_mu_bands(ax, x_grid, curve, jumps, ci=ci, pi=pi, level=level,
+                            se_dir=se_dir, circ_sd=circ_sd)
+
         curve_plot = curve.astype(float).copy()
-        jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
         curve_plot[jumps] = np.nan
         ax.plot(x_grid, curve_plot, color="C1", lw=2, label="fit")
         ax.plot(x_grid, curve_plot + 2 * np.pi, color="C1", lw=2)
