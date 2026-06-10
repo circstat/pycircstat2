@@ -1156,3 +1156,22 @@ def test_cl_parametric_plot_draws_both_bands(model_type):
     assert {"95% CI", "±1 circ-SD"} <= _labels(m.plot())
     assert "95% CI" not in _labels(m.plot(ci=False))
     assert "±1 circ-SD" not in _labels(m.plot(pi=False))
+
+
+def test_cl_predict_accepts_array_and_dataframe_both_backends():
+    """predict()/predict_kappa() take either a design array or a DataFrame on
+    both backends, with matching results (the cross-backend comparison surface)."""
+    df = load_data("B20", source="fisher")
+    d = pl.DataFrame({"X": df["x"].to_numpy(), "θ": np.deg2rad(df["θ"].to_numpy())})
+    grid = np.linspace(0.0, d["X"].max(), 7)
+    g_arr, g_df = grid[:, None], pl.DataFrame({"X": grid})
+
+    for backend in ("fisher-lee", "gam"):
+        m = CLRegression(["θ ~ X", "~ X"], d, backend=backend)
+        np.testing.assert_allclose(m.predict(g_arr), m.predict(g_df), atol=1e-9)
+        np.testing.assert_allclose(m.predict_kappa(g_arr), m.predict_kappa(g_df), atol=1e-9)
+
+    # gam: wrong column count is a clear error
+    m = CLRegression(["θ ~ X", "~ X"], d, backend="gam")
+    with pytest.raises(ValueError, match="predictor column"):
+        m.predict(np.zeros((5, 2)))

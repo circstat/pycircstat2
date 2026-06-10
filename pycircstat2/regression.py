@@ -769,13 +769,13 @@ class CLRegression:
         """Per-observation fitted distribution parameters at new data
         (gam backend only): a book-named dict, one entry per linear
         predictor, on the parameter scale (tanhalf angles wrapped to
-        ``[0, 2π)``)."""
+        ``[0, 2π)``). ``data`` may be a DataFrame or a design array."""
         if self.backend != "gam":
             raise ValueError(
                 "predict_params() is for the distributional gam backend; the "
                 "fisher-lee path exposes predict()/predict_kappa()."
             )
-        new = _to_polars(data)
+        new = self._gam_newdata(data)
         pred = self.gam_fit.predict(newdata=new)
         cols = list(pred.columns)
         out = {}
@@ -1148,6 +1148,48 @@ class CLRegression:
 
         return -2 * log_likelihood + n_params * np.log(n)
 
+    def _gam_newdata(self, data):
+        """Coerce gam-backend predict input to a DataFrame. A DataFrame passes
+        through; a numpy array maps its columns to the formula predictor
+        variables in order (mirroring the fisher-lee array interface), so
+        ``predict(array)`` works on both backends."""
+        if isinstance(data, pl.DataFrame) or type(data).__module__.startswith("pandas"):
+            return _to_polars(data)
+        arr = np.asarray(data, dtype=float)
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        variables = self._gam_variables()
+        if arr.shape[1] != len(variables):
+            raise ValueError(
+                f"expected {len(variables)} predictor column(s) {variables} for "
+                f"the gam backend; got an array with {arr.shape[1]}."
+            )
+        return pl.DataFrame({v: arr[:, i] for i, v in enumerate(variables)})
+
+    def _fl_design(self, X_new) -> np.ndarray:
+        """Coerce fisher-lee predict input to the design array. An array is
+        used as-is; a DataFrame's ``feature_names`` columns are extracted (in
+        the model's order), so ``predict(df)`` works on both backends."""
+        if isinstance(X_new, pl.DataFrame) or type(X_new).__module__.startswith("pandas"):
+            dfn = _to_polars(X_new)
+            missing = [c for c in self.feature_names if c not in dfn.columns]
+            if missing:
+                raise ValueError(
+                    f"missing predictor column(s) {missing}; frame has {dfn.columns}."
+                )
+            arr = dfn.select(self.feature_names).to_numpy().astype(float)
+        else:
+            arr = np.asarray(X_new, dtype=float)
+            if arr.ndim == 1:
+                arr = arr[:, None]
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("`X_new` contains non-finite values.")
+        if arr.shape[1] != self.X.shape[1]:
+            raise ValueError(
+                f"Expected {self.X.shape[1]} predictors, received {arr.shape[1]}."
+            )
+        return arr
+
     def predict(self, X_new):
         """
         Predict circular response values (fitted mean direction) for new
@@ -1155,9 +1197,10 @@ class CLRegression:
 
         Parameters
         ----------
-        X_new: array-like, shape (n_samples, n_features), or a DataFrame
-            New predictor data. The gam backend takes a DataFrame with the
-            formula variables; the fisher-lee path takes the design array.
+        X_new: array-like or DataFrame
+            New predictor data. Both backends accept either a design array
+            (columns = predictors in model order) or a DataFrame carrying the
+            predictor columns.
 
         Returns
         -------
@@ -1172,16 +1215,7 @@ class CLRegression:
             fv = np.column_stack([params[nm] for nm in self.family.params])
             return np.mod(self.family._fitted_direction(fv), 2.0 * np.pi)
 
-        X_arr = np.asarray(X_new, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr[:, None]
-        if not np.all(np.isfinite(X_arr)):
-            raise ValueError("`X_new` contains non-finite values.")
-        if X_arr.shape[1] != self.X.shape[1]:
-            raise ValueError(
-                f"Expected {self.X.shape[1]} predictors, received {X_arr.shape[1]}."
-            )
-
+        X_arr = self._fl_design(X_new)
         mu = self.result["mu"]
         if self.model_type == "kappa":
             # Conditional mean is constant μ (β is not part of the model).
@@ -1222,16 +1256,7 @@ class CLRegression:
                 "predict_kappa() is for model_type in {'kappa', 'mixed'}; "
                 "the 'mean' model has a scalar κ in result['kappa']."
             )
-        X_arr = np.asarray(X_new, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr[:, None]
-        if X_arr.shape[1] != self.X.shape[1]:
-            raise ValueError(
-                f"Expected {self.X.shape[1]} predictors, received {X_arr.shape[1]}."
-            )
-        if not np.all(np.isfinite(X_arr)):
-            raise ValueError("`X_new` contains non-finite values.")
-        return self._predict_kappa(X_arr)
+        return self._predict_kappa(self._fl_design(X_new))
 
     def _predict_kappa(self, X_arr: np.ndarray) -> np.ndarray:
         """Internal: numpy-only κ̂(X) without input validation."""
@@ -1249,36 +1274,28 @@ class CLRegression:
         level: float = 0.95,
         axes=None,
     ):
-        """Two-panel diagnostic figure.
+        """Two-panel diagnostic figure, laid out the same way for both
+        backends (single shared predictor):
 
-        Fisher–Lee backend — layout depends on ``model_type`` and the number
-        of predictors:
+        - **Left — fit overlay:** data (replicated at θ and θ+2π) and the
+          fitted μ̂(x) curve, with two optional bands — a ``level`` CI band
+          ``μ̂ ± z·se`` (``ci``) and a ±1 circular-SD *dispersion* band from
+          the fitted concentration (``pi``, ``circ-SD = √(−2 ln R̂(x))`` with
+          ``R̂ = A1(κ̂)`` for von Mises, ``ρ̂`` for wrapped Cauchy). For the
+          fisher-lee ``"kappa"`` model the curve is the constant μ line.
+        - **Right — fitted concentration vs residuals:** the κ̂(x) curve when
+          concentration depends on x (fisher-lee kappa/mixed; a gam κ LP with
+          covariates), else residuals vs x (constant-κ models). The projected
+          normal shows ‖μ̂(x)‖ as its concentration proxy.
 
-        - 1D X, ``model_type`` in ``{"mean", "mixed"}``: fit overlay
-          (data and curve replicated at θ and θ+2π) and residuals vs X.
-        - 1D X, ``model_type`` == ``"kappa"``: data scatter with the
-          constant μ line, plus fitted κ_i = exp(α + X_iᵀγ) on the right.
-        - Multi-D X: residuals vs fitted angle, plus residual histogram.
+        Multi-predictor fits drop the overlay for a residuals-vs-fitted /
+        residual-histogram pair.
 
-        The 1D overlays carry the same two bands as the gam backend: a
-        ``level`` CI band on μ̂(X) (``ci``; delta method through the link,
-        approximating μ₀ ⟂ β) and a ±1 circular-SD dispersion band from κ̂
-        (``pi``). κ̂ is the constant scalar for ``"mean"`` and exp(α + Xγ)
-        for ``"kappa"``/``"mixed"``.
-
-        Distributional gam backend (single shared predictor) — fit overlay
-        with two optional bands on μ̂(x), plus the fitted concentration curve:
-
-        - ``ci`` (default on): a ``level`` confidence band ``μ̂ ± z·se`` from
-          hea's delta-method se of the direction LP (the LCRegression-style
-          band). Available when the mean direction is a single fitted
-          parameter (von Mises, wrapped Cauchy).
-        - ``pi`` (default on): a ``±1`` circular-SD *dispersion* band implied
-          by the fitted concentration (the CCRegression-style band),
-          ``circ-SD = √(−2 ln R̂(x))`` with ``R̂ = A1(κ̂)`` (von Mises) or
-          ``ρ̂`` (wrapped Cauchy). Visualizes the modeled κ(x) on the overlay.
-
-        (``ci``/``pi``/``level`` are ignored by the fisher-lee backend.)
+        The CI band is exact (joint covariance) for the gam backend and a
+        μ₀ ⟂ β delta-method approximation for fisher-lee; the gam CI band is
+        available only when the direction is a single fitted parameter (von
+        Mises, wrapped Cauchy — not the projected normal's atan2 of two LPs).
+        ``ci``/``pi``/``level`` apply to both backends.
 
         Returns
         -------
@@ -1358,7 +1375,10 @@ class CLRegression:
         ax.legend(loc="best", frameon=False)
 
         ax = axes[1]
-        if self.model_type == "kappa":
+        # Right panel = fitted concentration when κ depends on X (kappa AND
+        # mixed both model κ(X) = exp(α + Xγ)); residuals when κ is constant
+        # (mean). Same rule the gam overlay uses, so all models read alike.
+        if self.model_type in ("kappa", "mixed"):
             kappa_curve = self._predict_kappa(x_grid_2d)
             ax.plot(x_grid, kappa_curve, color="C1", lw=2)
             ax.set_ylabel("κ̂(X) = exp(α + Xγ)")
@@ -1506,18 +1526,26 @@ class CLRegression:
         ax.set_title(f"Fit overlay ({self.family.name})")
         ax.legend(loc="best", frameon=False)
 
+        # Right panel = the fitted concentration when it depends on the
+        # predictor; residuals when it is constant (an intercept-only κ LP).
+        # κ̂(X) for a concentration family, ‖μ̂(X)‖ for the projected normal.
+        # Same rule as the fisher-lee overlay, so all CL plots read alike.
         ax = axes[1]
         roles = self.family.dist.params_by_role()
         conc = roles.get("concentration", [])
         loc = roles.get("location", [])
         if conc:
-            ax.plot(x_grid, params[conc[0]], color="C1", lw=2)
-            ax.set_ylabel(f"{conc[0]}̂({var})")
-            ax.set_title("Fitted concentration")
+            proxy, label, title = params[conc[0]], f"{conc[0]}̂({var})", "Fitted concentration"
         elif len(loc) == 2:
-            ax.plot(x_grid, np.hypot(params[loc[0]], params[loc[1]]), color="C1", lw=2)
-            ax.set_ylabel(f"‖μ̂‖({var})")
-            ax.set_title("Fitted resultant length (concentration proxy)")
+            proxy = np.hypot(params[loc[0]], params[loc[1]])
+            label, title = f"‖μ̂‖({var})", "Fitted resultant length (concentration proxy)"
+        else:
+            proxy = None
+        varies = proxy is not None and np.ptp(proxy) > 1e-8 * max(1.0, float(np.mean(np.abs(proxy))))
+        if varies:
+            ax.plot(x_grid, proxy, color="C1", lw=2)
+            ax.set_ylabel(label)
+            ax.set_title(title)
         else:
             residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
             ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
