@@ -18,7 +18,6 @@ from scipy.special import (
     gammaln,
     digamma,
     log_ndtr,
-    lpmv,
     logsumexp,
 )
 from hea.family import IdentityLink, Link, LogitLink, LogLink
@@ -232,6 +231,20 @@ def get_link(link: "str | Link") -> Link:
     if isinstance(link, str) and link in _LINKS:
         return _LINKS[link]()
     raise ValueError(f"unknown link {link!r}; available: {sorted(_LINKS)}")
+
+
+def _as_scalar_param(value, dist_name):
+    """Collapse a shape parameter to a float, tolerating arrays that repeat a
+    single value — scipy's ``cdf`` machinery broadcasts shape parameters to
+    the shape of ``x`` before ``_cdf`` is called, so a scalar parameter can
+    arrive as a constant array."""
+    arr = np.asarray(value, dtype=float)
+    if arr.size == 1:
+        return float(arr.reshape(-1)[0])
+    first = float(arr.flat[0])
+    if np.all((arr == first) | (np.isnan(arr) & np.isnan(first))):
+        return first
+    raise ValueError(f"{dist_name} parameters must be scalar-valued.")
 
 
 class CircularContinuous(rv_continuous):
@@ -1979,13 +1992,8 @@ class cartwright_gen(CircularContinuous):
         if flat.size == 0:
             return arr.astype(float)
 
-        mu_arr = np.asarray(mu, dtype=float)
-        zeta_arr = np.asarray(zeta, dtype=float)
-        if mu_arr.size != 1 or zeta_arr.size != 1:
-            raise ValueError("cartwright parameters must be scalar-valued.")
-
-        mu_val = float(mu_arr.reshape(-1)[0])
-        zeta_val = float(zeta_arr.reshape(-1)[0])
+        mu_val = _as_scalar_param(mu, "cartwright")
+        zeta_val = _as_scalar_param(zeta, "cartwright")
         if zeta_val <= 0.0:
             raise ValueError("`zeta` must be positive.")
 
@@ -2424,12 +2432,41 @@ class wrapnorm_gen(CircularContinuous):
             & (rho_arr < 1.0)
         )
 
+    # Above this value the Fourier form's terms rho^(p^2) decay too slowly for
+    # a short series, and the partial sums cancel catastrophically in the
+    # tails (negative densities by rho ~ 0.99; relative tail noise already at
+    # rho = 0.9). The Gaussian-image form needs only |k| <= 2 images for
+    # rho > 0.35 and is positive term-by-term, so 0.8 sits comfortably inside
+    # both branches' exact zones.
+    _FOURIER_RHO_MAX = 0.8
+
     def _pdf(self, x, mu, rho):
-        return (
-            1
-            + 2
-            * np.sum([rho ** (p**2) * np.cos(p * (x - mu)) for p in range(1, 30)], 0)
-        ) / (2 * np.pi)
+        x_b, mu_b, rho_b = np.broadcast_arrays(
+            *(np.asarray(v, dtype=float) for v in (x, mu, rho))
+        )
+        shape = x_b.shape
+        xf = x_b.reshape(-1)
+        mf = mu_b.reshape(-1)
+        rf = rho_b.reshape(-1)
+        out = np.empty(xf.shape, dtype=float)
+
+        lo = rf <= self._FOURIER_RHO_MAX
+        if np.any(lo):
+            # Fourier form (book eq. 4.50); truncation error at p = 29 is
+            # rho^(900) <= 2e-82 for rho <= 0.8.
+            p = np.arange(1.0, 30.0)
+            d = xf[lo, None] - mf[lo, None]
+            series = np.sum(rf[lo, None] ** (p**2) * np.cos(p * d), axis=1)
+            out[lo] = (1.0 + 2.0 * series) / (2.0 * np.pi)
+        hi = ~lo
+        if np.any(hi):
+            # Gaussian-image form (book eq. 4.48) — the same representation
+            # the cdf path uses, so pdf == dF/dtheta at high concentration.
+            sigma = np.sqrt(-2.0 * np.log(np.clip(rf[hi], None, 1.0 - 1e-15)))
+            k = np.arange(-2.0, 3.0)
+            z = (xf[hi, None] - mf[hi, None] + 2.0 * np.pi * k) / sigma[:, None]
+            out[hi] = np.exp(-0.5 * z**2).sum(axis=1) * INV_SQRT_2PI / sigma
+        return out.reshape(shape)
 
     def pdf(self, x, mu, rho, *args, **kwargs):
         r"""
@@ -2439,7 +2476,10 @@ class wrapnorm_gen(CircularContinuous):
         f(\theta) = \frac{1}{2\pi} \left(1 + 2\sum_{p=1}^{\infty} \rho^{p^2} \cos(p(\theta - \mu))\right)
         $$
 
-        , here we approximate the infinite sum by summing the first 30 terms.
+        evaluated via the Fourier form above for $\rho \le 0.8$ (29 terms,
+        truncation $\le 2 \times 10^{-82}$) and via the equivalent wrapped
+        Gaussian-image sum for $\rho > 0.8$, where the Fourier partial sums
+        lose accuracy.
 
         Parameters
         ----------
@@ -2448,7 +2488,7 @@ class wrapnorm_gen(CircularContinuous):
         mu : float
             Mean direction, 0 <= mu <= 2*pi.
         rho : float
-            Shape parameter, 0 < rho <= 1.
+            Mean resultant length, 0 < rho < 1.
 
         Returns
         -------
@@ -2513,13 +2553,8 @@ class wrapnorm_gen(CircularContinuous):
         if flat.size == 0:
             return arr.astype(float)
 
-        mu_arr = np.asarray(mu, dtype=float)
-        rho_arr = np.asarray(rho, dtype=float)
-        if mu_arr.size != 1 or rho_arr.size != 1:
-            raise ValueError("wrapnorm parameters must be scalar-valued.")
-
-        mu_val = float(mu_arr.reshape(-1)[0])
-        rho_val = float(rho_arr.reshape(-1)[0])
+        mu_val = _as_scalar_param(mu, "wrapnorm")
+        rho_val = _as_scalar_param(rho, "wrapnorm")
         two_pi = 2.0 * np.pi
 
         if rho_val <= 1e-12:
@@ -3122,7 +3157,11 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         )
 
     def _pdf(self, x, mu, rho):
-        return (1 - rho**2) / (2 * np.pi * (1 + rho**2 - 2 * rho * np.cos(x - mu)))
+        # (1-rho)^2 + 4*rho*sin^2(d/2) == 1 + rho^2 - 2*rho*cos(d), but does
+        # not cancel at the peak as rho -> 1 (the naive form rounds to <= 0
+        # for rho > 1 - 1e-8).
+        denom = (1 - rho) ** 2 + 4 * rho * np.sin(0.5 * (x - mu)) ** 2
+        return (1 - rho) * (1 + rho) / (2 * np.pi * denom)
 
     def pdf(self, x, mu, rho, *args, **kwargs):
         r"""
@@ -3176,14 +3215,8 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         arr = np.asarray(wrapped, dtype=float)
         flat = arr.reshape(-1)
 
-        mu_arr = np.asarray(mu, dtype=float)
-        if mu_arr.size != 1:
-            raise ValueError("wrapcauchy parameters must be scalar-valued.")
-        mu_val = float(mu_arr.reshape(-1)[0])
-        rho_arr = np.asarray(rho, dtype=float)
-        if rho_arr.size != 1:
-            raise ValueError("wrapcauchy parameters must be scalar-valued.")
-        rho_val = float(rho_arr.reshape(-1)[0])
+        mu_val = _as_scalar_param(mu, "wrapcauchy")
+        rho_val = _as_scalar_param(rho, "wrapcauchy")
         rho_val = np.clip(rho_val, np.finfo(float).tiny, 1.0 - 1e-15)
 
         if flat.size == 0:
@@ -6038,8 +6071,6 @@ jonespewsey = jonespewsey_gen(name="jonespewsey")
 
 _JP_KAPPA_TOL = 1e-3
 _JP_PSI_TOL = 1e-6
-_JP_MIN_BASE = np.finfo(float).tiny
-_JP_MAX_EXP_ARGUMENT = 350.0  # guard for exp overflow
 
 
 def _jp_as_scalar(value):
@@ -6063,54 +6094,34 @@ def _jp_ensure_scalar(value, name):
 
 
 def _jp_kernel_base(phi, kappa, psi):
-    phi = np.asarray(phi, dtype=float)
-    if np.ndim(kappa) == 0 and np.ndim(psi) == 0:
-        if abs(psi) < _JP_PSI_TOL:
-            return np.exp(kappa * np.cos(phi))
+    """JP kernel ``(cosh(κψ) + sinh(κψ) cos φ)^{1/ψ}`` via the exact
+    decomposition
 
-        A = kappa * psi
-        cos_phi = np.cos(phi)
+        cosh(A) + sinh(A) cos φ = e^{A} cos²(φ/2) + e^{-A} sin²(φ/2),
 
-        cosh_A = np.cosh(A)
-        sinh_A = np.sinh(A)
-        if not np.isfinite(cosh_A) or not np.isfinite(sinh_A):
-            # Fallback to stable exponential representation
-            if A >= 0:
-                exp_A = np.exp(np.clip(A, None, _JP_MAX_EXP_ARGUMENT))
-                exp_negA = np.exp(np.clip(-A, -_JP_MAX_EXP_ARGUMENT, None))
-            else:
-                exp_A = np.exp(np.clip(A, -_JP_MAX_EXP_ARGUMENT, None))
-                exp_negA = np.exp(np.clip(-A, None, _JP_MAX_EXP_ARGUMENT))
-            cosh_A = 0.5 * (exp_A + exp_negA)
-            sinh_A = 0.5 * (exp_A - exp_negA)
-
-        base = cosh_A + sinh_A * cos_phi
-        base = np.clip(base, _JP_MIN_BASE, None)
-        return np.power(base, 1.0 / psi)
-
-    # Per-observation (κ_i, ψ_i): the same element-wise semantics as the
-    # scalar branch — exact cosh/sinh where finite, the clipped-exponential
-    # representation where they overflow, von Mises kernel where |ψ| ≈ 0.
+    evaluated in log space. Both addends are positive, so the form does not
+    cancel for A = κψ < 0 — the naive cosh/sinh difference loses all
+    precision by |A| ≈ 14 and rounds to ≤ 0 beyond |A| ≈ 18.3 — and cannot
+    overflow before the final exponentiation. Handles scalar and
+    per-observation (κ_i, ψ_i) inputs uniformly; |ψ| below tolerance reduces
+    element-wise to the von Mises kernel ``exp(κ cos φ)``."""
     phi_b, kappa_b, psi_b = np.broadcast_arrays(
-        phi, np.asarray(kappa, dtype=float), np.asarray(psi, dtype=float)
+        np.asarray(phi, dtype=float),
+        np.asarray(kappa, dtype=float),
+        np.asarray(psi, dtype=float),
     )
     A = kappa_b * psi_b
-    cos_phi = np.cos(phi_b)
-    with np.errstate(over="ignore"):
-        cosh_A = np.cosh(A)
-        sinh_A = np.sinh(A)
-    bad = ~(np.isfinite(cosh_A) & np.isfinite(sinh_A))
-    if np.any(bad):
-        exp_A = np.exp(np.clip(A, -_JP_MAX_EXP_ARGUMENT, _JP_MAX_EXP_ARGUMENT))
-        exp_negA = np.exp(np.clip(-A, -_JP_MAX_EXP_ARGUMENT, _JP_MAX_EXP_ARGUMENT))
-        cosh_A = np.where(bad, 0.5 * (exp_A + exp_negA), cosh_A)
-        sinh_A = np.where(bad, 0.5 * (exp_A - exp_negA), sinh_A)
-    base = np.clip(cosh_A + sinh_A * cos_phi, _JP_MIN_BASE, None)
+    half = 0.5 * phi_b
+    with np.errstate(divide="ignore"):  # log(0) at phi = 0 or ±π
+        log_cos2 = 2.0 * np.log(np.abs(np.cos(half)))
+        log_sin2 = 2.0 * np.log(np.abs(np.sin(half)))
+    log_base = np.logaddexp(A + log_cos2, -A + log_sin2)
     vm_like = np.abs(psi_b) < _JP_PSI_TOL
     psi_safe = np.where(vm_like, 1.0, psi_b)
     with np.errstate(over="ignore"):
-        powered = np.power(base, 1.0 / psi_safe)
-    return np.where(vm_like, np.exp(kappa_b * cos_phi), powered)
+        powered = np.exp(log_base / psi_safe)
+        vm_kernel = np.exp(kappa_b * np.cos(phi_b))
+    return np.where(vm_like, vm_kernel, powered)
 
 
 def _jp_effective_kappa(kappa, psi):
@@ -6187,54 +6198,64 @@ def _kernel_jonespewsey(x, mu, kappa, psi):
 
 
 def _c_jonespewsey(mu, kappa, psi):
+    """Jones–Pewsey normalizing constant ``c(κ, ψ)`` (μ-invariant; μ only
+    locates the kernel peak for the quadrature break point).
+
+    Always computed by adaptive quadrature of the stable kernel. The Legendre
+    closed form ``c = 1/(2π P_{1/ψ}(cosh κψ))`` is deliberately **not** used:
+    scipy's ``lpmv`` is defined for arguments |x| ≤ 1, and ``cosh(κψ) ≥ 1``
+    always — out of contract, it silently returns plausible-but-wrong finite
+    values in parts of the ψ < 0 half-plane (e.g. wrong by ×1e11 at
+    κ = 0.5, ψ = −4)."""
     if kappa < _JP_KAPPA_TOL:
         return 1.0 / (2.0 * np.pi)
 
     if abs(psi) < _JP_PSI_TOL:
         return 1.0 / (2.0 * np.pi * i0(kappa))
 
-    constant = _jp_legendre_normalizer(kappa, psi)
-    if np.isfinite(constant) and 1e-12 <= constant <= 1e6:
-        return constant
+    # The kernel peaks at x = mu (mod 2π) for every ψ sign, with curvature
+    # κ_eff = (1 - e^{-2κψ})/(2ψ) at the mode — for ψ < 0 the peak narrows
+    # like e^{κψ} and can carry essentially all of the mass (ψ = -1 is a
+    # Lorentzian of width ~2 e^{κψ}), which adaptive quadrature with a single
+    # break point mis-extrapolates. Hand quad a geometric ladder of break
+    # points at multiples of the peak width so every panel sees bounded
+    # variation.
+    mu_val = float(np.asarray(mu, dtype=float).reshape(-1)[0])
+    peak = (mu_val + np.pi) % (2.0 * np.pi) - np.pi
 
-    integral = quad_vec(
-        _kernel_jonespewsey,
-        a=-np.pi,
-        b=np.pi,
-        args=(mu, kappa, psi),
+    A = kappa * psi
+    if A >= 0.0:
+        log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+    else:
+        log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+    width = float(np.clip(np.exp(-0.5 * log_keff), 1e-13, 1.0))
+
+    pts = [peak]
+    r = width
+    while r < np.pi:
+        pts.extend([peak - r, peak + r])
+        r *= 10.0
+    pts = sorted(p for p in set(pts) if -np.pi + 1e-12 < p < np.pi - 1e-12)
+
+    integral = quad(
+        lambda t: float(_kernel_jonespewsey(t, mu_val, kappa, psi)),
+        -np.pi,
+        np.pi,
+        points=pts,
+        limit=500,
         epsabs=1e-10,
         epsrel=1e-10,
     )[0]
     return 1.0 / integral
 
 
-def _jp_legendre_normalizer(kappa, psi):
-    try:
-        nu = 1.0 / psi
-    except ZeroDivisionError:
-        return np.nan
-
-    A = kappa * psi
-    z = np.cosh(A)
-    try:
-        legendre = lpmv(0, nu, z)
-    except ValueError:
-        return np.nan
-
-    if not np.isfinite(legendre) or legendre <= 0.0:
-        return np.nan
-
-    return 1.0 / (2.0 * np.pi * legendre)
-
-
 def _c_jonespewsey_vec(kappa, psi):
     """Per-observation Jones–Pewsey normalizer ``c(κ_i, ψ_i)``.
 
-    Element-wise mirror of the scalar ``_c_jonespewsey`` preference order:
-    the uniform/von Mises reductions, then the closed-form Legendre identity
-    ``c = 1/(2π P_{1/ψ}(cosh κψ))`` (``lpmv`` is vectorized), and a
-    quadrature fallback — evaluated once per unique offending ``(κ, ψ)``
-    pair — where the Legendre value is non-finite or badly scaled. No
+    Element-wise mirror of the scalar ``_c_jonespewsey`` preference order —
+    the uniform/von Mises reductions, then the quadrature normalizer,
+    evaluated once per unique ``(κ, ψ)`` pair (see ``_c_jonespewsey`` for why
+    the vectorized ``lpmv`` Legendre identity cannot be trusted here). No
     caching: per-observation parameters change every regression iteration.
     """
     kappa, psi = np.broadcast_arrays(
@@ -6248,25 +6269,11 @@ def _c_jonespewsey_vec(kappa, psi):
     gen = live & ~vm
     if not np.any(gen):
         return out
-    kg, pg = kappa[gen], psi[gen]
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        legendre = lpmv(0, 1.0 / pg, np.cosh(kg * pg))
-        cand = 1.0 / (2.0 * np.pi * legendre)
-    ok = (
-        np.isfinite(legendre)
-        & (legendre > 0.0)
-        & (cand >= 1e-12)
-        & (cand <= 1e6)
+    pairs, inverse = np.unique(
+        np.stack([kappa[gen], psi[gen]], axis=1), axis=0, return_inverse=True
     )
-    vals = np.where(ok, cand, np.nan)
-    if np.any(~ok):
-        bad_pairs = np.unique(
-            np.stack([kg[~ok], pg[~ok]], axis=1), axis=0
-        )
-        for k_v, p_v in bad_pairs:
-            mask = ~ok & (kg == k_v) & (pg == p_v)
-            vals[mask] = _c_jonespewsey(0.0, float(k_v), float(p_v))
-    out[gen] = vals
+    vals = np.array([_c_jonespewsey(0.0, float(k), float(p)) for k, p in pairs])
+    out[gen] = vals[inverse]
     return out
 
 
@@ -8314,9 +8321,12 @@ class wrapstable_gen(CircularContinuous):
     \mu_p =
     \begin{cases}
         \delta p + \beta \tan\left(\tfrac{\pi\alpha}{2}\right)\bigl((\gamma p)^\alpha - \gamma p\bigr), & \alpha \ne 1, \\[6pt]
-        \delta p + \tfrac{2}{\pi}\beta\gamma p \log(\gamma p), & \alpha = 1.
+        \delta p - \tfrac{2}{\pi}\beta\gamma p \log(\gamma p), & \alpha = 1,
     \end{cases}
     $$
+
+    the S0 (Nolan) parameterization of Pewsey (2008), jointly continuous in
+    all four parameters.
 
     Special cases include the wrapped normal (``α=2, β=0``), wrapped Cauchy
     (``α=1, β=0``), and wrapped Lévy (``α=1/2, β=1``).
@@ -8397,10 +8407,10 @@ class wrapstable_gen(CircularContinuous):
         $$
 
         $$
-        \mu_p = 
+        \mu_p =
         \begin{cases}
             \delta p + \beta \tan\left(\frac{\pi \alpha}{2}\right) \left((\gamma p)^\alpha - \gamma p\right), & \alpha \neq 1 \\
-            \delta p - \beta \frac{2}{\pi} \log(\gamma p), & \text{if } \alpha = 1
+            \delta p - \frac{2}{\pi} \beta \gamma p \log(\gamma p), & \text{if } \alpha = 1
         \end{cases}
         $$
 
@@ -8648,6 +8658,8 @@ class wrapstable_gen(CircularContinuous):
         phi2 = phi2_raw + 2.0 * np.pi * round((2.0 * phi1 - phi2_raw) / (2.0 * np.pi))
 
         if abs(alpha_mom - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
+            # mu_p = delta*p - beta*B_p with B_p = (2/pi)*gamma*p*log(gamma*p)
+            # (S0, alpha = 1), so phi2 - 2*phi1 = -beta*(B2 - 2*B1).
             B1 = (2.0 / np.pi) * gamma_mom * np.log(gamma_mom)
             B2 = (2.0 / np.pi) * (gamma_mom * 2.0) * np.log(gamma_mom * 2.0)
             denom = B2 - 2.0 * B1
@@ -8655,9 +8667,9 @@ class wrapstable_gen(CircularContinuous):
                 beta_mom = 0.0
                 delta_mom = phi1
             else:
-                beta_mom = (phi2 - 2.0 * phi1) / denom
+                beta_mom = (2.0 * phi1 - phi2) / denom
                 beta_mom = float(np.clip(beta_mom, beta_bounds[0], beta_bounds[1]))
-                delta_mom = phi1 - beta_mom * B1
+                delta_mom = phi1 + beta_mom * B1
         else:
             A = np.tan(0.5 * np.pi * alpha_mom)
             B1 = (gamma_mom) ** alpha_mom - gamma_mom
@@ -8842,7 +8854,9 @@ class wrapstable_gen(CircularContinuous):
         rho_vals = np.exp(-((gamma * p) ** alpha))
 
         if abs(alpha - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
-            mu_vals = delta * p + (2.0 / np.pi) * beta * gamma * p * np.log(gamma * p)
+            # S0 convention (Pewsey 2008, eq. 4): the alpha = 1 phase carries a
+            # minus sign — also the alpha -> 1 limit of the branch below.
+            mu_vals = delta * p - (2.0 / np.pi) * beta * gamma * p * np.log(gamma * p)
         else:
             mu_vals = delta * p + beta * np.tan(0.5 * np.pi * alpha) * (
                 (gamma * p) ** alpha - gamma * p
@@ -8880,25 +8894,29 @@ def _wrapstable_sample_linear(alpha, beta, gamma, delta, *, size, rng):
     V = rng.uniform(-0.5 * np.pi, 0.5 * np.pi, size=size)
     W = rng.exponential(1.0, size=size)
 
+    # CMS draws are standard S1 variates; the series/pdf use the S0(delta)
+    # convention (Pewsey 2008, eq. 2), so the location shift below converts
+    # the scaled draw to S0 location ``delta`` (Nolan's delta0/delta1 relation).
     if abs(alpha - 1.0) > _WRAPSTABLE_ALPHA_TOL:
         tan_term = np.tan(0.5 * np.pi * alpha)
         theta0 = np.arctan(beta * tan_term) / alpha
         factor = (1.0 + (beta * tan_term) ** 2) ** (1.0 / (2.0 * alpha))
 
-        delta_s1 = delta - gamma * beta * tan_term
         part1 = np.sin(alpha * (V + theta0)) / (np.cos(V) ** (1.0 / alpha))
         part2 = (np.cos(V - alpha * (V + theta0)) / W) ** ((1.0 - alpha) / alpha)
-        x_s1 = gamma * factor * part1 * part2 + delta_s1
-        x = x_s1 + (delta - delta_s1)
+        # gamma*Z + c is S1 with location c; S0 location delta needs
+        # c = delta - beta*gamma*tan(pi*alpha/2).
+        x = gamma * factor * part1 * part2 + delta - gamma * beta * tan_term
     else:
         factor = 2.0 / np.pi
-        delta_s1 = delta - factor * beta * gamma * np.log(gamma)
         term = (
             (0.5 * np.pi + beta * V) * np.tan(V)
             - beta * np.log((0.5 * np.pi * W * np.cos(V)) / (0.5 * np.pi + beta * V))
         )
-        x_s1 = gamma * factor * term + delta_s1
-        x = x_s1 + (delta - delta_s1)
+        # At alpha = 1 scaling a standard S1 draw already shifts the S1
+        # location by -(2/pi)*beta*gamma*log(gamma), which exactly cancels
+        # the S0<->S1 conversion: gamma*Z + delta has S0 location delta.
+        x = gamma * factor * term + delta
 
     return x
 
@@ -9485,7 +9503,10 @@ class katojones_gen(CircularContinuous):
         return cache[key]
 
     def _compute_series_terms(self, mu, gamma, rho, lam):
-        if gamma <= _KJ_GAMMA_TOL or rho <= _KJ_GAMMA_TOL:
+        # Only gamma ~ 0 collapses the CDF to the uniform theta/(2*pi); at
+        # rho = 0 (the cardioid case) the series keeps its single p = 1 term
+        # with coefficient gamma, handled by the P = 1 branch below.
+        if gamma <= _KJ_GAMMA_TOL:
             return {
                 "coeffs": np.empty(0, dtype=float),
                 "phases": np.empty(0, dtype=float),
