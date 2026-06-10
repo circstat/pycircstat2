@@ -1010,9 +1010,10 @@ class CCRegression:
         of higher-order terms.
     predict(x)
         Predict the circular response at new ``x``.
-    plot(figsize=None, n_curve=200, axes=None)
-        Two-panel diagnostic figure (fit overlay for 1-D ``x``; residuals
-        vs fitted + histogram for multi-D).
+    plot(figsize=None, n_curve=200, axes=None, band=True, polar=False)
+        Two-panel diagnostic figure (fit overlay ± circular-SD band, or a
+        polar fit clock, for 1-D ``x``; residuals vs fitted + histogram
+        for multi-D).
 
     Notes
     -----
@@ -1401,25 +1402,45 @@ class CCRegression:
                 f"{x_arr.shape[1]}."
             )
         x_arr = np.mod(x_arr, 2 * np.pi)
+        cos_pred, sin_pred = self._predict_embedding(x_arr)
+        return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
+
+    def _predict_embedding(
+        self, x_arr: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Predicted cos/sin embedding components at predictor rows.
+
+        The reassembled direction is ``arctan2(sin, cos)``; the vector
+        length ``hypot(cos, sin)`` estimates the conditional resultant
+        ``ρ̂(x)`` — the model's conditional concentration (Jammalamadaka &
+        Sengupta 2001), which ``arctan2`` discards.
+        """
         if self.backend == "gam":
             newdata = pl.DataFrame(
                 {f: x_arr[:, i] for i, f in enumerate(self.feature_names)}
             )
             cos_pred = self._gam_cos.predict(newdata=newdata)["fit"].to_numpy()
             sin_pred = self._gam_sin.predict(newdata=newdata)["fit"].to_numpy()
-            return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
+            return (
+                np.asarray(cos_pred, dtype=float),
+                np.asarray(sin_pred, dtype=float),
+            )
         newdata = pl.DataFrame(
             {f: x_arr[:, i] for i, f in enumerate(self._feature_cols)}
         )
-        cos_pred = _ravel(self._lm_cos.predict(newdata=newdata))
-        sin_pred = _ravel(self._lm_sin.predict(newdata=newdata))
-        return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
+        return (
+            _ravel(self._lm_cos.predict(newdata=newdata)),
+            _ravel(self._lm_sin.predict(newdata=newdata)),
+        )
 
     def plot(
         self,
         figsize: Optional[Tuple[float, float]] = None,
         n_curve: int = 200,
         axes=None,
+        *,
+        band: bool = True,
+        polar: bool = False,
     ):
         """Two-panel diagnostic figure.
 
@@ -1429,8 +1450,37 @@ class CCRegression:
         relationship; the right panel shows the wrapped residuals against
         the predictor.
 
+        The fitted direction ``μ̂(x) = arctan2(ŝ, ĉ)`` discards the length
+        of the fitted (cos, sin) vector, so by default the overlay also
+        shades ``μ̂ ± 1`` circular standard deviation ``√(−2 ln ρ̂(x))``
+        implied by the conditional resultant ``ρ̂(x) = ‖(ĉ, ŝ)‖``. This is
+        a model-implied *spread* band, not a confidence band for ``μ̂``: it
+        widens (clipped at π) where ``ρ̂ → 0`` and the direction becomes
+        ill-defined, and it is what visually separates the lm and gam
+        backends — their ``μ̂`` curves often almost coincide while their
+        shrunken amplitudes differ.
+
         For multiple circular predictors, the left panel shows residuals
         vs the fitted angle and the right panel a residual histogram.
+
+        Parameters
+        ----------
+        figsize : tuple, optional
+            Matplotlib figure size; defaults to ``(11, 5)``.
+        n_curve : int
+            Number of grid points used to draw the fitted curve.
+        axes : sequence of matplotlib Axes, optional
+            Two pre-existing axes to draw into (the caller owns their
+            projections). If omitted, a fresh figure is created.
+        band : bool
+            Shade the ``μ̂ ± 1`` circular-SD band on the cartesian overlay
+            (single predictor only). Default True.
+        polar : bool
+            Single predictor only: replace the cartesian overlay with a
+            compass clock — each rim position is a predictor angle ``x``
+            with an arrow pointing in the fitted direction ``μ̂(x)`` and
+            length ``ρ̂(x)``, so a vanishing arrow marks an ill-defined
+            direction. Data are fixed-length arrows just outside the rim.
 
         Returns
         -------
@@ -1439,6 +1489,8 @@ class CCRegression:
         import matplotlib.pyplot as plt
 
         n_features = self.x.shape[1]
+        if polar and n_features != 1:
+            raise ValueError("polar=True requires a single circular predictor.")
 
         if axes is None:
             fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
@@ -1452,29 +1504,60 @@ class CCRegression:
             x_data = self.x[:, 0]
             theta_data = self.theta
             residuals = self.result["residuals"]
-            x_grid = np.linspace(0.0, 2 * np.pi, n_curve)
-            theta_pred = self.predict(x_grid)
-            # Break the curve where it wraps so plot() doesn't draw a
-            # vertical jump connecting 2π to 0.
-            theta_plot = theta_pred.astype(float).copy()
-            jumps = np.where(np.abs(np.diff(theta_pred)) > np.pi)[0]
-            theta_plot[jumps] = np.nan
 
-            ax = axes[0]
-            ax.plot(x_grid, theta_plot, color="C1", lw=2, label="fit")
-            ax.plot(x_grid, theta_plot + 2 * np.pi, color="C1", lw=2)
-            ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
-            ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
-            ax.set_xlim(0, 2 * np.pi)
-            ax.set_ylim(0, 4 * np.pi)
-            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
-            ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
-            ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
-            ax.set_xlabel(self.feature_names[0])
-            ax.set_ylabel("θ")
-            ax.set_title("Fit overlay")
-            ax.legend(loc="best", frameon=False)
+            if polar:
+                self._draw_polar_clock(axes[0], x_data, theta_data)
+            else:
+                x_grid = np.linspace(0.0, 2 * np.pi, n_curve)
+                cos_fit, sin_fit = self._predict_embedding(x_grid[:, None])
+                # Unwrap the fitted direction into a continuous curve (the
+                # fit is smooth on the circle; only the flat chart has a
+                # 0/2π seam), then draw it at every 2π offset that crosses
+                # the doubled [0, 4π] window — branches run off the panel
+                # edges instead of breaking mid-panel.
+                theta_curve = np.unwrap(np.arctan2(sin_fit, cos_fit))
+                # Circular SD implied by the conditional resultant; π
+                # ("any direction") once ρ̂ falls below exp(−π²/2).
+                rho_grid = np.clip(np.hypot(cos_fit, sin_fit), 1e-9, 1.0)
+                sd_grid = np.minimum(np.sqrt(-2.0 * np.log(rho_grid)), np.pi)
+
+                ax = axes[0]
+                two_pi = 2 * np.pi
+                lo = float(np.min(theta_curve - (sd_grid if band else 0.0)))
+                hi = float(np.max(theta_curve + (sd_grid if band else 0.0)))
+                k_min = int(np.ceil((0.0 - hi) / two_pi))
+                k_max = int(np.floor((4 * np.pi - lo) / two_pi))
+                for k in range(k_min, k_max + 1):
+                    offset = k * two_pi
+                    if band:
+                        ax.fill_between(
+                            x_grid,
+                            theta_curve - sd_grid + offset,
+                            theta_curve + sd_grid + offset,
+                            color="C1",
+                            alpha=0.18,
+                            linewidth=0,
+                            label="μ̂ ± 1 circular SD" if k == k_min else None,
+                        )
+                    ax.plot(
+                        x_grid,
+                        theta_curve + offset,
+                        color="C1",
+                        lw=2,
+                        label="fit" if k == k_min else None,
+                    )
+                ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
+                ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
+                ax.set_xlim(0, 2 * np.pi)
+                ax.set_ylim(0, 4 * np.pi)
+                ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+                ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+                ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
+                ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
+                ax.set_xlabel(self.feature_names[0])
+                ax.set_ylabel("θ")
+                ax.set_title("Fit overlay")
+                ax.legend(loc="best", frameon=False)
 
             ax = axes[1]
             ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
@@ -1505,6 +1588,57 @@ class CCRegression:
 
         fig.tight_layout()
         return fig
+
+    def _draw_polar_clock(
+        self,
+        ax,
+        x_data: np.ndarray,
+        theta_data: np.ndarray,
+        n_arrow: int = 36,
+    ) -> None:
+        """Compass-frame fit panel for a single circular predictor.
+
+        Each rim position is a predictor angle ``x``; the arrow anchored
+        there points in the fitted direction ``μ̂(x)`` with length
+        ``ρ̂(x)``, so a vanishing arrow marks an ill-defined direction.
+        Observations are fixed-length arrows just outside the rim at their
+        predictor angle, pointing in their observed direction.
+        """
+        grid = np.linspace(0.0, 2 * np.pi, n_arrow, endpoint=False)
+        cos_fit, sin_fit = self._predict_embedding(grid[:, None])
+        mu = np.arctan2(sin_fit, cos_fit)
+        rho = np.clip(np.hypot(cos_fit, sin_fit), 0.0, 1.0)
+
+        rim = np.linspace(0.0, 2 * np.pi, 256)
+        ax.plot(np.cos(rim), np.sin(rim), color="0.85", lw=1.0, zorder=1)
+
+        fit_scale = 0.5  # display length of a ρ̂ = 1 arrow
+        ax.quiver(
+            np.cos(grid), np.sin(grid),
+            fit_scale * rho * np.cos(mu), fit_scale * rho * np.sin(mu),
+            angles="xy", scale_units="xy", scale=1.0,
+            color="C1", width=0.008, zorder=3,
+            label="fit: μ̂(x), length ρ̂(x)",
+        )
+        data_anchor, data_len = 1.12, 0.18
+        ax.quiver(
+            data_anchor * np.cos(x_data), data_anchor * np.sin(x_data),
+            data_len * np.cos(theta_data), data_len * np.sin(theta_data),
+            angles="xy", scale_units="xy", scale=1.0,
+            color="C0", alpha=0.6, width=0.005, zorder=2,
+            label="data: θ at rim x",
+        )
+        for ang, lab in ((0.0, "0"), (np.pi / 2, "π/2"), (np.pi, "π"), (3 * np.pi / 2, "3π/2")):
+            ax.text(
+                1.45 * np.cos(ang), 1.45 * np.sin(ang), lab,
+                ha="center", va="center", color="0.4",
+            )
+        ax.set_aspect("equal")
+        ax.set_xlim(-1.6, 1.6)
+        ax.set_ylim(-1.6, 1.6)
+        ax.set_axis_off()
+        ax.set_title("Fit clock: arrow = μ̂(x), length = ρ̂(x)")
+        ax.legend(loc="lower left", frameon=False, fontsize=8)
 
     def summary(self):
         """

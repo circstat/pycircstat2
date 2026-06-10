@@ -458,6 +458,69 @@ def test_cc_plot_multi_feature_fallback():
     titles = [ax.get_title() for ax in fig.axes]
     assert "Residuals vs fitted" in titles
     assert "Residual histogram" in titles
+    with pytest.raises(ValueError, match="single circular predictor"):
+        m.plot(polar=True)
+
+
+def test_cc_plot_band_toggle():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.collections import PolyCollection
+
+    df = load_data("milwaukee", source="jammalamadaka")
+    ctheta = np.deg2rad(df["theta"].to_numpy())
+    cpsi = np.deg2rad(df["psi"].to_numpy())
+    m = CCRegression(theta=ctheta, x=cpsi, order=1)
+
+    def overlay_ax(fig):
+        return next(ax for ax in fig.axes if ax.get_title() == "Fit overlay")
+
+    def n_bands(fig):
+        return sum(
+            isinstance(c, PolyCollection) for c in overlay_ax(fig).collections
+        )
+
+    # Band on by default (one polygon per visible 2π replica), removable.
+    assert n_bands(m.plot()) >= 2
+    assert n_bands(m.plot(band=False)) == 0
+
+    # The unwrapped curve is continuous: no NaN seam-breaks in any replica.
+    for line in overlay_ax(m.plot()).get_lines():
+        assert np.all(np.isfinite(line.get_ydata()))
+
+    # Band half-width is the circular SD implied by ρ̂: positive, ≤ π.
+    grid = np.linspace(0.0, 2 * np.pi, 50)
+    cos_fit, sin_fit = m._predict_embedding(grid[:, None])
+    rho = np.clip(np.hypot(cos_fit, sin_fit), 1e-9, 1.0)
+    sd = np.minimum(np.sqrt(-2.0 * np.log(rho)), np.pi)
+    assert np.all((sd > 0) & (sd <= np.pi))
+
+
+def test_cc_plot_polar_clock():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.quiver import Quiver
+
+    df = load_data("milwaukee", source="jammalamadaka")
+    ctheta = np.deg2rad(df["theta"].to_numpy())
+    cpsi = np.deg2rad(df["psi"].to_numpy())
+    for m in (
+        CCRegression(theta=ctheta, x=cpsi, order=1),
+        CCRegression(
+            "theta ~ s(psi, bs='cc')",
+            pl.DataFrame({"theta": ctheta, "psi": cpsi}),
+        ),
+    ):
+        fig = m.plot(polar=True)
+        clock = fig.axes[0]
+        assert "Fit clock" in clock.get_title()
+        assert not clock.axison  # compass frame, no cartesian axes
+        # Two quivers: fitted-direction arrows and data arrows.
+        assert sum(isinstance(c, Quiver) for c in clock.collections) == 2
+        # The residual panel is untouched by the polar switch.
+        assert fig.axes[1].get_title() == "Residuals vs predictor"
 
 
 def test_cc_summary_label_widths(capsys):
