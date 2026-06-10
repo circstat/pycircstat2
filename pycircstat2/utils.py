@@ -259,6 +259,53 @@ def A1prime(kappa: np.ndarray) -> np.ndarray:
         out = 1.0 - np.where(kappa == 0.0, 0.5, a1 / kappa) - a1**2
     return out[()] if out.ndim == 0 else out
 
+def A1prime2(kappa: np.ndarray) -> np.ndarray:
+    r"""Second derivative of ``A1(κ)``, by differentiating
+    ``A1' = 1 − A1/κ − A1²``:
+
+    ``A1''(κ) = −A1'/κ + A1/κ² − 2 A1 A1'``.
+
+    The ``−A1'/κ`` and ``A1/κ²`` terms are each ``≈ 1/(2κ)`` and cancel
+    catastrophically as ``κ → 0`` (the true value is ``≈ −3κ/8``), so below
+    ``κ < 0.01`` the Maclaurin series ``−3κ/8 + 5κ³/24 − 77κ⁵/1024`` is used;
+    both branches agree to ~1e-12 at the switch. ``A1''(0) = 0``.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    a1 = A1(kappa)
+    d1 = A1prime(kappa)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rec = -d1 / kappa + a1 / kappa**2 - 2.0 * a1 * d1
+    k2 = kappa * kappa
+    series = kappa * (-3.0 / 8.0 + k2 * (5.0 / 24.0 - k2 * (77.0 / 1024.0)))
+    out = np.where(kappa < 0.01, series, rec)
+    return out[()] if out.ndim == 0 else out
+
+def A1prime3(kappa: np.ndarray) -> np.ndarray:
+    r"""Third derivative of ``A1(κ)``, by differentiating ``A1''``:
+
+    ``A1'''(κ) = −A1''/κ + 2A1'/κ² − 2A1/κ³ − 2A1'² − 2 A1 A1''.``
+
+    Same removable cancellation as :func:`A1prime2` (here ``2A1'/κ²`` vs
+    ``2A1/κ³``, each ``≈ 1/κ²``): below ``κ < 0.01`` the Maclaurin series
+    ``−3/8 + 5κ²/8 − 385κ⁴/1024`` is used. ``A1'''(0) = −3/8``.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    a1 = A1(kappa)
+    d1 = A1prime(kappa)
+    d2 = A1prime2(kappa)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rec = (
+            -d2 / kappa
+            + 2.0 * d1 / kappa**2
+            - 2.0 * a1 / kappa**3
+            - 2.0 * d1 * d1
+            - 2.0 * a1 * d2
+        )
+    k2 = kappa * kappa
+    series = -3.0 / 8.0 + k2 * (5.0 / 8.0 - k2 * (385.0 / 1024.0))
+    out = np.where(kappa < 0.01, series, rec)
+    return out[()] if out.ndim == 0 else out
+
 def A1inv(R: float) -> float:
     # A1 maps kappa>=0 to [0, 1); clamp R to that range to avoid the
     # singularity at R=1 in the high-concentration branch.

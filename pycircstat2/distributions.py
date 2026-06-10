@@ -17,6 +17,7 @@ from scipy.special import (
     betaincinv,
     gammaln,
     digamma,
+    log_ndtr,
     lpmv,
     logsumexp,
 )
@@ -25,7 +26,7 @@ from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
 from .descriptive import circ_kappa, circ_mean_and_r
-from .utils import A1, A1prime, angmod
+from .utils import A1, A1inv, A1prime, A1prime2, A1prime3, angmod
 
 __all__ = [
     "TanHalfLink",
@@ -37,6 +38,7 @@ __all__ = [
     "wrapnorm",
     "wrapcauchy",
     "vonmises",
+    "projectednormal",
     "vonmises_flattopped",
     "jonespewsey",
     "jonespewsey_sineskewed",
@@ -2947,7 +2949,7 @@ class wrapnorm_gen(CircularContinuous):
 wrapnorm = wrapnorm_gen(name="wrapnorm")
 
 
-class wrapcauchy_gen(CircularContinuous):
+class wrapcauchy_gen(_RegressionReady, CircularContinuous):
     """Wrapped Cauchy Distribution.
 
     ![wrapcauchy](../images/circ-mod-wrapcauchy.png)
@@ -2973,6 +2975,139 @@ class wrapcauchy_gen(CircularContinuous):
     -----
     Implementation based on Section 4.3.6 of Pewsey et al. (2014).
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/rho are preserved; ρ is the mean resultant length,
+    # bounded in (0, 1), so its default link is logit. ---
+    param_roles = {"mu": "location", "rho": "concentration"}
+    default_links = {"location": "tanhalf", "concentration": "logit"}
+
+    # The log-density splits as ℓ = log(1−ρ²) − log 2π − log D with
+    # D = 1 + ρ² − 2ρ cos(θ−μ). The derivative methods below differentiate
+    # −log D through the multivariate chain rule from D's (sparse) partial
+    # table — ∂μ cycles the trig terms; D is quadratic in ρ so D_ρρρ… = 0 —
+    # and add the ρ-only derivatives of log(1−ρ²). All pure numpy,
+    # broadcasting over per-observation parameter arrays.
+
+    def dlogpdf(self, x, mu, rho):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        $$\frac{\partial\ell}{\partial\mu} = \frac{2\rho\sin(\theta-\mu)}{D},
+          \qquad
+          \frac{\partial\ell}{\partial\rho} = -\frac{2\rho}{1-\rho^2}
+          - \frac{2\rho - 2\cos(\theta-\mu)}{D}.$$
+
+        Vectorizes over per-observation ``mu``/``rho`` arrays. Returns a
+        book-named dict ``{"mu": …, "rho": …}``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        return {
+            "mu": 2.0 * rho * s * w,
+            "rho": -2.0 * rho / (1.0 - rho**2) - (2.0 * rho - 2.0 * c) * w,
+        }
+
+    def d2logpdf(self, x, mu, rho):
+        r"""Second derivatives of ``logpdf`` (l2), as *observed* derivatives —
+        only the unique unordered pairs, from ``(−log D)_{ab} = −D_{ab}/D +
+        D_a D_b/D²`` plus ``∂²_ρ\log(1-\rho^2) = -2(1+\rho^2)/(1-\rho^2)^2``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        Dm, Dr = -2.0 * rho * s, 2.0 * rho - 2.0 * c
+        w2 = w * w
+        return {
+            ("mu", "mu"): -2.0 * rho * c * w + Dm * Dm * w2,
+            ("mu", "rho"): 2.0 * s * w + Dm * Dr * w2,
+            ("rho", "rho"): -2.0 * (1.0 + rho**2) / (1.0 - rho**2) ** 2
+            - 2.0 * w
+            + Dr * Dr * w2,
+        }
+
+    def d3logpdf(self, x, mu, rho):
+        r"""Third derivatives of ``logpdf`` (l3) — unique unordered triples,
+        via ``(−log D)_{abc} = −D_{abc}/D + (D_{ab}D_c + D_{ac}D_b +
+        D_{bc}D_a)/D² − 2D_aD_bD_c/D³`` (terms with vanished ``D``-partials
+        dropped) and ``∂³_ρ\log(1-\rho^2) = -4\rho(3+\rho^2)/(1-\rho^2)^3``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        Dm, Dr = -2.0 * rho * s, 2.0 * rho - 2.0 * c
+        Dmm, Dmr, Drr = 2.0 * rho * c, -2.0 * s, 2.0
+        Dmmm, Dmmr = 2.0 * rho * s, 2.0 * c
+        w2, w3 = w * w, w * w * w
+        return {
+            ("mu", "mu", "mu"): -Dmmm * w
+            + 3.0 * Dmm * Dm * w2
+            - 2.0 * Dm**3 * w3,
+            ("mu", "mu", "rho"): -Dmmr * w
+            + (Dmm * Dr + 2.0 * Dmr * Dm) * w2
+            - 2.0 * Dm * Dm * Dr * w3,
+            ("mu", "rho", "rho"): (2.0 * Dmr * Dr + Drr * Dm) * w2
+            - 2.0 * Dm * Dr * Dr * w3,
+            ("rho", "rho", "rho"): -4.0 * rho * (3.0 + rho**2)
+            / (1.0 - rho**2) ** 3
+            + 3.0 * Drr * Dr * w2
+            - 2.0 * Dr**3 * w3,
+        }
+
+    def d4logpdf(self, x, mu, rho):
+        r"""Fourth derivatives of ``logpdf`` (l4) — unique unordered
+        quadruples, from the order-4 partition formula for ``−log D``
+        (``D``'s only nonzero quartic-relevant partials are
+        ``D_{μμμμ}, D_{μμμρ}``; everything with ≥2 ρ-derivatives of ``D``
+        beyond ``D_{ρρ}=2`` vanishes) and ``∂⁴_ρ\log(1-\rho^2) =
+        -12(1+6\rho^2+\rho^4)/(1-\rho^2)^4``. Completes the contract to
+        full-Newton depth (hea ``available_derivs = 2``).
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        Dm, Dr = -2.0 * rho * s, 2.0 * rho - 2.0 * c
+        Dmm, Dmr, Drr = 2.0 * rho * c, -2.0 * s, 2.0
+        Dmmm, Dmmr = 2.0 * rho * s, 2.0 * c
+        Dmmmm, Dmmmr = -2.0 * rho * c, 2.0 * s
+        w2, w3, w4 = w * w, w**3, w**4
+        return {
+            ("mu", "mu", "mu", "mu"): -Dmmmm * w
+            + (4.0 * Dmmm * Dm + 3.0 * Dmm * Dmm) * w2
+            - 12.0 * Dmm * Dm * Dm * w3
+            + 6.0 * Dm**4 * w4,
+            ("mu", "mu", "mu", "rho"): -Dmmmr * w
+            + (Dmmm * Dr + 3.0 * Dmmr * Dm + 3.0 * Dmm * Dmr) * w2
+            - 6.0 * (Dmm * Dm * Dr + Dmr * Dm * Dm) * w3
+            + 6.0 * Dm**3 * Dr * w4,
+            ("mu", "mu", "rho", "rho"): (
+                2.0 * Dmmr * Dr + Dmm * Drr + 2.0 * Dmr * Dmr
+            )
+            * w2
+            - 2.0 * (Dmm * Dr * Dr + Drr * Dm * Dm + 4.0 * Dmr * Dm * Dr) * w3
+            + 6.0 * Dm * Dm * Dr * Dr * w4,
+            ("mu", "rho", "rho", "rho"): 3.0 * Dmr * Drr * w2
+            - 6.0 * (Drr * Dm * Dr + Dmr * Dr * Dr) * w3
+            + 6.0 * Dm * Dr**3 * w4,
+            ("rho", "rho", "rho", "rho"): -12.0
+            * (1.0 + 6.0 * rho**2 + rho**4)
+            / (1.0 - rho**2) ** 4
+            + 3.0 * Drr * Drr * w2
+            - 12.0 * Drr * Dr * Dr * w3
+            + 6.0 * Dr**4 * w4,
+        }
 
     def _argcheck(self, mu, rho):
         try:
@@ -3490,6 +3625,58 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             ("mu", "mu"): -kappa * np.cos(d),
             ("mu", "kappa"): np.sin(d),
             ("kappa", "kappa"): -A1prime(kappa),
+        }
+
+    def d3logpdf(self, x, mu, kappa):
+        r"""Third derivatives of ``logpdf`` (l3) — unique unordered triples.
+        ``∂_μ`` cycles the trig terms (``∂_μ cos(θ−μ) = sin(θ−μ)``,
+        ``∂_μ sin(θ−μ) = −cos(θ−μ)``); the κ-only direction differentiates
+        ``−A_1``:
+
+        $$\partial^3_{\mu\mu\mu}\ell = -\kappa\sin(\theta-\mu),\quad
+          \partial^3_{\mu\mu\kappa}\ell = -\cos(\theta-\mu),\quad
+          \partial^3_{\mu\kappa\kappa}\ell = 0,\quad
+          \partial^3_{\kappa\kappa\kappa}\ell = -A_1''(\kappa).$$
+
+        With l1/l2 this is the depth hea's gradient-outer Newton needs
+        (``available_derivs = 1``); see ``d4logpdf`` for the full-Newton tier.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        kappa = np.asarray(kappa, dtype=float)
+        d = x - mu
+        return {
+            ("mu", "mu", "mu"): -kappa * np.sin(d),
+            ("mu", "mu", "kappa"): -np.cos(d),
+            ("mu", "kappa", "kappa"): np.zeros(
+                np.broadcast_shapes(x.shape, mu.shape, kappa.shape)
+            ),
+            ("kappa", "kappa", "kappa"): -A1prime2(kappa),
+        }
+
+    def d4logpdf(self, x, mu, kappa):
+        r"""Fourth derivatives of ``logpdf`` (l4) — unique unordered quadruples:
+
+        $$\partial^4_{\mu\mu\mu\mu}\ell = \kappa\cos(\theta-\mu),\quad
+          \partial^4_{\mu\mu\mu\kappa}\ell = -\sin(\theta-\mu),\quad
+          \partial^4_{\kappa\kappa\kappa\kappa}\ell = -A_1'''(\kappa),$$
+
+        and the remaining mixed quadruples vanish (``ℓ`` is linear in κ apart
+        from ``−log I_0(κ)``, so any term with ≥2 κ-derivatives and ≥1
+        μ-derivative is zero). This completes the contract to the depth hea's
+        full outer Newton uses (``available_derivs = 2``).
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        kappa = np.asarray(kappa, dtype=float)
+        d = x - mu
+        zeros = np.zeros(np.broadcast_shapes(x.shape, mu.shape, kappa.shape))
+        return {
+            ("mu", "mu", "mu", "mu"): kappa * np.cos(d),
+            ("mu", "mu", "mu", "kappa"): -np.sin(d),
+            ("mu", "mu", "kappa", "kappa"): zeros,
+            ("mu", "kappa", "kappa", "kappa"): zeros,
+            ("kappa", "kappa", "kappa", "kappa"): -A1prime3(kappa),
         }
 
     def _argcheck(self, mu, kappa):
@@ -4078,6 +4265,365 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
 
 
 vonmises = vonmises_gen(name="vonmises")
+
+
+class projectednormal_gen(_RegressionReady, CircularContinuous):
+    r"""Projected Normal (angular Gaussian) Distribution ``PN₂(μ, I)``.
+
+    The direction of a bivariate normal: ``Θ = atan2(X₂, X₁)`` with
+    ``X ~ N₂((mu1, mu2), I₂)``. Parameterized by the *Cartesian* mean
+    components — the mean direction is ``atan2(mu2, mu1)``, ``‖μ‖`` acts as
+    the concentration, and ``‖μ‖ = 0`` is the circular uniform. The
+    identity-covariance form is the Presnell et al. (1998) regression
+    workhorse: both components are modelled linearly in covariates, so the
+    regression overlay tags both with role ``"location"`` and identity links
+    (two linear predictors in the hea bridge).
+
+    With ``t = μ₁cos θ + μ₂sin θ`` and ``s = −μ₁sin θ + μ₂cos θ`` the density
+    factorizes,
+
+    $$f(\theta) = \varphi(s)\,[\varphi(t) + t\,\Phi(t)],$$
+
+    so every mixed (t, s) derivative of ``log f`` vanishes and the l1..l4
+    contract methods stay closed-form in one scalar function
+    ``G(t) = \log(\varphi(t) + t\Phi(t))`` plus a rotation by θ.
+
+    Methods
+    -------
+    pdf(x, mu1, mu2)
+        Probability density function (closed form).
+
+    cdf(x, mu1, mu2)
+        Cumulative distribution function (numeric integration of the pdf).
+
+    rvs(mu1, mu2, size=None, random_state=None)
+        Random variates by direct projection of bivariate normal draws.
+
+    fit(data, method="mle", ...)
+        Maximum-likelihood estimates of ``(mu1, mu2)``.
+
+    Notes
+    -----
+    General (non-identity) covariance is intentionally out of scope: it is
+    not identifiable up to scale, and the regression literature fixes Σ = I.
+
+    References
+    ----------
+    Presnell, B., Morrison, S. P., & Littell, R. C. (1998). Projected
+    multivariate linear models for directional data. *JASA* 93(443).
+    """
+
+    # --- regression overlay (Phase 1 contract): one role, two parameters —
+    # the documented one-to-many case. Both LPs use the identity link. ---
+    param_roles = {"mu1": "location", "mu2": "location"}
+    default_links = {"location": "identity"}
+
+    @staticmethod
+    def _t_s(x, mu1, mu2):
+        """Rotated coordinates: t = μᵀu(θ) (radial), s = μᵀu⊥(θ) (tangent)."""
+        c, s_ = np.cos(x), np.sin(x)
+        return mu1 * c + mu2 * s_, mu2 * c - mu1 * s_
+
+    @staticmethod
+    def _mills_inv(t):
+        """``R(t) = φ(t)/Φ(t)``, stable for all t via ``log_ndtr``
+        (t → −∞: R → |t|; t → +∞: R → 0)."""
+        return np.exp(-0.5 * t * t - 0.5 * np.log(2.0 * np.pi) - log_ndtr(t))
+
+    def _argcheck(self, mu1, mu2):
+        try:
+            mu1_arr, mu2_arr = np.broadcast_arrays(mu1, mu2)
+        except ValueError:
+            return False
+        return np.isfinite(mu1_arr) & np.isfinite(mu2_arr)
+
+    def _logpdf(self, x, mu1, mu2):
+        x = np.asarray(x, dtype=float)
+        mu1 = np.asarray(mu1, dtype=float)
+        mu2 = np.asarray(mu2, dtype=float)
+        t, s = self._t_s(x, mu1, mu2)
+        # log f = log φ(s) + log(φ(t) + tΦ(t)); the bracket equals Φ(t)(t + R)
+        # with R = φ/Φ, and t + R > 0 always — stable at both t extremes.
+        return (
+            -0.5 * s * s
+            - 0.5 * np.log(2.0 * np.pi)
+            + log_ndtr(t)
+            + np.log(t + self._mills_inv(t))
+        )
+
+    def _pdf(self, x, mu1, mu2):
+        return np.exp(self._logpdf(x, mu1, mu2))
+
+    def pdf(self, x, mu1, mu2, *args, **kwargs):
+        r"""
+        Probability density function of the Projected Normal distribution.
+
+        $$
+        f(\theta) = \varphi(s)\,[\varphi(t) + t\,\Phi(t)], \qquad
+        t = \mu_1\cos\theta + \mu_2\sin\theta,\;
+        s = -\mu_1\sin\theta + \mu_2\cos\theta,
+        $$
+
+        where $\varphi$/$\Phi$ are the standard normal pdf/cdf.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the probability density function.
+        mu1 : float
+            First Cartesian mean component (any real).
+        mu2 : float
+            Second Cartesian mean component (any real).
+
+        Returns
+        -------
+        pdf_values : array_like
+            Probability density function evaluated at `x`.
+        """
+        return super().pdf(x, mu1, mu2, *args, **kwargs)
+
+    def logpdf(self, x, mu1, mu2, *args, **kwargs):
+        """
+        Logarithm of the probability density function (closed form).
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-PDF.
+        mu1, mu2 : float
+            Cartesian mean components (any reals).
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, mu1, mu2, *args, **kwargs)
+
+    # --- l1..l4 (the regression contract). ℓ(t, s) = log φ(s) + G(t)
+    # separates, so the s-direction contributes ℓ_s = −s, ℓ_ss = −1 and
+    # nothing at higher order; the t-direction is G', G'', G''', G'''' with
+    # G' = 1/(t + R) and P ≡ R/(t + R); the rotation back to (μ₁, μ₂) only
+    # mixes in powers of cos θ / sin θ. ---
+
+    def dlogpdf(self, x, mu1, mu2):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        $$\partial_{\mu_1}\ell = G'(t)\cos\theta + s\sin\theta,\qquad
+          \partial_{\mu_2}\ell = G'(t)\sin\theta - s\cos\theta,$$
+
+        with ``G'(t) = Φ(t)/(φ(t) + tΦ(t)) = 1/(t + R(t))``. Vectorizes over
+        per-observation ``mu1``/``mu2`` arrays; returns a book-named dict.
+        """
+        x = np.asarray(x, dtype=float)
+        mu1 = np.asarray(mu1, dtype=float)
+        mu2 = np.asarray(mu2, dtype=float)
+        c, s_ = np.cos(x), np.sin(x)
+        t, s = self._t_s(x, mu1, mu2)
+        g1 = 1.0 / (t + self._mills_inv(t))
+        return {
+            "mu1": g1 * c + s * s_,
+            "mu2": g1 * s_ - s * c,
+        }
+
+    def d2logpdf(self, x, mu1, mu2):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs.
+
+        In rotated coordinates the Hessian is ``diag(G''(t), −1)`` with
+        ``G'' = P − G'²`` and ``P = R/(t+R) = φ/(φ + tΦ)``; rotating back:
+
+        $$\partial^2_{\mu_1\mu_1}\ell = G''c^2 - \tilde s^2,\quad
+          \partial^2_{\mu_1\mu_2}\ell = (G'' + 1)\,c\tilde s,\quad
+          \partial^2_{\mu_2\mu_2}\ell = G''\tilde s^2 - c^2,$$
+
+        where ``c = cos θ``, ``s̃ = sin θ``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu1 = np.asarray(mu1, dtype=float)
+        mu2 = np.asarray(mu2, dtype=float)
+        c, s_ = np.cos(x), np.sin(x)
+        t, _ = self._t_s(x, mu1, mu2)
+        R = self._mills_inv(t)
+        g1 = 1.0 / (t + R)
+        g2 = R * g1 - g1 * g1
+        return {
+            ("mu1", "mu1"): g2 * c * c - s_ * s_,
+            ("mu1", "mu2"): (g2 + 1.0) * c * s_,
+            ("mu2", "mu2"): g2 * s_ * s_ - c * c,
+        }
+
+    def d3logpdf(self, x, mu1, mu2):
+        r"""Third derivatives of ``logpdf`` (l3) — unique unordered triples.
+
+        Only the radial direction survives at third order
+        (``∂³_s log φ(s) = 0``), so every entry is ``G'''(t)`` times the
+        matching power of ``cos θ``/``sin θ``:
+        ``G''' = −tP − 3PG' + 2G'³``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu1 = np.asarray(mu1, dtype=float)
+        mu2 = np.asarray(mu2, dtype=float)
+        c, s_ = np.cos(x), np.sin(x)
+        t, _ = self._t_s(x, mu1, mu2)
+        R = self._mills_inv(t)
+        g1 = 1.0 / (t + R)
+        P = R * g1
+        g3 = -t * P - 3.0 * P * g1 + 2.0 * g1**3
+        return {
+            ("mu1", "mu1", "mu1"): g3 * c**3,
+            ("mu1", "mu1", "mu2"): g3 * c * c * s_,
+            ("mu1", "mu2", "mu2"): g3 * c * s_ * s_,
+            ("mu2", "mu2", "mu2"): g3 * s_**3,
+        }
+
+    def d4logpdf(self, x, mu1, mu2):
+        r"""Fourth derivatives of ``logpdf`` (l4) — unique unordered
+        quadruples: ``G''''(t)`` times powers of ``cos θ``/``sin θ``, with
+        ``G'''' = P(t² − 1) + 4tPG' + 12PG'² − 3P² − 6G'⁴``. Completes the
+        contract to full-Newton depth (hea ``available_derivs = 2``).
+        """
+        x = np.asarray(x, dtype=float)
+        mu1 = np.asarray(mu1, dtype=float)
+        mu2 = np.asarray(mu2, dtype=float)
+        c, s_ = np.cos(x), np.sin(x)
+        t, _ = self._t_s(x, mu1, mu2)
+        R = self._mills_inv(t)
+        g1 = 1.0 / (t + R)
+        P = R * g1
+        g4 = (
+            P * (t * t - 1.0)
+            + 4.0 * t * P * g1
+            + 12.0 * P * g1 * g1
+            - 3.0 * P * P
+            - 6.0 * g1**4
+        )
+        return {
+            ("mu1", "mu1", "mu1", "mu1"): g4 * c**4,
+            ("mu1", "mu1", "mu1", "mu2"): g4 * c**3 * s_,
+            ("mu1", "mu1", "mu2", "mu2"): g4 * c * c * s_ * s_,
+            ("mu1", "mu2", "mu2", "mu2"): g4 * c * s_**3,
+            ("mu2", "mu2", "mu2", "mu2"): g4 * s_**4,
+        }
+
+    def _rvs(self, mu1, mu2, size=None, random_state=None):
+        rng = self._init_rng(random_state)
+
+        mu1_arr = np.asarray(mu1, dtype=float)
+        mu2_arr = np.asarray(mu2, dtype=float)
+        if mu1_arr.size != 1 or mu2_arr.size != 1:
+            raise ValueError("projectednormal parameters must be scalar-valued.")
+        mu1_val = float(mu1_arr.reshape(-1)[0])
+        mu2_val = float(mu2_arr.reshape(-1)[0])
+
+        shape = ()
+        if size is not None:
+            if np.isscalar(size):
+                shape = (int(size),)
+            else:
+                shape = tuple(int(dim) for dim in np.atleast_1d(size))
+
+        z1 = rng.standard_normal(size=shape)
+        z2 = rng.standard_normal(size=shape)
+        theta = np.mod(np.arctan2(mu2_val + z2, mu1_val + z1), 2.0 * np.pi)
+
+        if np.ndim(theta) == 0:
+            return float(theta)
+        return theta.reshape(shape)
+
+    def fit(
+        self,
+        data,
+        *,
+        weights=None,
+        method="mle",
+        return_info=False,
+        optimizer="L-BFGS-B",
+        **kwargs,
+    ):
+        """
+        Estimate ``(mu1, mu2)`` for the projected normal distribution.
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians). Values are wrapped to ``[0, 2π)``
+            internally.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {"mle"}, optional
+            Only maximum likelihood is provided (alias: "numerical"): the
+            direction of μ̂ has a closed form, but ``‖μ‖`` does not, so the
+            weighted log-likelihood is maximised directly with the analytic
+            score (``dlogpdf``) as gradient, initialised from the circular
+            mean direction and a von Mises-scale concentration.
+        return_info : bool, optional
+            If True, also return a diagnostic dictionary.
+        optimizer : str, optional
+            Optimiser passed to ``scipy.optimize.minimize``.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser.
+        """
+        kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
+        x = self._wrap_angles(np.asarray(data, dtype=float))
+        if x.size == 0:
+            raise ValueError("`data` must contain at least one observation.")
+
+        if weights is None:
+            w = np.ones_like(x, dtype=float)
+        else:
+            w = np.asarray(weights, dtype=float)
+            if np.any(w < 0):
+                raise ValueError("`weights` must be non-negative.")
+            w = np.broadcast_to(w, x.shape).astype(float, copy=False)
+
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 0:
+            raise ValueError("Sum of weights must be positive.")
+        n_eff = w_sum**2 / np.sum(w**2)
+
+        method_key = {"numerical": "mle"}.get(method.lower(), method.lower())
+        if method_key != "mle":
+            raise ValueError("`method` must be 'mle' (alias: 'numerical').")
+        if "algorithm" in kwargs:
+            optimizer = kwargs.pop("algorithm")
+
+        mu_dir, r_bar = circ_mean_and_r(alpha=x, w=w)
+        if not np.isfinite(mu_dir):
+            mu_dir = 0.0
+        gamma0 = max(A1inv(float(np.clip(r_bar, 0.0, 1.0 - 1e-9))), 1e-3)
+        init = np.array(
+            [gamma0 * np.cos(mu_dir), gamma0 * np.sin(mu_dir)], dtype=float
+        )
+
+        def nll(params):
+            return float(-np.sum(w * self._logpdf(x, params[0], params[1])))
+
+        def grad(params):
+            score = self.dlogpdf(x, params[0], params[1])
+            return -np.array(
+                [np.sum(w * score["mu1"]), np.sum(w * score["mu2"])], dtype=float
+            )
+
+        result = minimize(nll, init, method=optimizer, jac=grad, **kwargs)
+        if not result.success:
+            raise RuntimeError(f"projectednormal.fit(method='mle') failed: {result.message}")
+        mu1_hat, mu2_hat = (float(v) for v in result.x)
+
+        estimates = (mu1_hat, mu2_hat)
+        if return_info:
+            info = {
+                "method": "mle",
+                "loglik": float(-result.fun),
+                "n_effective": float(n_eff),
+                "converged": bool(result.success),
+                "nit": result.nit,
+                "optimizer": optimizer,
+            }
+            return estimates, info
+        return estimates
+
+
+projectednormal = projectednormal_gen(name="projectednormal")
 
 
 class vonmises_flattopped_gen(CircularContinuous):
@@ -4869,7 +5415,10 @@ class jonespewsey_gen(CircularContinuous):
 
     Note
     ----
-    Parameters must be scalar; cached normalisation tables are built per parameter set.
+    Scalar parameters use cached normalisation tables; ``pdf``/``logpdf`` also
+    accept per-observation parameter arrays (the regression contract),
+    normalised via the vectorized Legendre identity with a quadrature
+    fallback. Other methods (cdf, rvs, …) remain scalar-only.
     Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
 
@@ -4896,8 +5445,19 @@ class jonespewsey_gen(CircularContinuous):
 
     def _pdf(self, x, mu, kappa, psi):
         x = np.asarray(x, dtype=float)
-        kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
-        psi_scalar = _jp_ensure_scalar(psi, "psi")
+        kappa_scalar = _jp_as_scalar(kappa)
+        psi_scalar = _jp_as_scalar(psi)
+
+        if kappa_scalar is None or psi_scalar is None:
+            # Per-observation (κ_i, ψ_i) — the regression contract path
+            # (concentration smoothing on a shape family). Uniform reduction
+            # applied element-wise to match the scalar branch exactly.
+            mu_b, kappa_b, psi_b = np.broadcast_arrays(
+                *(np.asarray(a, dtype=float) for a in (mu, kappa, psi))
+            )
+            c = _c_jonespewsey_vec(kappa_b, psi_b)
+            dens = c * _jp_kernel_base(x - mu_b, kappa_b, psi_b)
+            return np.where(kappa_b < _JP_KAPPA_TOL, 1.0 / (2.0 * np.pi), dens)
 
         if not np.isfinite(kappa_scalar) or not np.isfinite(psi_scalar):
             return np.full_like(x, np.nan, dtype=float)
@@ -5482,45 +6042,75 @@ _JP_MIN_BASE = np.finfo(float).tiny
 _JP_MAX_EXP_ARGUMENT = 350.0  # guard for exp overflow
 
 
-def _jp_ensure_scalar(value, name):
+def _jp_as_scalar(value):
+    """The single value of an effectively-scalar parameter, else ``None``
+    (meaning genuinely per-observation)."""
     arr = np.asarray(value, dtype=float)
-    if arr.ndim == 0:
-        return float(arr)
-    if arr.size == 1:
+    if arr.ndim == 0 or arr.size == 1:
         return float(arr.reshape(()))
     unique = np.unique(arr)
-    if unique.size == 1:
-        return float(unique[0])
-    raise ValueError(
-        f"Jones-Pewsey parameter '{name}' must be scalar; "
-        "vectorised parameters are not supported because normalization tables are cached per parameter."
-    )
+    return float(unique[0]) if unique.size == 1 else None
+
+
+def _jp_ensure_scalar(value, name):
+    scalar = _jp_as_scalar(value)
+    if scalar is None:
+        raise ValueError(
+            f"Jones-Pewsey parameter '{name}' must be scalar for this method; "
+            "per-observation parameter arrays are supported only by pdf/logpdf."
+        )
+    return scalar
 
 
 def _jp_kernel_base(phi, kappa, psi):
     phi = np.asarray(phi, dtype=float)
-    if abs(psi) < _JP_PSI_TOL:
-        return np.exp(kappa * np.cos(phi))
+    if np.ndim(kappa) == 0 and np.ndim(psi) == 0:
+        if abs(psi) < _JP_PSI_TOL:
+            return np.exp(kappa * np.cos(phi))
 
-    A = kappa * psi
-    cos_phi = np.cos(phi)
+        A = kappa * psi
+        cos_phi = np.cos(phi)
 
-    cosh_A = np.cosh(A)
-    sinh_A = np.sinh(A)
-    if not np.isfinite(cosh_A) or not np.isfinite(sinh_A):
-        # Fallback to stable exponential representation
-        if A >= 0:
-            exp_A = np.exp(np.clip(A, None, _JP_MAX_EXP_ARGUMENT))
-            exp_negA = np.exp(np.clip(-A, -_JP_MAX_EXP_ARGUMENT, None))
-        else:
-            exp_A = np.exp(np.clip(A, -_JP_MAX_EXP_ARGUMENT, None))
-            exp_negA = np.exp(np.clip(-A, None, _JP_MAX_EXP_ARGUMENT))
-        cosh_A = 0.5 * (exp_A + exp_negA)
-        sinh_A = 0.5 * (exp_A - exp_negA)
+        cosh_A = np.cosh(A)
+        sinh_A = np.sinh(A)
+        if not np.isfinite(cosh_A) or not np.isfinite(sinh_A):
+            # Fallback to stable exponential representation
+            if A >= 0:
+                exp_A = np.exp(np.clip(A, None, _JP_MAX_EXP_ARGUMENT))
+                exp_negA = np.exp(np.clip(-A, -_JP_MAX_EXP_ARGUMENT, None))
+            else:
+                exp_A = np.exp(np.clip(A, -_JP_MAX_EXP_ARGUMENT, None))
+                exp_negA = np.exp(np.clip(-A, None, _JP_MAX_EXP_ARGUMENT))
+            cosh_A = 0.5 * (exp_A + exp_negA)
+            sinh_A = 0.5 * (exp_A - exp_negA)
 
-    base = cosh_A + sinh_A * cos_phi
-    base = np.clip(base, _JP_MIN_BASE, None)
-    return np.power(base, 1.0 / psi)
+        base = cosh_A + sinh_A * cos_phi
+        base = np.clip(base, _JP_MIN_BASE, None)
+        return np.power(base, 1.0 / psi)
+
+    # Per-observation (κ_i, ψ_i): the same element-wise semantics as the
+    # scalar branch — exact cosh/sinh where finite, the clipped-exponential
+    # representation where they overflow, von Mises kernel where |ψ| ≈ 0.
+    phi_b, kappa_b, psi_b = np.broadcast_arrays(
+        phi, np.asarray(kappa, dtype=float), np.asarray(psi, dtype=float)
+    )
+    A = kappa_b * psi_b
+    cos_phi = np.cos(phi_b)
+    with np.errstate(over="ignore"):
+        cosh_A = np.cosh(A)
+        sinh_A = np.sinh(A)
+    bad = ~(np.isfinite(cosh_A) & np.isfinite(sinh_A))
+    if np.any(bad):
+        exp_A = np.exp(np.clip(A, -_JP_MAX_EXP_ARGUMENT, _JP_MAX_EXP_ARGUMENT))
+        exp_negA = np.exp(np.clip(-A, -_JP_MAX_EXP_ARGUMENT, _JP_MAX_EXP_ARGUMENT))
+        cosh_A = np.where(bad, 0.5 * (exp_A + exp_negA), cosh_A)
+        sinh_A = np.where(bad, 0.5 * (exp_A - exp_negA), sinh_A)
+    base = np.clip(cosh_A + sinh_A * cos_phi, _JP_MIN_BASE, None)
+    vm_like = np.abs(psi_b) < _JP_PSI_TOL
+    psi_safe = np.where(vm_like, 1.0, psi_b)
+    with np.errstate(over="ignore"):
+        powered = np.power(base, 1.0 / psi_safe)
+    return np.where(vm_like, np.exp(kappa_b * cos_phi), powered)
 
 
 def _jp_effective_kappa(kappa, psi):
@@ -5637,6 +6227,49 @@ def _jp_legendre_normalizer(kappa, psi):
     return 1.0 / (2.0 * np.pi * legendre)
 
 
+def _c_jonespewsey_vec(kappa, psi):
+    """Per-observation Jones–Pewsey normalizer ``c(κ_i, ψ_i)``.
+
+    Element-wise mirror of the scalar ``_c_jonespewsey`` preference order:
+    the uniform/von Mises reductions, then the closed-form Legendre identity
+    ``c = 1/(2π P_{1/ψ}(cosh κψ))`` (``lpmv`` is vectorized), and a
+    quadrature fallback — evaluated once per unique offending ``(κ, ψ)``
+    pair — where the Legendre value is non-finite or badly scaled. No
+    caching: per-observation parameters change every regression iteration.
+    """
+    kappa, psi = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(psi, dtype=float)
+    )
+    out = np.full(kappa.shape, 1.0 / (2.0 * np.pi))
+    live = kappa >= _JP_KAPPA_TOL
+    vm = live & (np.abs(psi) < _JP_PSI_TOL)
+    if np.any(vm):
+        out[vm] = 1.0 / (2.0 * np.pi * i0(kappa[vm]))
+    gen = live & ~vm
+    if not np.any(gen):
+        return out
+    kg, pg = kappa[gen], psi[gen]
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        legendre = lpmv(0, 1.0 / pg, np.cosh(kg * pg))
+        cand = 1.0 / (2.0 * np.pi * legendre)
+    ok = (
+        np.isfinite(legendre)
+        & (legendre > 0.0)
+        & (cand >= 1e-12)
+        & (cand <= 1e6)
+    )
+    vals = np.where(ok, cand, np.nan)
+    if np.any(~ok):
+        bad_pairs = np.unique(
+            np.stack([kg[~ok], pg[~ok]], axis=1), axis=0
+        )
+        for k_v, p_v in bad_pairs:
+            mask = ~ok & (kg == k_v) & (pg == p_v)
+            vals[mask] = _c_jonespewsey(0.0, float(k_v), float(p_v))
+    out[gen] = vals
+    return out
+
+
 ###########################
 ## Sine-Skewed Extention ##
 ###########################
@@ -5661,7 +6294,9 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
 
     Note
     ----
-    Parameters must be scalar; cached normalisation tables are built per parameter set.
+    Scalar parameters use cached normalisation tables; ``pdf``/``logpdf`` also
+    accept per-observation parameter arrays (the regression contract). Other
+    methods (cdf, rvs, …) remain scalar-only.
     Implementation based on Section 4.3.11 of Pewsey et al. (2014)
     """
 
@@ -5685,10 +6320,22 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
 
     def _pdf(self, x, xi, kappa, psi, lmbd):
         x = np.asarray(x, dtype=float)
-        xi_scalar = _jp_ensure_scalar(xi, "xi")
-        kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
-        psi_scalar = _jp_ensure_scalar(psi, "psi")
-        lmbd_scalar = _jp_ensure_scalar(lmbd, "lmbd")
+        xi_scalar = _jp_as_scalar(xi)
+        kappa_scalar = _jp_as_scalar(kappa)
+        psi_scalar = _jp_as_scalar(psi)
+        lmbd_scalar = _jp_as_scalar(lmbd)
+
+        if any(v is None for v in (xi_scalar, kappa_scalar, psi_scalar, lmbd_scalar)):
+            # Per-observation parameters — regression contract path.
+            xi_b, kappa_b, psi_b, lmbd_b = np.broadcast_arrays(
+                *(np.asarray(a, dtype=float) for a in (xi, kappa, psi, lmbd))
+            )
+            skew = 1.0 + lmbd_b * np.sin(x - xi_b)
+            c = _c_jonespewsey_vec(kappa_b, psi_b)
+            dens = c * _jp_kernel_base(x - xi_b, kappa_b, psi_b) * skew
+            return np.where(
+                kappa_b < _JP_KAPPA_TOL, skew / (2.0 * np.pi), dens
+            )
 
         if abs(kappa_scalar) < _JP_KAPPA_TOL:
             return (1.0 / (2.0 * np.pi)) * (1.0 + lmbd_scalar * np.sin(x - xi_scalar))

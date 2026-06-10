@@ -298,13 +298,16 @@ _SCALAR_ONLY_CALLS = [
             0.1, mu=np.array([0.0, 0.1]), kappa=1.0, nu=0.1
         ),
     ),
+    # jonespewsey + sineskewed pdf/logpdf now ACCEPT per-obs parameter arrays
+    # (the Phase-1 regression contract); cdf and the other methods remain
+    # scalar-only, so the guard pins those instead.
     (
-        "jonespewsey",
-        lambda: jonespewsey.pdf(0.1, mu=0.0, kappa=np.array([1.0, 1.1]), psi=0.1),
+        "jonespewsey_cdf",
+        lambda: jonespewsey.cdf(0.1, mu=0.0, kappa=np.array([1.0, 1.1]), psi=0.1),
     ),
     (
-        "jonespewsey_sineskewed",
-        lambda: jonespewsey_sineskewed.pdf(
+        "jonespewsey_sineskewed_cdf",
+        lambda: jonespewsey_sineskewed.cdf(
             0.1, xi=0.0, kappa=np.array([1.0, 1.1]), psi=0.1, lmbd=0.1
         ),
     ),
@@ -1861,6 +1864,10 @@ def test_vonmises_derivatives_vectorize_over_per_obs_params():
     hess = vonmises.d2logpdf(x, mu, kappa)
     assert grad["mu"].shape == (n,)
     assert hess[("kappa", "kappa")].shape == (n,)
+    third = vonmises.d3logpdf(x, mu, kappa)
+    fourth = vonmises.d4logpdf(x, mu, kappa)
+    assert all(v.shape == (n,) for v in third.values())
+    assert all(v.shape == (n,) for v in fourth.values())
     # per-obs result equals the scalar call element-by-element
     for i in (0, 17, 49):
         gi = vonmises.dlogpdf(x[i], mu[i], kappa[i])
@@ -1957,3 +1964,408 @@ def test_tanhalf_dlink_chain_matches_finite_difference():
     np.testing.assert_allclose(link.d3link(mu), fd_g3, rtol=1e-6, atol=1e-8)
     fd_g4 = (link.d3link(mu + h) - link.d3link(mu - h)) / (2 * h)
     np.testing.assert_allclose(link.d4link(mu), fd_g4, rtol=1e-6, atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 regression contract: l3/l4 depth (full outer Newton for the bridge)
+# ---------------------------------------------------------------------------
+
+from pycircstat2.utils import A1prime2, A1prime3  # noqa: E402
+
+
+def test_A1prime2_A1prime3_match_finite_difference_and_limits():
+    """A1'' and A1''' against central differences of the order below, plus
+    the κ→0 limits (0 and −3/8). The grid covers both sides of the
+    series/recurrence switch at κ = 0.01 without straddling it."""
+    assert A1prime2(0.0) == pytest.approx(0.0)
+    assert A1prime3(0.0) == pytest.approx(-3.0 / 8.0)
+    kappa = np.array([0.002, 0.02, 0.05, 0.5, 1.0, 3.0, 8.0, 25.0])
+    h = 1e-6
+    fd2 = (A1prime(kappa + h) - A1prime(kappa - h)) / (2 * h)
+    np.testing.assert_allclose(A1prime2(kappa), fd2, atol=1e-7)
+    fd3 = (A1prime2(kappa + h) - A1prime2(kappa - h)) / (2 * h)
+    np.testing.assert_allclose(A1prime3(kappa), fd3, atol=1e-6)
+
+
+@pytest.mark.parametrize("kappa", [0.3, 1.0, 4.0, 12.0])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_vonmises_d3logpdf_matches_finite_difference(mu, kappa):
+    """l3: the four unique third partials against finite differences of l2."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    third = vonmises.d3logpdf(x, mu, kappa)
+    h = 1e-6
+
+    def l2(m, k):
+        return vonmises.d2logpdf(x, m, k)
+
+    d_mmm = (l2(mu + h, kappa)[("mu", "mu")] - l2(mu - h, kappa)[("mu", "mu")]) / (2 * h)
+    d_mmk = (l2(mu, kappa + h)[("mu", "mu")] - l2(mu, kappa - h)[("mu", "mu")]) / (2 * h)
+    d_mkk = (l2(mu, kappa + h)[("mu", "kappa")] - l2(mu, kappa - h)[("mu", "kappa")]) / (2 * h)
+    d_kkk = (
+        l2(mu, kappa + h)[("kappa", "kappa")] - l2(mu, kappa - h)[("kappa", "kappa")]
+    ) / (2 * h)
+
+    np.testing.assert_allclose(third[("mu", "mu", "mu")], d_mmm, atol=1e-5)
+    np.testing.assert_allclose(third[("mu", "mu", "kappa")], d_mmk, atol=1e-6)
+    np.testing.assert_allclose(third[("mu", "kappa", "kappa")], d_mkk, atol=1e-6)
+    np.testing.assert_allclose(third[("kappa", "kappa", "kappa")], d_kkk, atol=1e-6)
+    # symmetry cross-check: differencing the (μ,κ) entry in μ also gives μμκ
+    d_mmk2 = (l2(mu + h, kappa)[("mu", "kappa")] - l2(mu - h, kappa)[("mu", "kappa")]) / (
+        2 * h
+    )
+    np.testing.assert_allclose(third[("mu", "mu", "kappa")], d_mmk2, atol=1e-6)
+
+
+@pytest.mark.parametrize("kappa", [0.3, 1.0, 4.0, 12.0])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_vonmises_d4logpdf_matches_finite_difference(mu, kappa):
+    """l4: the five unique fourth partials against finite differences of l3."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    fourth = vonmises.d4logpdf(x, mu, kappa)
+    h = 1e-6
+
+    def l3(m, k):
+        return vonmises.d3logpdf(x, m, k)
+
+    pairs = [
+        (("mu", "mu", "mu", "mu"), ("mu", "mu", "mu"), "mu"),
+        (("mu", "mu", "mu", "kappa"), ("mu", "mu", "mu"), "kappa"),
+        (("mu", "mu", "kappa", "kappa"), ("mu", "mu", "kappa"), "kappa"),
+        (("mu", "kappa", "kappa", "kappa"), ("mu", "kappa", "kappa"), "kappa"),
+        (("kappa", "kappa", "kappa", "kappa"), ("kappa", "kappa", "kappa"), "kappa"),
+    ]
+    for key4, key3, wrt in pairs:
+        if wrt == "mu":
+            fd = (l3(mu + h, kappa)[key3] - l3(mu - h, kappa)[key3]) / (2 * h)
+        else:
+            fd = (l3(mu, kappa + h)[key3] - l3(mu, kappa - h)[key3]) / (2 * h)
+        np.testing.assert_allclose(fourth[key4], fd, atol=2e-5, err_msg=str(key4))
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 regression contract: wrapped Cauchy (second Tier-1 workhorse)
+# ---------------------------------------------------------------------------
+
+
+def test_wrapcauchy_regression_overlay():
+    """Role overlay: ρ is a (0,1)-bounded concentration, so it gets logit."""
+    assert isinstance(wrapcauchy, _RegressionReady)
+    assert wrapcauchy.param_roles == {"mu": "location", "rho": "concentration"}
+    assert wrapcauchy.link_for("mu") == "tanhalf"
+    assert wrapcauchy.link_for("rho") == "logit"
+    from hea.family import LogitLink as _HeaLogitLink
+
+    assert isinstance(get_link(wrapcauchy.link_for("rho")), _HeaLogitLink)
+
+
+@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_wrapcauchy_dlogpdf_matches_finite_difference(mu, rho):
+    """l1 against central differences of logpdf."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    grad = wrapcauchy.dlogpdf(x, mu, rho)
+    h = 1e-6
+    d_mu = (wrapcauchy.logpdf(x, mu + h, rho) - wrapcauchy.logpdf(x, mu - h, rho)) / (
+        2 * h
+    )
+    d_rho = (wrapcauchy.logpdf(x, mu, rho + h) - wrapcauchy.logpdf(x, mu, rho - h)) / (
+        2 * h
+    )
+    np.testing.assert_allclose(grad["mu"], d_mu, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(grad["rho"], d_rho, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_wrapcauchy_d2logpdf_matches_finite_difference(mu, rho):
+    """l2 against central differences of l1 (both μ- and ρ-differencing for
+    the mixed entry, pinning symmetry)."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    hess = wrapcauchy.d2logpdf(x, mu, rho)
+    h = 1e-6
+
+    def l1(m, r):
+        return wrapcauchy.dlogpdf(x, m, r)
+
+    d_mm = (l1(mu + h, rho)["mu"] - l1(mu - h, rho)["mu"]) / (2 * h)
+    d_mr = (l1(mu, rho + h)["mu"] - l1(mu, rho - h)["mu"]) / (2 * h)
+    d_rm = (l1(mu + h, rho)["rho"] - l1(mu - h, rho)["rho"]) / (2 * h)
+    d_rr = (l1(mu, rho + h)["rho"] - l1(mu, rho - h)["rho"]) / (2 * h)
+
+    np.testing.assert_allclose(hess[("mu", "mu")], d_mm, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(hess[("mu", "rho")], d_mr, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(hess[("mu", "rho")], d_rm, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(hess[("rho", "rho")], d_rr, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_wrapcauchy_d3_d4logpdf_match_finite_difference(mu, rho):
+    """l3 against FD of l2, l4 against FD of l3 — every unique key."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    h = 1e-5
+
+    third = wrapcauchy.d3logpdf(x, mu, rho)
+    fourth = wrapcauchy.d4logpdf(x, mu, rho)
+
+    def l2(m, r):
+        return wrapcauchy.d2logpdf(x, m, r)
+
+    def l3(m, r):
+        return wrapcauchy.d3logpdf(x, m, r)
+
+    chain3 = [
+        (("mu", "mu", "mu"), ("mu", "mu"), "mu"),
+        (("mu", "mu", "rho"), ("mu", "mu"), "rho"),
+        (("mu", "rho", "rho"), ("mu", "rho"), "rho"),
+        (("rho", "rho", "rho"), ("rho", "rho"), "rho"),
+    ]
+    for key3, key2, wrt in chain3:
+        if wrt == "mu":
+            fd = (l2(mu + h, rho)[key2] - l2(mu - h, rho)[key2]) / (2 * h)
+        else:
+            fd = (l2(mu, rho + h)[key2] - l2(mu, rho - h)[key2]) / (2 * h)
+        np.testing.assert_allclose(
+            third[key3], fd, rtol=1e-4, atol=1e-5, err_msg=str(key3)
+        )
+
+    chain4 = [
+        (("mu", "mu", "mu", "mu"), ("mu", "mu", "mu"), "mu"),
+        (("mu", "mu", "mu", "rho"), ("mu", "mu", "mu"), "rho"),
+        (("mu", "mu", "rho", "rho"), ("mu", "mu", "rho"), "rho"),
+        (("mu", "rho", "rho", "rho"), ("mu", "rho", "rho"), "rho"),
+        (("rho", "rho", "rho", "rho"), ("rho", "rho", "rho"), "rho"),
+    ]
+    for key4, key3, wrt in chain4:
+        if wrt == "mu":
+            fd = (l3(mu + h, rho)[key3] - l3(mu - h, rho)[key3]) / (2 * h)
+        else:
+            fd = (l3(mu, rho + h)[key3] - l3(mu, rho - h)[key3]) / (2 * h)
+        np.testing.assert_allclose(
+            fourth[key4], fd, rtol=1e-4, atol=1e-4, err_msg=str(key4)
+        )
+
+
+def test_wrapcauchy_derivatives_vectorize_over_per_obs_params():
+    """logpdf and l1..l4 broadcast over per-observation μ, ρ arrays."""
+    rng = np.random.default_rng(0)
+    n = 50
+    x = rng.uniform(0, 2 * np.pi, n)
+    mu = rng.uniform(0, 2 * np.pi, n)
+    rho = rng.uniform(0.05, 0.95, n)
+
+    assert wrapcauchy.logpdf(x, mu, rho).shape == (n,)
+    grad = wrapcauchy.dlogpdf(x, mu, rho)
+    assert grad["mu"].shape == (n,) and grad["rho"].shape == (n,)
+    assert all(v.shape == (n,) for v in wrapcauchy.d2logpdf(x, mu, rho).values())
+    assert all(v.shape == (n,) for v in wrapcauchy.d3logpdf(x, mu, rho).values())
+    assert all(v.shape == (n,) for v in wrapcauchy.d4logpdf(x, mu, rho).values())
+    # per-obs result equals the scalar call element-by-element
+    for i in (0, 17, 49):
+        gi = wrapcauchy.dlogpdf(x[i], mu[i], rho[i])
+        assert gi["mu"] == pytest.approx(grad["mu"][i])
+        assert gi["rho"] == pytest.approx(grad["rho"][i])
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 regression contract: per-obs param vectorization (Tier-1/2 audit)
+# ---------------------------------------------------------------------------
+
+
+def test_contract_families_logpdf_vectorizes_over_per_obs_params():
+    """Tier-1/2 contract families accept per-observation parameter arrays in
+    ``logpdf`` — the requirement for smoothing a concentration/shape over X.
+    The per-obs call must match element-wise scalar calls (jonespewsey and
+    the sine-skewed extension route through the vectorized Legendre
+    normalizer; the others broadcast natively)."""
+    rng = np.random.default_rng(3)
+    n = 11
+    x = rng.uniform(0.1, 2 * np.pi - 0.1, n)
+    mu = rng.uniform(0.5, 5.5, n)
+    from pycircstat2.distributions import projectednormal as _pn
+
+    cases = [
+        (vonmises, dict(mu=mu, kappa=rng.uniform(0.3, 8.0, n))),
+        (wrapcauchy, dict(mu=mu, rho=rng.uniform(0.05, 0.9, n))),
+        (_pn, dict(mu1=rng.uniform(-2.0, 2.0, n), mu2=rng.uniform(-2.0, 2.0, n))),
+        (cartwright, dict(mu=mu, zeta=rng.uniform(0.1, 2.0, n))),
+        (
+            jonespewsey,
+            dict(mu=mu, kappa=rng.uniform(0.3, 5.0, n), psi=rng.uniform(-1.5, 1.5, n)),
+        ),
+        (
+            jonespewsey_sineskewed,
+            dict(
+                xi=mu,
+                kappa=rng.uniform(0.3, 5.0, n),
+                psi=rng.uniform(-1.5, 1.5, n),
+                lmbd=rng.uniform(-0.8, 0.8, n),
+            ),
+        ),
+        (
+            katojones,
+            dict(
+                mu=mu,
+                gamma=rng.uniform(0.05, 0.3, n),
+                rho=rng.uniform(0.05, 0.3, n),
+                lam=rng.uniform(0.0, 1.0, n),
+            ),
+        ),
+    ]
+    for dist, params in cases:
+        vec = dist.logpdf(x, **params)
+        assert np.shape(vec) == (n,), f"{dist.name}: shape {np.shape(vec)}"
+        assert np.all(np.isfinite(vec)), f"{dist.name}: non-finite logpdf"
+        for i in (0, n // 2, n - 1):
+            scal = dist.logpdf(x[i], **{k: v[i] for k, v in params.items()})
+            np.testing.assert_allclose(
+                vec[i], scal, rtol=1e-9, atol=1e-12, err_msg=dist.name
+            )
+
+
+# ---------------------------------------------------------------------------
+# Projected normal (Tier-1 workhorse, added by the Phase 1 contract)
+# ---------------------------------------------------------------------------
+
+from pycircstat2.distributions import projectednormal  # noqa: E402
+
+
+def test_projectednormal_pdf_normalizes_and_uniform_limit():
+    """∫f = 1 across concentration regimes; ‖μ‖ = 0 is the circular uniform;
+    logpdf is the exact log of pdf."""
+    grid = np.linspace(0.0, 2.0 * np.pi, 20001)
+    for m in [(0.0, 0.0), (1.5, 0.8), (4.0, -3.0), (0.05, 0.0)]:
+        f = projectednormal.pdf(grid, *m)
+        assert np.trapezoid(f, grid) == pytest.approx(1.0, abs=1e-8)
+    assert projectednormal.pdf(1.0, 0.0, 0.0) == pytest.approx(1.0 / (2.0 * np.pi))
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 17)
+    np.testing.assert_allclose(
+        projectednormal.logpdf(x, 1.5, 0.8),
+        np.log(projectednormal.pdf(x, 1.5, 0.8)),
+        atol=1e-12,
+    )
+
+
+def test_projectednormal_regression_overlay():
+    """Both Cartesian components share the 'location' role (the documented
+    one-to-many case) and resolve to hea's identity link."""
+    from hea.family import IdentityLink as _HeaIdentityLink
+
+    assert isinstance(projectednormal, _RegressionReady)
+    assert projectednormal.param_roles == {"mu1": "location", "mu2": "location"}
+    assert projectednormal.params_by_role() == {"location": ["mu1", "mu2"]}
+    assert projectednormal.link_for("mu1") == "identity"
+    assert isinstance(
+        get_link(projectednormal.link_for("mu2")), _HeaIdentityLink
+    )
+
+
+@pytest.mark.parametrize("mu1,mu2", [(0.3, 0.2), (1.5, 0.8), (-1.2, 0.7), (4.0, -3.0)])
+def test_projectednormal_derivatives_match_finite_difference(mu1, mu2):
+    """The full l1..l4 chain against central differences of the order below
+    (the contract convention), including a high-concentration case where t
+    is strongly negative at the antimode (stresses the Mills-ratio path)."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    h = 1e-6
+
+    def fd(f, key, wrt):
+        if wrt == "mu1":
+            hi, lo = f(x, mu1 + h, mu2), f(x, mu1 - h, mu2)
+        else:
+            hi, lo = f(x, mu1, mu2 + h), f(x, mu1, mu2 - h)
+        hi = hi if key is None else hi[key]
+        lo = lo if key is None else lo[key]
+        return (hi - lo) / (2 * h)
+
+    grad = projectednormal.dlogpdf(x, mu1, mu2)
+    np.testing.assert_allclose(grad["mu1"], fd(projectednormal.logpdf, None, "mu1"), atol=1e-6)
+    np.testing.assert_allclose(grad["mu2"], fd(projectednormal.logpdf, None, "mu2"), atol=1e-6)
+
+    hess = projectednormal.d2logpdf(x, mu1, mu2)
+    np.testing.assert_allclose(hess[("mu1", "mu1")], fd(projectednormal.dlogpdf, "mu1", "mu1"), atol=1e-5)
+    np.testing.assert_allclose(hess[("mu1", "mu2")], fd(projectednormal.dlogpdf, "mu1", "mu2"), atol=1e-5)
+    np.testing.assert_allclose(hess[("mu1", "mu2")], fd(projectednormal.dlogpdf, "mu2", "mu1"), atol=1e-5)
+    np.testing.assert_allclose(hess[("mu2", "mu2")], fd(projectednormal.dlogpdf, "mu2", "mu2"), atol=1e-5)
+
+    third = projectednormal.d3logpdf(x, mu1, mu2)
+    chain3 = [
+        (("mu1", "mu1", "mu1"), ("mu1", "mu1"), "mu1"),
+        (("mu1", "mu1", "mu2"), ("mu1", "mu1"), "mu2"),
+        (("mu1", "mu2", "mu2"), ("mu1", "mu2"), "mu2"),
+        (("mu2", "mu2", "mu2"), ("mu2", "mu2"), "mu2"),
+    ]
+    for key3, key2, wrt in chain3:
+        np.testing.assert_allclose(
+            third[key3], fd(projectednormal.d2logpdf, key2, wrt),
+            atol=1e-5, err_msg=str(key3),
+        )
+
+    fourth = projectednormal.d4logpdf(x, mu1, mu2)
+    chain4 = [
+        (("mu1", "mu1", "mu1", "mu1"), ("mu1", "mu1", "mu1"), "mu1"),
+        (("mu1", "mu1", "mu1", "mu2"), ("mu1", "mu1", "mu1"), "mu2"),
+        (("mu1", "mu1", "mu2", "mu2"), ("mu1", "mu1", "mu2"), "mu2"),
+        (("mu1", "mu2", "mu2", "mu2"), ("mu1", "mu2", "mu2"), "mu2"),
+        (("mu2", "mu2", "mu2", "mu2"), ("mu2", "mu2", "mu2"), "mu2"),
+    ]
+    for key4, key3, wrt in chain4:
+        np.testing.assert_allclose(
+            fourth[key4], fd(projectednormal.d3logpdf, key3, wrt),
+            atol=2e-5, err_msg=str(key4),
+        )
+
+
+def test_projectednormal_derivatives_vectorize_over_per_obs_params():
+    """logpdf and l1..l4 broadcast over per-observation (μ₁, μ₂) arrays —
+    the two-linear-predictor regression requirement."""
+    rng = np.random.default_rng(0)
+    n = 50
+    x = rng.uniform(0, 2 * np.pi, n)
+    mu1 = rng.uniform(-2.5, 2.5, n)
+    mu2 = rng.uniform(-2.5, 2.5, n)
+
+    assert projectednormal.logpdf(x, mu1, mu2).shape == (n,)
+    grad = projectednormal.dlogpdf(x, mu1, mu2)
+    assert grad["mu1"].shape == (n,) and grad["mu2"].shape == (n,)
+    assert all(v.shape == (n,) for v in projectednormal.d2logpdf(x, mu1, mu2).values())
+    assert all(v.shape == (n,) for v in projectednormal.d3logpdf(x, mu1, mu2).values())
+    assert all(v.shape == (n,) for v in projectednormal.d4logpdf(x, mu1, mu2).values())
+    for i in (0, 17, 49):
+        gi = projectednormal.dlogpdf(x[i], mu1[i], mu2[i])
+        assert gi["mu1"] == pytest.approx(grad["mu1"][i])
+        assert gi["mu2"] == pytest.approx(grad["mu2"][i])
+
+
+def test_projectednormal_rvs_matches_density():
+    """Sampling by direct projection agrees with the closed-form density:
+    the empirical CDF tracks the numeric CDF and the sample mean direction
+    recovers atan2(μ₂, μ₁)."""
+    mu1, mu2 = 1.5, 0.8
+    s = projectednormal.rvs(mu1, mu2, size=20000, random_state=42)
+    assert np.all((s >= 0.0) & (s < 2.0 * np.pi))
+    dir_hat = float(np.angle(np.mean(np.exp(1j * s))))
+    assert dir_hat == pytest.approx(np.arctan2(mu2, mu1), abs=0.03)
+    for q in (1.0, 2.5, 4.5):
+        emp = float(np.mean(s <= q))
+        assert emp == pytest.approx(
+            float(projectednormal.cdf(q, mu1, mu2)), abs=0.02
+        )
+
+
+def test_projectednormal_cdf_monotone_and_bounded():
+    grid = np.linspace(0.0, 2.0 * np.pi, 25)
+    cdf = np.array([float(projectednormal.cdf(v, 1.2, -0.6)) for v in grid])
+    assert cdf[0] == pytest.approx(0.0, abs=1e-9)
+    assert cdf[-1] == pytest.approx(1.0, abs=1e-7)
+    assert np.all(np.diff(cdf) >= -1e-10)
+
+
+def test_projectednormal_fit_recovers_truth():
+    mu1, mu2 = 1.2, -0.8
+    s = projectednormal.rvs(mu1, mu2, size=4000, random_state=7)
+    (m1, m2), info = projectednormal.fit(s, return_info=True)
+    assert info["converged"] is True
+    assert m1 == pytest.approx(mu1, abs=0.12)
+    assert m2 == pytest.approx(mu2, abs=0.12)
+    with pytest.raises(ValueError, match="method"):
+        projectednormal.fit(s, method="moments")
