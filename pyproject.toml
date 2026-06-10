@@ -14,7 +14,7 @@ dependencies = [
     "scipy",
     "polars",
     "matplotlib",
-    "hea>=0.1.3",
+    "hea>=0.1.4",
 ]
 readme = {file = "README.md", content-type = "text/markdown"}
 
@@ -34,6 +34,17 @@ dev = [
 [tool.setuptools]
 packages = {find = {}}
 include-package-data = true
+
+# Dev-only source override: hea 0.1.4 is unreleased on PyPI, so resolve it from
+# the GitHub `bug_fix` branch, which carries the general-family engine
+# (`GeneralFamily`, gam.fit5, multi-formula gam, gamlss_* helpers, subclassable
+# Link) needed for the circular-GAM Phase 1/2 work. uv.lock pins the exact
+# commit — after pushing new hea commits, run `uv lock --upgrade-package hea`.
+# (For rapid hea iteration, swap in: hea = { path = "../hea", editable = true }.)
+# This is NOT part of the published wheel metadata — end users resolve hea from
+# PyPI per [project.dependencies]. Publish hea 0.1.4 before releasing pycircstat2.
+[tool.uv.sources]
+hea = { git = "https://github.com/huangziwei/hea", branch = "bug_fix" }
 
 [tool.pytest.ini_options]
 # Only collect the project's own tests; skip the vendored reference copy of the

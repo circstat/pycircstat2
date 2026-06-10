@@ -585,8 +585,8 @@ wheels = [
 
 [[package]]
 name = "hea"
-version = "0.1.3"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.4"
+source = { git = "https://github.com/huangziwei/hea?branch=bug_fix#f16d0b08704df07ad29350a290fd19e53ff1b36e" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -596,10 +596,6 @@ dependencies = [
     { name = "rdatasets" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/11/5816951948471359480ba36fa9767a391515e2f9517ccc0a9432bd923c11/hea-0.1.3.tar.gz", hash = "sha256:71b1f510d551286a0c6df1eea49423c040f7b7ea67958eec6cc0344ebf71c311", size = 53333585, upload-time = "2026-06-09T14:54:18.356Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/7e/57c2e6ccb220665f08c2ce5374416e868afd8bea061250f03bc4afb5e87c/hea-0.1.3-py3-none-any.whl", hash = "sha256:1859c7e25896685aec0b41c2bdc57f1b1534f98c8d32dc80619fd312695f790a", size = 907521, upload-time = "2026-06-09T14:54:15.906Z" },
 ]
 
 [[package]]
@@ -1842,7 +1838,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hea", specifier = ">=0.1.3" },
+    { name = "hea", git = "https://github.com/huangziwei/hea?branch=bug_fix" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.31.0" },
     { name = "matplotlib" },
     { name = "mkdocs", marker = "extra == 'dev'" },
