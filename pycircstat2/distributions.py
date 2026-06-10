@@ -20,6 +20,7 @@ from scipy.special import (
     lpmv,
     logsumexp,
 )
+from hea.family import IdentityLink, Link, LogitLink, LogLink
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -27,6 +28,8 @@ from .descriptive import circ_kappa, circ_mean_and_r
 from .utils import A1, A1prime, angmod
 
 __all__ = [
+    "TanHalfLink",
+    "get_link",
     "circularuniform",
     "triangular",
     "cardioid",
@@ -110,7 +113,8 @@ class _RegressionReady:
     dicts in **book-named** parameters:
 
     - ``param_roles``  : ``{book_name -> role}``  (e.g. ``{"mu": "location"}``)
-    - ``default_links`` : ``{role -> link_name}`` (e.g. ``{"location": "tanhalf"}``)
+    - ``default_links`` : ``{role -> link_name}`` (e.g. ``{"location": "tanhalf"}``,
+      resolved to a link object by :func:`get_link` below)
 
     The mixin derives the inverse views for free — nothing is renamed; values
     always flow in the distribution's own book-named dicts. Roles exist only so
@@ -142,6 +146,90 @@ class _RegressionReady:
     def link_for(cls, name: str) -> str:
         """Default link name for a parameter, via its role."""
         return cls.default_links[cls.param_roles[name]]
+
+
+# --- links (the contract's other half: resolving ``default_links`` names) ----
+# A link maps a parameter onto the unconstrained linear-predictor scale,
+# η = g(param). Every link resolved here is a ``hea.family.Link``, so one
+# authored object serves both regression consumers (plan §3.1): the parametric
+# ``CLRegression`` reads ``linkinv`` (η → parameter) and ``mu_eta`` (∂param/∂η)
+# for Fisher scoring; the hea general-family bridge (Phase 2) hands the same
+# object to ``hea.gam``, whose ``gamlss_etamu`` chain rule additionally
+# consumes ``link`` (g) and ``d2link``/``d3link``/``d4link`` (g″, g‴, g⁗ —
+# derivatives w.r.t. the *parameter*, mgcv convention). hea's catalog already
+# carries those hooks for log/logit/identity, so only the circular-specific
+# tan-half link — which hea must not learn — is authored here.
+
+
+class TanHalfLink(Link):
+    r"""Fisher–Lee tan-half link for a circular location parameter.
+
+    $$\eta = g(\mu) = \tan(\mu/2), \qquad
+      \mu = g^{-1}(\eta) = 2\arctan(\eta) \in (-\pi, \pi).$$
+
+    Maps the principal angle branch monotonically onto ℝ; a CL model offsets
+    it by the intercept direction, ``μ_i = μ₀ + 2 arctan(x_iᵀβ)`` (Fisher &
+    Lee 1992). ``tan(μ/2)`` is 2π-periodic in μ, so ``link`` returns the
+    principal-branch η for any angle parameterization; the only singularity
+    is ``μ ≡ π (mod 2π)``, the antipode of the offset.
+
+    Derivatives w.r.t. μ, in ``t = tan(μ/2)`` (so ``dt/dμ = (1+t²)/2``):
+
+    $$g' = \tfrac{1+t^2}{2},\quad g'' = \tfrac{t(1+t^2)}{2},\quad
+      g''' = \tfrac{(1+t^2)(1+3t^2)}{4},\quad
+      g'''' = \tfrac{t(1+t^2)(2+3t^2)}{2}.$$
+    """
+
+    name = "tanhalf"
+
+    def link(self, mu):
+        return np.tan(0.5 * np.asarray(mu, dtype=float))
+
+    def linkinv(self, eta):
+        return 2.0 * np.arctan(np.asarray(eta, dtype=float))
+
+    def mu_eta(self, eta):
+        eta = np.asarray(eta, dtype=float)
+        return 2.0 / (1.0 + eta * eta)
+
+    def d2link(self, mu):
+        t = np.tan(0.5 * np.asarray(mu, dtype=float))
+        return 0.5 * t * (1.0 + t * t)
+
+    def d3link(self, mu):
+        t2 = np.tan(0.5 * np.asarray(mu, dtype=float)) ** 2
+        return 0.25 * (1.0 + t2) * (1.0 + 3.0 * t2)
+
+    def d4link(self, mu):
+        t = np.tan(0.5 * np.asarray(mu, dtype=float))
+        t2 = t * t
+        return 0.5 * t * (1.0 + t2) * (2.0 + 3.0 * t2)
+
+
+# Names a distribution may declare in ``default_links``. tanhalf is ours; the
+# rest resolve to hea's implementations (log for κ > 0, logit for a (0, 1)-
+# bounded concentration such as the wrapped Cauchy ρ, identity for shape
+# parameters held fixed).
+_LINKS = {
+    "tanhalf": TanHalfLink,
+    "log": LogLink,
+    "logit": LogitLink,
+    "identity": IdentityLink,
+}
+
+
+def get_link(link: "str | Link") -> Link:
+    """Resolve a link declared by the regression overlay to a link object.
+
+    Accepts a name from ``default_links`` (e.g. ``vonmises.link_for("mu")``)
+    or an already-constructed ``hea.family.Link``, which passes through so a
+    custom link can be handed anywhere a name is accepted.
+    """
+    if isinstance(link, Link):
+        return link
+    if isinstance(link, str) and link in _LINKS:
+        return _LINKS[link]()
+    raise ValueError(f"unknown link {link!r}; available: {sorted(_LINKS)}")
 
 
 class CircularContinuous(rv_continuous):

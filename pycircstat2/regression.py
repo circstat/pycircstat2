@@ -8,7 +8,7 @@ from hea.models import gam as _hea_gam, lm as _hea_lm
 from scipy.special import i0e
 from scipy.stats import chi2, norm, t as student_t
 
-from .distributions import vonmises
+from .distributions import get_link, vonmises
 from .utils import A1, A1inv, A1prime, significance_code
 
 __all__ = ["CLRegression", "CCRegression", "LCRegression"]
@@ -294,6 +294,10 @@ class CLRegression:
         if model_type not in ["mean", "kappa", "mixed"]:
             raise ValueError("Model type must be 'mean', 'kappa', or 'mixed'.")
 
+        # Location link resolved from the regression contract (vonmises
+        # declares tanhalf via its role overlay); μ_i = μ₀ + linkinv(x_iᵀβ).
+        self._mu_link = get_link(vonmises.link_for("mu"))
+
         # Initialize parameters
         p = self.X.shape[1]
         self.alpha = float(alpha0) if alpha0 is not None else 0.0
@@ -396,7 +400,7 @@ class CLRegression:
         for iter_count in range(self.max_iter):
             if self.model_type == "mean":
                 # Step 1: Compute mu and kappa
-                raw_deviation = theta - 2 * np.arctan(X @ beta)
+                raw_deviation = theta - self._mu_link.linkinv(X @ beta)
                 S = np.mean(np.sin(raw_deviation))
                 C = np.mean(np.cos(raw_deviation))
                 R = np.hypot(S, C)
@@ -406,9 +410,9 @@ class CLRegression:
                 # Step 2: Update beta. Score from the von Mises regression
                 # contract (vonmises.dlogpdf — the §3.2 lift); the IRLS weight
                 # is the *expected* (Fisher) information −E[∂²_{μμ}ℓ] = κ A1(κ),
-                # distinct from the observed d2logpdf.
-                denom = 1 + (X @ beta) ** 2
-                G = 2 * X / denom[:, None]
+                # distinct from the observed d2logpdf. G = ∂μ/∂β chains the
+                # link's mu_eta through the design.
+                G = self._mu_link.mu_eta(X @ beta)[:, None] * X
                 weight = float(kappa * A1(kappa))
                 u = vonmises.dlogpdf(raw_deviation, mu, kappa)["mu"]
                 XtX = G.T @ G
@@ -451,7 +455,7 @@ class CLRegression:
             elif self.model_type == "mixed":
                 # Step 1: Compute mu and kappa
                 kappa = self._safe_exp_kappa(alpha + X @ gamma)
-                raw_deviation = theta - 2 * np.arctan(X @ beta)
+                raw_deviation = theta - self._mu_link.linkinv(X @ beta)
                 S = np.sum(kappa * np.sin(raw_deviation))
                 C = np.sum(kappa * np.cos(raw_deviation))
                 mu = np.arctan2(S, C)
@@ -462,10 +466,9 @@ class CLRegression:
                 score = vonmises.dlogpdf(raw_deviation, mu, kappa)
 
                 # Step 2: Update beta — Fisher scoring step from current β.
-                # Score s(β) = Gᵀ (κ ⊙ sin(rdev − μ)); info I(β) = Gᵀ diag(κ A1(κ)) G.
-                # β_new solves I β_new = I β + s.
-                denom = 1 + (X @ beta) ** 2
-                G = 2 * X / denom[:, None]
+                # Score s(β) = Gᵀ (κ ⊙ sin(rdev − μ)); info I(β) = Gᵀ diag(κ A1(κ)) G,
+                # with G = ∂μ/∂β = mu_eta(Xβ)·X. β_new solves I β_new = I β + s.
+                G = self._mu_link.mu_eta(X @ beta)[:, None] * X
                 weights_beta = kappa * A1(kappa)
                 XtWX_beta = G.T @ (weights_beta[:, None] * G)
                 u_beta = score["mu"]
@@ -536,8 +539,7 @@ class CLRegression:
 
         if self.model_type == "mean":
             # Mean Direction Model
-            denom = 1 + (X @ beta) ** 2
-            G = 2 * X / denom[:, None]
+            G = self._mu_link.mu_eta(X @ beta)[:, None] * X
             weight = float(kappa * A1(kappa))
             XtAX = weight * (G.T @ G)
             cov_beta = _safe_inverse(XtAX)
@@ -583,8 +585,7 @@ class CLRegression:
 
         elif self.model_type == "mixed":
             # Mixed Model
-            denom = 1 + (X @ beta) ** 2
-            G = 2 * X / denom[:, None]
+            G = self._mu_link.mu_eta(X @ beta)[:, None] * X
             weights_beta = kappa * A1(kappa)
             XtGKGX = G.T @ (weights_beta[:, None] * G)
 
@@ -696,7 +697,7 @@ class CLRegression:
         beta = self.result.get("beta")
         if beta is None or np.any(~np.isfinite(beta)):
             raise ValueError("Model does not contain beta coefficients for prediction.")
-        return np.mod(mu + 2 * np.arctan(X_arr @ beta), 2 * np.pi)
+        return np.mod(mu + self._mu_link.linkinv(X_arr @ beta), 2 * np.pi)
 
     def predict_kappa(self, X_new) -> np.ndarray:
         """Predict per-observation concentration κ_i = exp(α + X_iᵀγ).
@@ -786,7 +787,7 @@ class CLRegression:
         if self.model_type in ("mean", "mixed"):
             mu = self.result["mu"]
             beta = self.result["beta"]
-            curve = np.mod(mu + 2 * np.arctan(x_grid * beta[0]), 2 * np.pi)
+            curve = np.mod(mu + self._mu_link.linkinv(x_grid * beta[0]), 2 * np.pi)
             curve_plot = curve.astype(float).copy()
             jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
             curve_plot[jumps] = np.nan
@@ -830,7 +831,7 @@ class CLRegression:
         if self.model_type == "kappa":
             return np.full(self.theta.shape, mu)
         beta = self.result["beta"]
-        return mu + 2 * np.arctan(self.X @ beta)
+        return mu + self._mu_link.linkinv(self.X @ beta)
 
     def _plot_residual_diagnostic(self, axes) -> None:
         residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))

@@ -1884,3 +1884,76 @@ def test_vonmises_dlogpdf_equals_CL_inline_score():
     obs_info = -vonmises.d2logpdf(grid, mu, kappa)[("mu", "mu")]
     fisher_info = np.trapezoid(obs_info * f, grid)
     assert fisher_info == pytest.approx(kappa * A1(kappa), rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 regression contract: links (TanHalfLink + the get_link resolver)
+# ---------------------------------------------------------------------------
+
+from hea.family import Link as _HeaLink  # noqa: E402
+from hea.family import LogLink as _HeaLogLink  # noqa: E402
+
+from pycircstat2.distributions import TanHalfLink, get_link  # noqa: E402
+
+
+def test_get_link_resolves_contract_names():
+    """``default_links`` names resolve end-to-end to ``hea.family.Link``
+    objects (the Phase-2 face); instances pass through; unknown names raise."""
+    mu_link = get_link(vonmises.link_for("mu"))
+    kappa_link = get_link(vonmises.link_for("kappa"))
+    assert isinstance(mu_link, TanHalfLink)
+    assert isinstance(mu_link, _HeaLink)
+    assert isinstance(kappa_link, _HeaLogLink)
+    custom = TanHalfLink()
+    assert get_link(custom) is custom
+    with pytest.raises(ValueError, match="unknown link"):
+        get_link("no-such-link")
+
+
+def test_tanhalf_roundtrip_branch_and_monotonicity():
+    """``linkinv`` inverts ``link`` on the principal branch (−π, π); ``link``
+    is 2π-periodic in μ (any angle parameterization hits the principal
+    branch); the map is monotone (``mu_eta`` > 0) with range (−π, π)."""
+    link = TanHalfLink()
+    mu = np.linspace(-np.pi + 1e-3, np.pi - 1e-3, 101)
+    np.testing.assert_allclose(link.linkinv(link.link(mu)), mu, atol=1e-12)
+    np.testing.assert_allclose(
+        link.link(mu + 2 * np.pi), link.link(mu), rtol=1e-6, atol=1e-12
+    )
+    eta = np.linspace(-50.0, 50.0, 201)
+    assert np.all(np.abs(link.linkinv(eta)) < np.pi)
+    assert np.all(link.mu_eta(eta) > 0)
+
+
+def test_tanhalf_mu_eta_matches_finite_difference():
+    """``mu_eta`` = d linkinv/dη against central differences."""
+    link = TanHalfLink()
+    eta = np.linspace(-8.0, 8.0, 81)
+    h = 1e-6
+    fd = (link.linkinv(eta + h) - link.linkinv(eta - h)) / (2 * h)
+    np.testing.assert_allclose(link.mu_eta(eta), fd, atol=1e-8)
+
+
+def test_tanhalf_dlink_chain_matches_finite_difference():
+    """``d2link``/``d3link``/``d4link`` are successive μ-derivatives of
+    g(μ) = tan(μ/2): each analytic order matches a central difference of the
+    order below (the FD convention of the l1/l2 contract tests). Also pins
+    the mgcv identity ``mu_eta(g(μ)) = 1/g′(μ)``."""
+    link = TanHalfLink()
+    mu = np.linspace(-2.4, 2.4, 49)
+    h = 1e-6
+
+    def gprime(m):
+        t = np.tan(0.5 * m)
+        return 0.5 * (1.0 + t * t)
+
+    fd_g1 = (link.link(mu + h) - link.link(mu - h)) / (2 * h)
+    np.testing.assert_allclose(gprime(mu), fd_g1, rtol=1e-8)
+    np.testing.assert_allclose(link.mu_eta(link.link(mu)), 1.0 / gprime(mu), rtol=1e-12)
+
+    fd_g2 = (gprime(mu + h) - gprime(mu - h)) / (2 * h)
+    np.testing.assert_allclose(link.d2link(mu), fd_g2, rtol=1e-6, atol=1e-8)
+    fd_g3 = (link.d2link(mu + h) - link.d2link(mu - h)) / (2 * h)
+    np.testing.assert_allclose(link.d3link(mu), fd_g3, rtol=1e-6, atol=1e-8)
+    fd_g4 = (link.d3link(mu + h) - link.d3link(mu - h)) / (2 * h)
+    np.testing.assert_allclose(link.d4link(mu), fd_g4, rtol=1e-6, atol=1e-8)
