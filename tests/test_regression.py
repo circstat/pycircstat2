@@ -297,11 +297,13 @@ def test_log_likelihood_stable_at_high_concentration():
 
 
 def test_formula_parser_rejects_malformed_formulas():
+    # The single-string formula parser is the fisher-lee path (the default
+    # gam backend routes single strings through hea's own parser).
     df = pd.DataFrame({"y": [0.1, 0.2], "x": [1.0, 2.0]})
     with pytest.raises(ValueError, match="exactly one '~'"):
-        CLRegression(formula="y ~ x ~ z", data=df)
+        CLRegression(formula="y ~ x ~ z", data=df, backend="fisher-lee")
     with pytest.raises(ValueError, match="No predictors"):
-        CLRegression(formula="y ~ ", data=df)
+        CLRegression(formula="y ~ ", data=df, backend="fisher-lee")
 
 
 def test_cl_plot_mean_model_1d():
@@ -1043,9 +1045,9 @@ def test_cl_gam_single_formula_implies_constant_kappa():
     assert np.allclose(k, k[0])
 
 
-def test_cl_gam_family_kwarg_and_parametric_guard():
+def test_cl_gam_family_kwarg_and_fisher_lee_guard():
     """family= accepts a regression-ready distribution (auto-wrapped); gam
-    options on the parametric path raise."""
+    options on the fisher-lee (array) path raise."""
     from pycircstat2.distributions import projectednormal
 
     df, _ = _cl_gam_sim()
@@ -1057,6 +1059,59 @@ def test_cl_gam_family_kwarg_and_parametric_guard():
             theta=np.array([0.1, 0.5, 1.0]),
             X=np.array([[0.0], [0.5], [1.0]]),
             family=projectednormal,
+        )
+
+
+def test_cl_backend_dispatch_unified_grammar():
+    """One formula grammar, backend= selects the engine: default gam; smooth
+    forces gam; fisher-lee expresses mean/kappa/mixed via the list; arrays and
+    model_type= imply fisher-lee; the conflicting/invalid combinations raise."""
+    df = load_data("B20", source="fisher")
+    d = pl.DataFrame(
+        {"X": df["x"].to_numpy(), "Z": df["x"].to_numpy() * 2.0,
+         "θ": np.deg2rad(df["θ"].to_numpy())}
+    )
+
+    # default backend is gam
+    assert CLRegression("θ ~ X", d).backend == "gam"
+    assert CLRegression(["θ ~ X", "~ X"], d).backend == "gam"
+
+    # fisher-lee: list configuration -> model_type
+    assert CLRegression(["θ ~ X", "~ 1"], d, backend="fisher-lee").model_type == "mean"
+    assert CLRegression(["θ ~ 1", "~ X"], d, backend="fisher-lee").model_type == "kappa"
+    assert CLRegression(["θ ~ X", "~ X"], d, backend="fisher-lee").model_type == "mixed"
+    # single string sugar -> mean model
+    assert CLRegression("θ ~ X", d, backend="fisher-lee").model_type == "mean"
+
+    # raises
+    with pytest.raises(ValueError, match="shared design"):
+        CLRegression(["θ ~ X", "~ Z"], d, backend="fisher-lee")
+    with pytest.raises(ValueError, match="require backend='gam'"):
+        CLRegression("θ ~ s(X)", d, backend="fisher-lee")
+    with pytest.raises(ValueError, match="fisher-lee alias"):
+        CLRegression("θ ~ X", d, model_type="mean", backend="gam")
+    with pytest.raises(ValueError, match="arrays use backend"):
+        CLRegression(theta=d["θ"].to_numpy(), X=d["X"].to_numpy()[:, None], backend="gam")
+
+
+def test_cl_fisher_lee_list_matches_legacy_model_type():
+    """The fisher-lee formula list and the legacy model_type= alias are the
+    same fit (the list is just the new spelling)."""
+    df = load_data("B20", source="fisher")
+    d = pl.DataFrame({"X": df["x"].to_numpy(), "θ": np.deg2rad(df["θ"].to_numpy())})
+
+    for mt, formulas in [
+        ("mean", ["θ ~ X", "~ 1"]),
+        ("kappa", ["θ ~ 1", "~ X"]),
+        ("mixed", ["θ ~ X", "~ X"]),
+    ]:
+        legacy = CLRegression("θ ~ X", d, model_type=mt, tol=1e-10)
+        unified = CLRegression(formulas, d, backend="fisher-lee", tol=1e-10)
+        assert unified.model_type == mt
+        np.testing.assert_allclose(unified.result["mu"], legacy.result["mu"], atol=1e-8)
+        np.testing.assert_allclose(
+            np.atleast_1d(unified.result["kappa"]),
+            np.atleast_1d(legacy.result["kappa"]), rtol=1e-6,
         )
 
 

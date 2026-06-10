@@ -193,7 +193,7 @@ class CircularLL(GeneralFamily):
             data, family=CircularLL(vonmises), method="REML")
 
     Note the mgcv parameterization: every LP's intercept lives *inside* the
-    link — μ = 2·atan(β₀ + …) — unlike the parametric ``CLRegression``'s
+    link — μ = 2·atan(β₀ + …) — unlike the fisher-lee ``CLRegression``'s
     Fisher–Lee offset ``μ₀ + 2·atan(Xβ)``. The two coincide for
     intercept-only models; with covariates they are different (both valid)
     parameterizations, so compare fitted curves, not coefficients.
@@ -405,45 +405,52 @@ class CLRegression:
     """
     Circular-Linear Regression.
 
-    Two backends behind one surface (mirroring LC/CC):
+    Two backends behind **one formula grammar**, selected with ``backend=``:
 
-    - **parametric** (default for plain formulas / theta+X arrays): the
-      Fisher–Lee von Mises MLE below — ``μ_i = μ₀ + 2·atan(x_iᵀβ)``,
-      ``κ_i = exp(α + x_iᵀγ)`` — fast and dependency-light.
-    - **distributional gam** (a formula *list*, or any ``s()``/``te()``
-      smooth): ``hea.gam`` with a :class:`CircularLL` general family — one
-      formula per linear predictor, REML-penalized smooth μ(x) *and*
-      κ(z), e.g. ``CLRegression(["θ ~ s(x)", "~ s(z)"], data)``. A single
-      smooth formula implies a constant second LP (``"~ 1"``). ``family=``
-      selects the response distribution (default ``vonmises``; any
-      regression-ready distribution or a ``CircularLL`` works — use
-      ``projectednormal`` when μ(x) must sweep the full circle, since the
-      tanhalf link cannot cross ±π).
+    - **"gam"** (default): ``hea.gam`` with a :class:`CircularLL` general
+      family — one formula per linear predictor in the mgcv parameterization
+      (intercept *inside* the link). Handles any regression-ready ``family=``,
+      penalized smooths (``s()``/``te()``), REML, and **different covariates
+      per LP**. ``CLRegression(["θ ~ s(x)", "~ s(z)"], data)`` smooths μ(x)
+      and log κ(z) jointly. Use ``family=projectednormal`` when μ(x) must
+      sweep the full circle (the tanhalf link cannot cross ±π).
+    - **"fisher-lee"**: the von Mises MLE — ``μ_i = μ₀ + 2·atan(x_iᵀβ)``
+      (offset *outside* the link; Fisher & Lee 1992 / Fisher 1993 §6.4),
+      ``κ_i = exp(α + x_iᵀγ)``. Fast, dependency-light, R-validated. It ties
+      μ and κ to one shared design, so it expresses mean / kappa / mixed
+      (which LP carries covariates) but **not** different covariates per LP.
 
-    The two parameterizations differ with covariates: the gam backend
-    follows mgcv (every LP's intercept *inside* the link), the parametric
-    path keeps Fisher–Lee's offset outside. They coincide for
-    intercept-only models; otherwise compare fitted curves, not
-    coefficients.
+    **Formula grammar (both backends):** a string ``"θ ~ rhs"`` is sugar for
+    ``["θ ~ rhs", "~ 1"]`` (a mean model — μ on the covariates, constant κ);
+    a list ``[μ-formula, logκ-formula]`` models each linear predictor.
+
+    Dispatch: a **smooth term forces "gam"**; ``theta=``/``X=`` arrays and the
+    deprecated ``model_type=`` alias imply ``"fisher-lee"``; otherwise the
+    default is ``"gam"``. The two parameterizations differ with covariates
+    (intercept inside vs outside the link) — they coincide for intercept-only
+    models, otherwise compare fitted *curves*, not coefficients.
 
     Parameters
     ----------
     formula : str or list of str, optional
-        A formula string like 'θ ~ x1 + x2 + x3' (parametric), or a formula
-        list / smooth formula for the distributional gam backend.
+        ``"θ ~ rhs"`` (≡ ``["θ ~ rhs", "~ 1"]``, a mean model) or a
+        ``[μ-formula, logκ-formula]`` list. Smooth terms require
+        ``backend="gam"``.
     data : polars.DataFrame, optional
         A polars (or pandas) DataFrame containing the response and predictors.
     theta : np.ndarray, optional
-        A numpy array of circular response values in radians.
+        Circular response in radians (fisher-lee array interface; with ``X``).
     X : np.ndarray, optional
-        A numpy array of predictor values.
+        Predictor array (fisher-lee array interface; with ``theta``).
+    backend : {"gam", "fisher-lee"}, optional
+        Which engine to use. Default ``"gam"`` (``"fisher-lee"`` for the array
+        interface and the legacy ``model_type=`` alias). A smooth term forces
+        ``"gam"``.
     model_type : str, optional
-        Type of model to fit. Must be one of 'mean', 'kappa', or 'mixed'.
-
-        - 'mean': Fit a model for the mean direction.
-        - 'kappa': Fit a model for the concentration parameter.
-        - 'mixed': Fit a mixed circular-linear model.
-
+        **Deprecated** — pass a formula list instead (``["θ ~ X", "~ 1"]`` =
+        mean, ``["θ ~ 1", "~ X"]`` = kappa, ``["θ ~ X", "~ X"]`` = mixed).
+        Still accepted for the array/single-formula forms; implies
+        ``backend="fisher-lee"``. One of 'mean', 'kappa', 'mixed'.
     beta0 : np.ndarray, optional
         Initial values for the beta coefficients.
     alpha0 : float, optional
@@ -515,7 +522,7 @@ class CLRegression:
         data: Optional[pl.DataFrame] = None,
         theta: Optional[np.ndarray] = None,
         X: Optional[np.ndarray] = None,
-        model_type: str = "mixed",
+        model_type: Optional[str] = None,
         beta0: Union[np.ndarray, None] = None,
         alpha0: Union[float, None] = None,
         gamma0: Union[np.ndarray, None] = None,
@@ -523,6 +530,7 @@ class CLRegression:
         max_iter: int = 100,
         verbose: bool = False,
         *,
+        backend: Optional[str] = None,
         family=None,
         knots: Optional[dict] = None,
         method: str = "REML",
@@ -532,67 +540,152 @@ class CLRegression:
         self.tol = tol
         self.max_iter = max_iter
 
-        # --- backend dispatch (mirrors LC/CC; plan §5). A formula LIST (one
-        # formula per linear predictor) or any smooth term routes to the
-        # distributional gam backend — hea.gam with a CircularLL general
-        # family, REML-penalized smooth μ(x) and κ(z). A parametric formula
-        # string (or theta/X arrays) keeps the Fisher–Lee MLE below. Note the
-        # parameterizations differ with covariates: the gam backend follows
-        # mgcv (intercept inside the link, μ = 2·atan(β₀ + …)); the
-        # parametric path is Fisher–Lee (offset outside, μ₀ + 2·atan(Xβ)).
-        if isinstance(formula, (list, tuple)) or (
-            isinstance(formula, str) and _has_smooth(formula)
-        ):
-            if data is None:
+        # --- backend resolution (plan §5). One formula grammar, two engines:
+        #   • "fisher-lee" — von Mises MLE with the tan-half link and the
+        #     offset *outside* (μ = μ₀ + 2·atan(Xβ); Fisher & Lee 1992 /
+        #     Fisher 1993 §6.4). Fast, R-validated; ties μ and κ to one shared
+        #     design (mean / kappa / mixed = which LP carries covariates).
+        #   • "gam" — hea general family (CircularLL) in the mgcv
+        #     parameterization (intercept *inside* the link); any
+        #     regression-ready family, smooths, REML, different covariates
+        #     per LP.
+        # Default: gam. A smooth term forces gam. theta=/X= arrays and the
+        # legacy (deprecated) model_type= alias both imply fisher-lee.
+        if isinstance(formula, (list, tuple)):
+            has_smooth = any(_has_smooth(str(f)) for f in formula)
+        elif isinstance(formula, str):
+            has_smooth = _has_smooth(formula)
+        else:
+            has_smooth = False
+        arrays = theta is not None or X is not None
+
+        if model_type is not None:
+            if backend not in (None, "fisher-lee"):
                 raise ValueError(
-                    "The distributional (gam) backend requires `data`."
+                    "model_type= is a fisher-lee alias; drop it to use "
+                    "backend='gam' (model each LP via the formula list)."
                 )
-            self.backend = "gam"
+            backend = "fisher-lee"
+        elif arrays:
+            backend = backend or "fisher-lee"
+            if backend != "fisher-lee":
+                raise ValueError(
+                    "theta=/X= arrays use backend='fisher-lee'; pass a "
+                    "formula + data for backend='gam'."
+                )
+        else:
+            backend = backend or "gam"
+
+        if backend not in ("fisher-lee", "gam"):
+            raise ValueError(f"backend must be 'fisher-lee' or 'gam'; got {backend!r}.")
+        if has_smooth and backend == "fisher-lee":
+            raise ValueError(
+                "smooth terms (s()/te()/…) require backend='gam'; the "
+                "fisher-lee backend has no penalized smoother."
+            )
+        self.backend = backend
+
+        if backend == "gam":
+            if data is None:
+                raise ValueError("The gam backend requires a formula + `data`.")
             self.model_type = None  # the formula list plays this role
             self._init_gam(formula, data, family, knots, method, gam_kwargs)
             return
+
         if family is not None or knots is not None or gam_kwargs:
-            raise ValueError(
-                "family=/knots=/gam options apply only to the smooth "
-                "(distributional gam) backend — pass a formula list or s() "
-                "terms."
-            )
-        self.backend = "parametric"
+            raise ValueError("family=/knots=/gam options apply only to backend='gam'.")
         self.gam_fit = None
         self.family = None
-        self.model_type = model_type
+        self._init_fisher_lee(formula, data, theta, X, model_type, beta0, alpha0, gamma0)
 
-        # Parse inputs
-        if formula and data is not None:
-            theta_arr, X_arr, feature_names = self._parse_formula(formula, data)
-        elif theta is not None and X is not None:
-            feature_names = None
-            theta_arr, X_arr = theta, X
-        else:
-            raise ValueError("Provide either a formula + data or theta and X.")
-
-        self.theta, self.X = self._prepare_design(theta_arr, X_arr)
-        if feature_names is None:
-            self.feature_names = [f"x{i}" for i in range(self.X.shape[1])]
-        else:
-            self.feature_names = feature_names
-
-        # Validate model type
-        if model_type not in ["mean", "kappa", "mixed"]:
-            raise ValueError("Model type must be 'mean', 'kappa', or 'mixed'.")
-
-        # Location link resolved from the regression contract (vonmises
-        # declares tanhalf via its role overlay); μ_i = μ₀ + linkinv(x_iᵀβ).
+    def _init_fisher_lee(self, formula, data, theta, X, model_type,
+                         beta0, alpha0, gamma0):
+        """Set up and fit the Fisher–Lee von Mises backend from any accepted
+        input shape: ``theta``/``X`` arrays, a ``[μ-formula, logκ-formula]``
+        list, or a single μ-formula (≡ a mean model). The legacy
+        ``model_type`` still selects mean/kappa/mixed for the array and
+        single-formula forms; for a formula list it is read off which LP
+        carries covariates."""
+        # Location link from the contract (vonmises declares tanhalf via its
+        # role overlay); μ_i = μ₀ + linkinv(x_iᵀβ).
         self._mu_link = get_link(vonmises.link_for("mu"))
 
-        # Initialize parameters
+        if isinstance(formula, (list, tuple)):
+            theta_arr, X_arr, feature_names, mt = self._parse_lp_formulas(formula, data)
+        elif formula is not None and data is not None:
+            theta_arr, X_arr, feature_names = self._parse_formula(formula, data)
+            mt = model_type or "mean"  # a bare μ-formula is a mean model
+        elif theta is not None and X is not None:
+            theta_arr, X_arr, feature_names = theta, X, None
+            mt = model_type or "mixed"  # historic array default
+        else:
+            raise ValueError(
+                "Provide a formula + data, a formula list, or theta and X."
+            )
+
+        if mt not in ("mean", "kappa", "mixed"):
+            raise ValueError("model_type must be 'mean', 'kappa', or 'mixed'.")
+        self.model_type = mt
+
+        self.theta, self.X = self._prepare_design(theta_arr, X_arr)
+        self.feature_names = feature_names or [f"x{i}" for i in range(self.X.shape[1])]
+
         p = self.X.shape[1]
         self.alpha = float(alpha0) if alpha0 is not None else 0.0
         self.beta = self._coerce_vector(beta0, p, name="beta")
         self.gamma = self._coerce_vector(gamma0, p, name="gamma")
-
-        # Fit the model
         self.result = self._fit()
+
+    def _parse_lp_formulas(self, formulas, data):
+        """Parse a fisher-lee ``[μ-formula, logκ-formula]`` list into
+        ``(theta, X, feature_names, model_type)``. The model type follows
+        which LP carries covariates; since the backend ties both LPs to one
+        shared design, two non-empty LPs must name the same predictors (else
+        use ``backend='gam'``)."""
+        if len(formulas) != 2:
+            raise ValueError(
+                "the fisher-lee backend expects a [μ-formula, logκ-formula] "
+                f"list of length 2 (got {len(formulas)})."
+            )
+        data = _to_polars(data)
+        cols = set(data.columns)
+        mu_f, kappa_f = formulas
+        response = mu_f.split("~", 1)[0].strip()
+        if not response:
+            raise ValueError(f"First formula must name the response: {mu_f!r}")
+        theta = data[response].to_numpy()
+        mu_cov = self._formula_covariates(mu_f, cols)
+        kappa_cov = self._formula_covariates(kappa_f, cols)
+
+        if mu_cov and not kappa_cov:
+            return theta, data[mu_cov].to_numpy(), mu_cov, "mean"
+        if kappa_cov and not mu_cov:
+            return theta, data[kappa_cov].to_numpy(), kappa_cov, "kappa"
+        if mu_cov and kappa_cov:
+            if set(mu_cov) != set(kappa_cov):
+                raise ValueError(
+                    "the fisher-lee backend ties μ and κ to one shared design, "
+                    f"but μ uses {mu_cov} and κ uses {kappa_cov}. Use "
+                    "backend='gam' for different covariates per predictor."
+                )
+            return theta, data[mu_cov].to_numpy(), mu_cov, "mixed"
+        raise ValueError("no predictors in either formula; nothing to regress.")
+
+    @staticmethod
+    def _formula_covariates(formula: str, data_cols) -> List[str]:
+        """Covariate column names on a formula RHS (``~ 1`` / ``~`` ⇒ none)."""
+        rhs = formula.split("~", 1)[1] if "~" in formula else formula
+        out: List[str] = []
+        for term in rhs.split("+"):
+            term = term.strip()
+            if term in ("", "1"):
+                continue
+            if term not in data_cols:
+                raise ValueError(
+                    f"unknown predictor {term!r}; columns are {sorted(data_cols)}."
+                )
+            out.append(term)
+        return out
 
     def _init_gam(self, formula, data, family, knots, method, gam_kwargs):
         """Fit the distributional gam backend: one formula per linear
@@ -643,7 +736,7 @@ class CLRegression:
 
     def _build_result_gam(self) -> dict:
         """Result dict for the distributional gam backend. Keys shared with
-        the parametric path keep their meaning (``mu``/``kappa`` become
+        the fisher-lee path keep their meaning (``mu``/``kappa`` become
         per-observation fitted values; ``log_likelihood`` is the penalized
         fit's log-likelihood); smooth-specific summaries are added."""
         g = self.gam_fit
@@ -680,7 +773,7 @@ class CLRegression:
         if self.backend != "gam":
             raise ValueError(
                 "predict_params() is for the distributional gam backend; the "
-                "parametric path exposes predict()/predict_kappa()."
+                "fisher-lee path exposes predict()/predict_kappa()."
             )
         new = _to_polars(data)
         pred = self.gam_fit.predict(newdata=new)
@@ -1064,7 +1157,7 @@ class CLRegression:
         ----------
         X_new: array-like, shape (n_samples, n_features), or a DataFrame
             New predictor data. The gam backend takes a DataFrame with the
-            formula variables; the parametric path takes the design array.
+            formula variables; the fisher-lee path takes the design array.
 
         Returns
         -------
@@ -1158,7 +1251,7 @@ class CLRegression:
     ):
         """Two-panel diagnostic figure.
 
-        Parametric backend — layout depends on ``model_type`` and the number
+        Fisher–Lee backend — layout depends on ``model_type`` and the number
         of predictors:
 
         - 1D X, ``model_type`` in ``{"mean", "mixed"}``: fit overlay
@@ -1185,7 +1278,7 @@ class CLRegression:
           ``circ-SD = √(−2 ln R̂(x))`` with ``R̂ = A1(κ̂)`` (von Mises) or
           ``ρ̂`` (wrapped Cauchy). Visualizes the modeled κ(x) on the overlay.
 
-        (``ci``/``pi``/``level`` are ignored by the parametric backend.)
+        (``ci``/``pi``/``level`` are ignored by the fisher-lee backend.)
 
         Returns
         -------
@@ -1307,7 +1400,7 @@ class CLRegression:
     def _fill_mu_bands(self, ax, x_grid, curve, jumps, *, ci, pi, level,
                        se_dir=None, circ_sd=None) -> None:
         """Draw ±band(s) around a (possibly wrapping) μ̂(x) curve on the
-        ``[0, 4π]`` overlay, shared by the parametric and gam backends: a ±1
+        ``[0, 4π]`` overlay, shared by the fisher-lee and gam backends: a ±1
         circular-SD *dispersion* band (``pi``, wide, from ``circ_sd``) and/or
         a ``level`` *confidence* band (``ci``, narrow, from ``se_dir``), each
         replicated at +2π and broken at the same wrap points as the curve.
