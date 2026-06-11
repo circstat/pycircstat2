@@ -6601,40 +6601,43 @@ def _optimize_vonmises_envelope(theta, log_target, mu, initial_guess, *, max_ite
     return K, max(M, 1.01)
 
 
-def _jp_gl_panels(kappa, psi):
-    """[0, π] composite Gauss–Legendre nodes/weights on the JP break-point
-    ladder (the kernel is even in φ, so a half-circle sweep suffices).
+def _jp_feature_scales(kappa, psi):
+    """The two length scales of the JP kernel in its own angle: the peak
+    curvature width 1/√κ_eff at φ = 0 (the ψ < 0 spike) and the antipodal
+    near-kink scale 2e^{−|κψ|} at φ = π, where g ≈ e^A cos²(φ/2) + e^{−A}
+    crosses over (a √-type feature the kernel and the moment integrands
+    inherit). Returns ``(w_peak, w_anti)``, clipped to [1e-320, 1].
 
-    Rungs grow geometrically from *both* ends: the peak ladder (φ = 0,
-    curvature scale 1/√κ_eff) resolves the ψ < 0 spike; for ψ > 0 the hard
-    feature is instead the antipodal near-kink at scale 2e^{−|κψ|} (see
-    ``_jp_logZ_moments``). Every panel spans at most one decade of its
-    feature scale, so 24-point GL per panel is at quadrature precision.
-    Returns ``(nodes, weights)``.
-    """
+    The lower clip is a pure positivity guard at the denormal floor (the
+    width formula underflows to 0 beyond |κψ| ≈ 745, which would hang the
+    geometric rung loop) — it must NOT be a resolution floor: under the
+    fixed-panel GL ladder any floor above the true feature scale silently
+    truncates the ladder and loses the ψ < 0 spike that carries all of the
+    mass. An earlier 1e-13 floor — harmless for the adaptive quadrature it
+    was written for — made the normalizer wrong beyond |κψ| ≈ 33 and
+    garbage by |κψ| ≈ 40 (caught against the exact ψ = −1 identity
+    Z ≡ 2π); a 1e-300 floor still broke |κψ| ≳ 690. Rungs below ~1e-320
+    only resolve because the peak sits at φ = 0, where doubles are
+    denormally dense — which is also why the asymmetric family must
+    integrate in its *unwarped* angle (see ``_jp_log_c_asym``)."""
     A = kappa * psi
     if abs(A) < 1e-12:
         keff = max(kappa, 1e-12)
-        width = float(np.clip(1.0 / np.sqrt(keff), 1e-13, 1.0))
+        w_peak = float(np.clip(1.0 / np.sqrt(keff), 1e-320, 1.0))
     else:
         if A >= 0.0:
             log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
         else:
             log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
-        width = float(np.clip(np.exp(-0.5 * log_keff), 1e-13, 1.0))
+        with np.errstate(over="ignore"):
+            w_peak = float(np.clip(np.exp(-0.5 * log_keff), 1e-320, 1.0))
+    w_anti = float(np.clip(2.0 * np.exp(-abs(A)), 1e-320, 1.0))
+    return w_peak, w_anti
 
-    w_anti = float(np.clip(2.0 * np.exp(-abs(A)), 1e-13, 1.0))
-    edge_set = {0.0, float(np.pi)}
-    r = width
-    while r < np.pi:
-        edge_set.add(r)
-        r *= 10.0
-    r = w_anti
-    while r < np.pi:
-        edge_set.add(float(np.pi) - r)
-        r *= 10.0
-    edges = sorted(edge_set)
 
+def _gl_panels_from_edges(edges):
+    """Composite 24-point Gauss–Legendre nodes/weights over consecutive
+    panel ``edges`` (sorted). Returns ``(nodes, weights)``."""
     xi, wgl = _JP_GL_XW
     nodes, wts = [], []
     for a, b in zip(edges[:-1], edges[1:]):
@@ -6642,6 +6645,28 @@ def _jp_gl_panels(kappa, psi):
         nodes.append(mid + hw * xi)
         wts.append(hw * wgl)
     return np.concatenate(nodes), np.concatenate(wts)
+
+
+def _jp_gl_panels(kappa, psi):
+    """[0, π] composite Gauss–Legendre nodes/weights on the JP break-point
+    ladder (the kernel is even in φ, so a half-circle sweep suffices).
+
+    Rungs grow geometrically from *both* ends at the ``_jp_feature_scales``
+    of the peak and the antipodal near-kink. Every panel spans at most one
+    decade of its feature scale, so 24-point GL per panel is at quadrature
+    precision. Returns ``(nodes, weights)``.
+    """
+    w_peak, w_anti = _jp_feature_scales(kappa, psi)
+    edge_set = {0.0, float(np.pi)}
+    r = w_peak
+    while r < np.pi:
+        edge_set.add(r)
+        r *= 10.0
+    r = w_anti
+    while r < np.pi:
+        edge_set.add(float(np.pi) - r)
+        r *= 10.0
+    return _gl_panels_from_edges(sorted(edge_set))
 
 
 @lru_cache(maxsize=4096)
@@ -6667,8 +6692,12 @@ def _jp_log_c(kappa: float, psi: float) -> float:
         return float(-(np.log(2.0 * np.pi * i0e(kappa)) + kappa))
     nodes, wts = _jp_gl_panels(kappa, psi)
     h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
-    # kernel even in φ with peak h(0) = κ exactly
-    return float(-(kappa + np.log(2.0 * np.sum(wts * np.exp(h - kappa)))))
+    # kernel even in φ with peak h(0) = κ exactly. The tiny-floor guard
+    # only engages beyond |κψ| ≈ 740 with ψ < 0, where the spike is below
+    # float resolution even at φ = 0 (the distribution is numerically a
+    # point mass): values there are best-effort, never nan.
+    integral = 2.0 * np.sum(wts * np.exp(h - kappa))
+    return float(-(kappa + np.log(max(integral, np.finfo(float).tiny))))
 
 
 def _jp_log_c_vec(kappa, psi):
@@ -6850,7 +6879,7 @@ def _jp_logZ_moments(kappa: float, psi: float):
     nodes, wts = _jp_gl_panels(kappa, psi)
     t = _jp_score_terms(nodes, kappa, psi, second=True)
     e = np.exp(t["h"] - float(np.max(t["h"]))) * wts
-    Z = float(np.sum(e))
+    Z = max(float(np.sum(e)), np.finfo(float).tiny)
 
     def m(v):
         return float(np.sum(e * v)) / Z
@@ -7976,25 +8005,73 @@ class jonespewsey_asym_gen(CircularContinuous):
 jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
 
 
-def _jp_log_c_asym(kappa, psi, nu):
+@lru_cache(maxsize=4096)
+def _jp_log_c_asym(kappa: float, psi: float, nu: float) -> float:
     """log normalizing constant of the asymmetric-extended JP kernel
-    (ξ-invariant). Same log-space stabilization as ``_jp_log_c`` — the
-    warped kernel's maximum is also exactly e^κ (the warp g(φ) = φ + ν cos φ
-    is a monotone bijection passing through 0) — with the bounded integrand
-    e^{h(g(φ))−κ} ≤ 1 handed to adaptive quadrature. aeJP keeps its
-    no-break-point-ladder status (validation plan §5 hardening note)."""
+    (ξ-invariant), via the substitution u = g(φ) = φ + ν cos φ:
+
+        ∫ kernel(g(φ)) dφ  =  ∫_{−π−ν}^{π−ν} kernel(u) / g′(g⁻¹(u)) du.
+
+    Working in the kernel's own angle u is what makes the spike resolvable:
+    the warp puts the peak at a generic φ* where adjacent doubles are
+    ~|φ*|·1e-16 apart, so for deep ψ < 0 the spike (width ~2e^{−|κψ|})
+    falls *between representable numbers* and no φ-space ladder can see
+    it — in u the peak sits at exactly 0, where doubles are denormally
+    dense, and the kernel features are at the known points 0/±π (no
+    root-solving). The warp survives only as the smooth bounded weight
+    1/g′ ∈ [1/(1+ν), 1/(1−ν)], whose argument g⁻¹(u) a float-limited
+    bisection serves perfectly well. One vectorized ``_jp_score_terms``
+    call over the GL ladder (the scalar-node adaptive quadrature this
+    replaces paid ~100 µs of tiny-array numpy per node).
+    """
     if kappa < _JP_KAPPA_TOL:
         return float(-np.log(2.0 * np.pi))
 
-    def scaled_kernel(t):
-        g = t + nu * np.cos(t)
-        h = _jp_score_terms(np.asarray([g]), kappa, psi, second=False)["h"]
-        return float(np.exp(h[0] - kappa))
+    two_pi = 2.0 * np.pi
+    lo, hi = -np.pi - nu, np.pi - nu  # u over exactly one period
+    w_peak, w_anti = _jp_feature_scales(kappa, psi)
+    edge_set = {lo, hi, 0.0}
+    r = w_peak
+    while r < two_pi:
+        for cand in (-r, r):
+            if lo < cand < hi:
+                edge_set.add(cand)
+        r *= 10.0
+    r = w_anti
+    while r < two_pi:
+        # the kink at u = −π is interior; u = +π sits ν beyond hi, so only
+        # its inward rungs land inside
+        for cand in (-np.pi - r, -np.pi + r, np.pi - r):
+            if lo < cand < hi:
+                edge_set.add(cand)
+        r *= 10.0
+    # the weight has its own bump where g′ dips to 1 − ν: φ = π/2, i.e.
+    # u = g(π/2) = π/2 exactly, of u-width ~(1−ν)^{3/2} — unresolved it
+    # costs ~1e-5 relative at ν = 0.9 (the kernel ladders have no rungs
+    # mid-window)
+    r = max((1.0 - nu) ** 1.5, 1e-3)
+    while r < two_pi:
+        for cand in (0.5 * np.pi - r, 0.5 * np.pi + r):
+            if lo < cand < hi:
+                edge_set.add(cand)
+        r *= 10.0
 
-    integral = quad(
-        scaled_kernel, -np.pi, np.pi, limit=500, epsabs=1e-12, epsrel=1e-10
-    )[0]
-    return float(-(kappa + np.log(integral)))
+    nodes, wts = _gl_panels_from_edges(sorted(edge_set))
+    # invert the warp by bisection — monotone (g′ ≥ 1 − ν > 0), and only
+    # the smooth weight consumes φ(u), so 60 halvings (2π/2⁶⁰ ≈ 5e-18) are
+    # beyond what the weight can distinguish
+    a = np.full_like(nodes, -np.pi)
+    b = np.full_like(nodes, np.pi)
+    for _ in range(60):
+        m = 0.5 * (a + b)
+        too_high = m + nu * np.cos(m) > nodes
+        b = np.where(too_high, m, b)
+        a = np.where(too_high, a, m)
+    weight = 1.0 / (1.0 - nu * np.sin(0.5 * (a + b)))
+
+    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    integral = float(np.sum(wts * np.exp(h - kappa) * weight))
+    return float(-(kappa + np.log(max(integral, np.finfo(float).tiny))))
 
 
 class inverse_batschelet_gen(CircularContinuous):
