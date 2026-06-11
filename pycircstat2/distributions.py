@@ -15,6 +15,7 @@ from scipy.special import (
     ndtr,
     ndtri,
     iv,
+    ive,
     betainc,
     betaincinv,
     gammaln,
@@ -1257,6 +1258,28 @@ class triangular_gen(CircularContinuous):
         """
         return super().logpdf(x, rho, *args, **kwargs)
 
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (J&S §2.2.3): the mode-at-0
+        triangular law has m_p = ρ/p² for odd p and 0 for even p (real —
+        the density is symmetric about 0)."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        (rho,) = (float(np.asarray(v, dtype=float))
+                  for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = abs(int(round(p)))
+        if k == 0:
+            return complex(1.0, 0.0)
+        if k % 2 == 0:
+            return complex(0.0, 0.0)
+        return complex(rho / (k * k), 0.0)
+
     def _cdf(self, x, rho):
         x_arr = np.asarray(x, dtype=float)
         rho_arr = np.asarray(rho, dtype=float)
@@ -1745,6 +1768,29 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, mu, rho, *args, **kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (book §4.3.4): the cardioid is
+        a pure first-harmonic perturbation, so m₁ = ρ·e^{iμ} and m_p = 0
+        for every |p| ≥ 2."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        mu, rho = (float(np.asarray(v, dtype=float))
+                   for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        if abs(k) > 1:
+            return complex(0.0, 0.0)
+        value = rho * np.exp(1j * mu)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
 
     def _cdf(self, x, mu, rho):
         return (x + 2 * rho * (np.sin(x - mu) + np.sin(mu))) / (2 * np.pi)
@@ -2359,6 +2405,34 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
         """
         return super().logpdf(x, mu, zeta, *args, **kwargs)
 
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (book §4.3.5 / J&S): with
+        s = 1/ζ the centered moments are the Γ-ratio
+        Γ(s+1)²/(Γ(s+1+p)Γ(s+1−p)), evaluated as the overflow-free finite
+        product Π_{k=1}^{p} (s−k+1)/(s+k) — whose p = 1 case s/(s+1)
+        equals the ``_moment_r`` log form by Legendre duplication."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        mu, zeta = (float(np.asarray(v, dtype=float))
+                    for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = abs(k)
+        s = 1.0 / zeta
+        alpha_p = 1.0
+        for j in range(1, ak + 1):
+            alpha_p *= (s - j + 1.0) / (s + j)
+        value = alpha_p * np.exp(1j * ak * mu)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
+
     @staticmethod
     def _cartwright_cumulative(phi, a, b, half_norm):
         phi_arr = np.asarray(phi, dtype=float)
@@ -2961,6 +3035,27 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, mu, rho, *args, **kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (book §4.3.7):
+        m_p = ρ^{p²}·e^{ipμ}."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        mu, rho = (float(np.asarray(v, dtype=float))
+                   for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = abs(k)
+        value = (rho ** (ak * ak)) * np.exp(1j * ak * mu)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
 
     # Derivative methods (the regression contract) reuse the same hybrid
     # split as ``_pdf``, so l1/l2 differentiate exactly the density that
@@ -3789,6 +3884,27 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         """
         return super().logpdf(x, mu, rho, *args, **kwargs)
 
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (book §4.3.6):
+        m_p = ρ^{p}·e^{ipμ}."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        mu, rho = (float(np.asarray(v, dtype=float))
+                   for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = abs(k)
+        value = (rho ** ak) * np.exp(1j * ak * mu)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
+
     def _cdf(self, x, mu, rho):
         wrapped = self._wrap_angles(x)
         arr = np.asarray(wrapped, dtype=float)
@@ -4357,6 +4473,30 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, mu, kappa, *args, **kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (book §4.3.8):
+        m_p = (I_p(κ)/I₀(κ))·e^{ipμ}, evaluated with the exponentially
+        scaled ``ive`` so the Bessel ratio is exact at every κ (the raw
+        ``iv`` pair overflows from κ ≈ 713)."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        mu, kappa = (float(np.asarray(v, dtype=float))
+                     for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = abs(k)
+        ratio = float(ive(ak, kappa) / ive(0, kappa))
+        value = ratio * np.exp(1j * ak * mu)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
 
     def _cdf(self, x, mu, kappa):
         wrapped = self._wrap_angles(x)
@@ -5020,6 +5160,30 @@ class projectednormal_gen(_RegressionReady, CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, mu1, mu2, *args, **kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """First trigonometric moment in closed form (offset-normal
+        resultant): with γ = ‖μ‖,
+        m₁ = √(π/8)·γ·e^{−γ²/4}[I₀(γ²/4) + I₁(γ²/4)]·e^{i·atan2(μ₂, μ₁)},
+        evaluated with the scaled ``ive`` (the e^{−γ²/4} factor cancels
+        exactly). Higher |p| fall back to the quadrature base method."""
+        if np.isscalar(p) and int(round(p)) == p and abs(int(round(p))) <= 1:
+            shape_args, non_shape_kwargs = self._separate_shape_parameters(
+                args, kwargs, "trig_moment"
+            )
+            call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+            mu1, mu2 = (float(np.asarray(v, dtype=float))
+                        for v in self._parse_args(*shape_args, **call_kwargs)[0])
+            k = int(round(p))
+            if k == 0:
+                return complex(1.0, 0.0)
+            g2 = mu1 * mu1 + mu2 * mu2
+            R = np.sqrt(np.pi / 8.0) * np.sqrt(g2) * (
+                ive(0, 0.25 * g2) + ive(1, 0.25 * g2)
+            )
+            value = R * np.exp(1j * np.arctan2(mu2, mu1))
+            return complex(np.conjugate(value)) if k < 0 else complex(value)
+        return super().trig_moment(p, *args, **kwargs)
 
     # --- l1..l4 (the regression contract). ℓ(t, s) = log φ(s) + G(t)
     # separates, so the s-direction contributes ℓ_s = −s, ℓ_ss = −1 and
@@ -7185,6 +7349,26 @@ def _jp_log_c_vec(kappa, psi):
     return out
 
 
+@lru_cache(maxsize=8192)
+def _jp_cos_moment(kappa: float, psi: float, q: int) -> float:
+    """q-th cosine moment ᾱ_q = E[cos(qΦ)] of the *centered* JP law (the
+    sine moments vanish — the kernel is even). One Gauss–Legendre sweep on
+    the feature-scale ladder as a normalizer-free ratio, so it is exact at
+    any concentration; the vM and uniform reductions are closed-form.
+    Serves the sine-skewed JP trig moments (book §4.3.11), which are exact
+    combinations of the base moments ᾱ_{p−1}, ᾱ_p, ᾱ_{p+1}."""
+    if q == 0:
+        return 1.0
+    if kappa < _JP_KAPPA_TOL:
+        return 0.0
+    if abs(psi) < _JP_PSI_TOL:
+        return float(ive(q, kappa) / ive(0, kappa))
+    nodes, wts = _jp_gl_panels(kappa, psi)
+    e = wts * np.exp(_jp_score_terms(nodes, kappa, psi, second=False)["h"] - kappa)
+    denom = max(float(np.sum(e)), np.finfo(float).tiny)
+    return float(np.sum(np.cos(q * nodes) * e) / denom)
+
+
 # --- Jones–Pewsey regression derivatives (the l1/l2 contract) ----------------
 # Everything below differentiates the JP log-kernel h(φ; κ, ψ) =
 # (1/ψ) log(cosh κψ + sinh κψ cos φ) and the log-normalizer log Z(κ, ψ); the
@@ -7660,6 +7844,37 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Trigonometric moment via the exact sine-skewing relation (book
+        §4.3.11): with ᾱ_q the centered base-JP cosine moments
+        (``_jp_cos_moment``, one GL-ladder sweep each, exact),
+
+            m_p = [ᾱ_p + iλ(ᾱ_{p−1} − ᾱ_{p+1})/2]·e^{ipξ}.
+        """
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        xi, kappa, psi, lmbd = (
+            float(np.asarray(v, dtype=float))
+            for v in self._parse_args(*shape_args, **call_kwargs)[0]
+        )
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = abs(k)
+        a_p = _jp_cos_moment(kappa, psi, ak)
+        b_p = 0.5 * lmbd * (
+            _jp_cos_moment(kappa, psi, ak - 1) - _jp_cos_moment(kappa, psi, ak + 1)
+        )
+        value = (a_p + 1j * b_p) * np.exp(1j * ak * xi)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
 
     def _cdf(self, x, xi, kappa, psi, lmbd):
         wrapped = self._wrap_angles(x)
@@ -10044,6 +10259,39 @@ class wrapstable_gen(CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, delta, alpha, beta, gamma, *args, **kwargs)
+
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Closed-form trigonometric moment (Pewsey 2008 eqs. 3–4, the S0
+        characteristic-function terms the series itself is built from):
+        m_p = ρ_p·e^{iμ_p} with ρ_p = e^{−(γp)^α} and the α = 1 phase
+        carrying the minus sign (validation bug #3). Exact for every p —
+        unlike the density series, no truncation cap is involved."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        delta, alpha, beta, gamma = (
+            float(np.asarray(v, dtype=float))
+            for v in self._parse_args(*shape_args, **call_kwargs)[0]
+        )
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = float(abs(k))
+        rho_p = np.exp(-((gamma * ak) ** alpha))
+        if abs(alpha - 1.0) <= _WRAPSTABLE_ALPHA_TOL:
+            mu_p = delta * ak - (2.0 / np.pi) * beta * gamma * ak * np.log(gamma * ak)
+        else:
+            mu_p = delta * ak + beta * np.tan(0.5 * np.pi * alpha) * (
+                (gamma * ak) ** alpha - gamma * ak
+            )
+        value = rho_p * np.exp(1j * mu_p)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
 
     def _cdf(self, x, delta, alpha, beta, gamma):
         x_arr = np.asarray(x, dtype=float)
