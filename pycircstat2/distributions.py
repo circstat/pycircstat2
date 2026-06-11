@@ -8120,7 +8120,7 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
             Shape parameter, -∞ <= ψ <= ∞. When ψ=-1, the distribution reduces to the wrapped Cauchy,
             when ψ=0, von Mises, and when ψ=1, cardioid.
         lmbd : float
-            Skewness parameter, -1 < λ < 1. Controls the asymmetry introduced by the sine-skewing.
+            Skewness parameter, -1 <= λ <= 1. Controls the asymmetry introduced by the sine-skewing.
 
         Returns
         -------
@@ -9451,8 +9451,8 @@ class inverse_batschelet_gen(CircularContinuous):
 
     The inverse Batschelet family (Pewsey, Neuhäuser & Ruxton, 2013, §4.3.13)
     extends the von Mises distribution by applying two inverse angular warps:
-    a "peakedness" transform controlled by $\nu$, and an inverse
-    Batschelet skew transform governed by $\lambda$. The resulting density on
+    a skewness transform controlled by $\nu$, and an inverse
+    Batschelet peakedness transform governed by $\lambda$. The resulting density on
     $[0, 2\pi)$ takes the form
 
     $$
@@ -9601,9 +9601,9 @@ class inverse_batschelet_gen(CircularContinuous):
         kappa : float
             Concentration parameter, $\kappa \geq 0$. Higher values result in sharper peaks around $\xi$.
         nu : float
-            Shape parameter, $-1 \leq \nu \leq 1$. Controls asymmetry through angular transformation.
+            Skewness parameter, $-1 \leq \nu \leq 1$. Controls asymmetry through the angular transformation.
         lmbd : float
-            Skewness parameter, $-1 \leq \lambda \leq 1$. Controls the degree of skewness in the distribution.
+            Peakedness parameter, $-1 \leq \lambda \leq 1$. Controls the peak shape, from flat-topped to sharply peaked.
 
         Returns
         -------
@@ -9679,9 +9679,9 @@ class inverse_batschelet_gen(CircularContinuous):
         kappa : float
             Concentration parameter, 0 <= kappa <= 700.
         nu : float
-            Peakedness parameter, -1 <= nu <= 1.
+            Skewness parameter, -1 <= nu <= 1.
         lmbd : float
-            Skewness parameter, -1 <= lmbd <= 1.
+            Peakedness parameter, -1 <= lmbd <= 1.
 
         Returns
         -------
@@ -9743,8 +9743,8 @@ class inverse_batschelet_gen(CircularContinuous):
 
         The implementation precomputes the normalised primitive on a periodic grid
         in the centred angle $\varphi = (\theta - \xi) \bmod 2\pi - \pi$. For each
-        grid node, the inverse peakedness transform $t_\nu^{-1}$ and inverse
-        Batschelet skew $s_\lambda^{-1}$ are evaluated, and the resulting kernel is
+        grid node, the inverse skewness transform $t_\nu^{-1}$ and inverse
+        Batschelet peakedness $s_\lambda^{-1}$ are evaluated, and the resulting kernel is
         accumulated via a trapezoidal rule. The cumulative table is cached per
         parameter triple $(\kappa, \nu, \lambda)$, enabling $O(1)$ queries after the
         initial $O(N)$ precomputation. The limit $\kappa \to 0$ reduces to the
@@ -9759,9 +9759,9 @@ class inverse_batschelet_gen(CircularContinuous):
         kappa : float
             Concentration parameter, $\kappa \geq 0$.
         nu : float
-            Shape parameter, $-1 \leq \nu \leq 1$.
+            Skewness parameter, $-1 \leq \nu \leq 1$.
         lmbd : float
-            Skewness parameter, $-1 \leq \lambda \leq 1$.
+            Peakedness parameter, $-1 \leq \lambda \leq 1$.
 
         Returns
         -------
@@ -9884,9 +9884,9 @@ class inverse_batschelet_gen(CircularContinuous):
         kappa : float
             Concentration parameter, $\kappa \geq 0$.
         nu : float
-            Shape parameter, $-1 \leq \nu \leq 1$.
+            Skewness parameter, $-1 \leq \nu \leq 1$.
         lmbd : float
-            Skewness parameter, $-1 \leq \lambda \leq 1$.
+            Peakedness parameter, $-1 \leq \lambda \leq 1$.
 
         Returns
         -------
@@ -10034,9 +10034,9 @@ class inverse_batschelet_gen(CircularContinuous):
         kappa : float
             Concentration parameter, $\kappa \geq 0$.
         nu : float
-            Shape parameter, $-1 \leq \nu \leq 1$.
+            Skewness parameter, $-1 \leq \nu \leq 1$.
         lmbd : float
-            Skewness parameter, $-1 \leq \lambda \leq 1$.
+            Peakedness parameter, $-1 \leq \lambda \leq 1$.
         size : int or tuple of ints, optional
             Desired output shape.
         random_state : {None, int, np.random.Generator}, optional

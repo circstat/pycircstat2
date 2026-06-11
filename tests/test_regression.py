@@ -960,6 +960,67 @@ def test_katojones_family_dispatch():
                       m2.result["log_likelihood"], rtol=1e-8)
 
 
+def test_katojones_shape_inference():
+    """Delta-method SEs/CIs for the KJ shape parameters through the disc
+    chart (validation plan §3.4's deferred item): finite, ordered, inside
+    the natural ranges, link-scale γ interval inside (0, 1), and the
+    delta SEs consistent with Monte-Carlo coefficient-propagation."""
+    from pycircstat2.distributions import katojones
+    from pycircstat2.regression import KatoJonesLL
+    from scipy.special import expit
+
+    rng = np.random.default_rng(9)
+    n = 150
+    x = rng.uniform(-1.0, 1.0, n)
+    mu_t = np.mod(1.0 + 0.6 * x, 2 * np.pi)
+    a_t, b_t = katojones.disc_chart(0.45, 0.6, -0.4)
+    rho_t = float(np.hypot(a_t, b_t))
+    lam_t = float(np.mod(np.arctan2(b_t, a_t), 2 * np.pi))
+    theta = np.array([
+        float(katojones.rvs(mu_t[i], 0.45, rho_t, lam_t, random_state=rng))
+        for i in range(n)
+    ])
+    df = pl.DataFrame({"theta": theta, "x": x})
+    m = CLRegression(["theta ~ x", "~ 1", "~ 1", "~ 1"], df,
+                     family=KatoJonesLL())
+
+    si = m.shape_inference()  # all shape LPs intercept-only: data=None OK
+    for name in ("gamma", "a", "b", "rho", "lam", "u1", "u2"):
+        e = si[name]
+        assert np.all(np.isfinite(e["estimate"]))
+        assert np.all(e["se"] > 0)
+        assert np.all(e["lo"] <= e["estimate"]) and np.all(
+            e["estimate"] <= e["hi"])
+    assert 0.0 < si["gamma"]["lo"][0] < si["gamma"]["hi"][0] < 1.0
+    assert 0.0 <= si["rho"]["lo"][0] and si["rho"]["hi"][0] <= 1.0
+
+    # delta SEs vs Monte-Carlo propagation of N(beta_hat, Vp)
+    g = m.gam_fit
+    beta = np.asarray(g.bhat.row(0), dtype=float)
+    V = np.asarray(g.Vp, dtype=float)
+    L = np.linalg.cholesky(V + 1e-12 * np.eye(V.shape[0]))
+    X = np.asarray(
+        g.predict(newdata=df[:1], type="lpmatrix"), dtype=float)
+    lpi = [np.asarray(ix, dtype=int) for ix in g.lpi]
+    draws = beta[None, :] + rng.standard_normal((8000, beta.size)) @ L.T
+    g_d = expit(X[:, lpi[1]] @ draws[:, lpi[1]].T)
+    a_d, b_d = katojones.disc_chart(
+        g_d, X[:, lpi[2]] @ draws[:, lpi[2]].T,
+        X[:, lpi[3]] @ draws[:, lpi[3]].T)
+    for name, mc in (("gamma", g_d), ("a", a_d), ("b", b_d),
+                     ("rho", np.hypot(a_d, b_d))):
+        assert np.isclose(si[name]["se"][0], mc.std(), rtol=0.15)
+
+    # non-KJ family refuses with guidance
+    d2 = pl.DataFrame({
+        "theta": np.mod(rng.vonmises(1.0, 3.0, 80), 2 * np.pi),
+        "x": rng.uniform(-1, 1, 80),
+    })
+    m_vm = CLRegression(["theta ~ x", "~ 1"], d2, backend="gam")
+    with pytest.raises(ValueError, match="KatoJones"):
+        m_vm.shape_inference()
+
+
 def test_circularll_vonmises_intercept_only_matches_mle():
     """gam(["theta ~ 1", "~ 1"], family=CircularLL(vonmises)) is the
     unpenalized von Mises MLE — pins the whole ll() derivative stack

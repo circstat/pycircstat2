@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 from hea.family import GeneralFamily, gamlss_etamu, gamlss_gH, trind_generator
 from hea.models import gam as _hea_gam, lm as _hea_lm
-from scipy.special import i0e
+from scipy.special import expit, i0e
 from scipy.stats import chi2, norm, t as student_t
 
 from .distributions import get_link, katojones, vonmises
@@ -598,6 +598,13 @@ class CLRegression:
     predict_kappa(X_new)
         Predict per-observation κ̂(X) for ``model_type`` in
         ``{'kappa', 'mixed'}``.
+    predict_params(data)
+        Per-observation fitted distribution parameters at new data
+        (gam backend).
+    shape_inference(data=None, level=0.95, cov="Vp")
+        Delta-method SEs/CIs for the Kato–Jones shape parameters
+        (γ, a, b, ρ, λ, u) through the disc chart (gam backend,
+        ``family=KatoJonesLL``).
     plot(figsize=None, n_curve=200, axes=None)
         Two-panel diagnostic figure (fit overlay / κ curve / residuals,
         depending on ``model_type`` and dimensionality).
@@ -889,6 +896,154 @@ class CLRegression:
             if self.family.links[j].name == "tanhalf":
                 v = np.mod(v, 2.0 * np.pi)
             out[name] = v
+        return out
+
+    def shape_inference(self, data=None, *, level=0.95, cov="Vp"):
+        r"""Delta-method SEs and CIs for the Kato–Jones shape parameters
+        (gam backend, ``family=KatoJonesLL`` — plan §3.4's deferred item).
+
+        The fitted shape lives in η-space as ``(logit γ, u₁, u₂)`` with
+        joint coefficient covariance ``V`` from the gam fit; this pushes
+        that uncertainty through the inverse link and the disc chart,
+
+        $$(γ, a, b) = T(η),\qquad Σ_{(γ,a,b)} = J\,Σ_η\,J^{\top},$$
+
+        and once more through ``(ρ, λ) = (\sqrt{a²+b²},\ \mathrm{atan2}(b,a))``,
+        reporting estimates, standard errors and Wald intervals for all
+        five book/shape quantities (plus the chart pair ``u₁, u₂``
+        themselves on their identity scale).
+
+        Parameters
+        ----------
+        data : DataFrame or array, optional
+            Covariate rows at which to evaluate the shape parameters.
+            May be omitted **only when every shape formula (γ, u₁, u₂) is
+            intercept-only** — the fitted shape is then a single constant
+            tuple; with covariates on γ the shape pair varies per row and
+            evaluation rows are required.
+        level : float, optional
+            Two-sided confidence level (default 0.95).
+        cov : {"Vp", "Ve", "Vc"}, optional
+            Which gam coefficient covariance to propagate (Bayesian
+            posterior ``Vp`` — mgcv's default for intervals —, frequentist
+            ``Ve``, or the smoothing-parameter-corrected ``Vc``).
+
+        Returns
+        -------
+        dict
+            ``{name: {"estimate", "se", "lo", "hi"}}`` arrays (one entry
+            per evaluation row) for ``gamma, a, b, rho, lam, u1, u2``,
+            plus ``"level"`` and ``"cov"``. The γ interval is computed on
+            the logit scale and back-transformed (stays inside (0, 1));
+            ``rho``'s Wald interval is clipped to [0, 1); ``lam`` is
+            angular — its interval is ``λ̂ ± z·se`` in radians, and its SE
+            diverges as ρ → 0 where the phase is unidentified.
+
+        Notes
+        -----
+        Wald/delta intervals are first-order: trustworthy when the
+        coefficient posterior is approximately Gaussian on the η-scale,
+        the same caveat as every mgcv-style interval. Near the feasibility
+        boundary (‖u‖ → ∞, the logistic-separation analog) they will
+        understate the asymmetry — judge such fits by likelihood, as the
+        §3.4 smoke notes already advise.
+        """
+        if self.backend != "gam":
+            raise ValueError("shape_inference() is for the gam backend.")
+        if not isinstance(self.family, KatoJonesLL):
+            raise ValueError(
+                "shape_inference() reports the Kato–Jones disc-chart shape "
+                "parameters; fit with family=katojones / KatoJonesLL()."
+            )
+        if not (0.0 < level < 1.0):
+            raise ValueError("`level` must be in (0, 1).")
+        g = self.gam_fit
+        V = np.asarray(getattr(g, cov), dtype=float)
+        lpi = [np.asarray(ix, dtype=int) for ix in g.lpi]
+        beta = np.asarray(g.bhat.row(0), dtype=float)
+
+        if data is None:
+            names = list(g.column_names)
+            for j, lp_name in ((1, "gamma"), (2, "u1"), (3, "u2")):
+                if lpi[j].size != 1 or "Intercept" not in names[lpi[j][0]]:
+                    raise ValueError(
+                        f"the {lp_name} formula has covariates — pass "
+                        "`data` rows at which to evaluate the shape."
+                    )
+            new = self.data[:1]  # carrier row; shape columns are intercepts
+        else:
+            new = self._gam_newdata(data)
+        X = np.asarray(g.predict(newdata=new, type="lpmatrix"), dtype=float)
+        m = X.shape[0]
+
+        # per-row η for the three shape LPs and their joint 3×3 covariance
+        # (cross-LP coefficient covariance included)
+        G = np.zeros((m, 3, beta.size), dtype=float)
+        for k, j in enumerate((1, 2, 3)):
+            G[:, k, lpi[j]] = X[:, lpi[j]]
+        eta = np.einsum("mkp,p->mk", G, beta)
+        sig_eta = np.einsum("mkp,pq,mlq->mkl", G, V, G)
+
+        eta_g, u1, u2 = eta[:, 0], eta[:, 1], eta[:, 2]
+        gamma = expit(eta_g)
+        pieces, _ = katojones._chart_pieces(gamma, u1, u2, second=False)
+        a, b = pieces["a"], pieces["b"]
+        dgam = gamma * (1.0 - gamma)  # dγ/dη_γ
+
+        # J: (γ, a, b) wrt (η_γ, u₁, u₂)
+        J = np.zeros((m, 3, 3), dtype=float)
+        J[:, 0, 0] = dgam
+        J[:, 1, 0] = pieces["a_g"] * dgam
+        J[:, 1, 1], J[:, 1, 2] = pieces["a_u"]
+        J[:, 2, 0] = pieces["b_g"] * dgam
+        J[:, 2, 1], J[:, 2, 2] = pieces["b_u"]
+        sig_gab = np.einsum("mij,mjk,mlk->mil", J, sig_eta, J)
+
+        # (ρ, λ) from the (a, b) block
+        rho = np.hypot(a, b)
+        lam = np.mod(np.arctan2(b, a), 2.0 * np.pi)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            J2 = np.zeros((m, 2, 2), dtype=float)
+            J2[:, 0, 0], J2[:, 0, 1] = a / rho, b / rho
+            J2[:, 1, 0], J2[:, 1, 1] = -b / rho**2, a / rho**2
+            sig_rl = np.einsum(
+                "mij,mjk,mlk->mil", J2, sig_gab[:, 1:, 1:], J2
+            )
+
+        z = float(norm.ppf(0.5 + 0.5 * level))
+
+        def _entry(est, se, lo=None, hi=None):
+            lo = est - z * se if lo is None else lo
+            hi = est + z * se if hi is None else hi
+            return {
+                "estimate": est, "se": se,
+                "lo": lo, "hi": hi,
+            }
+
+        se_eta = np.sqrt(np.maximum(np.diagonal(sig_eta, axis1=1, axis2=2), 0.0))
+        se_gab = np.sqrt(np.maximum(np.diagonal(sig_gab, axis1=1, axis2=2), 0.0))
+        se_rl = np.sqrt(np.maximum(np.diagonal(sig_rl, axis1=1, axis2=2), 0.0))
+
+        out = {
+            # γ interval on the logit scale, back-transformed
+            "gamma": _entry(
+                gamma, se_gab[:, 0],
+                lo=expit(eta_g - z * se_eta[:, 0]),
+                hi=expit(eta_g + z * se_eta[:, 0]),
+            ),
+            "a": _entry(a, se_gab[:, 1]),
+            "b": _entry(b, se_gab[:, 2]),
+            "rho": {
+                "estimate": rho, "se": se_rl[:, 0],
+                "lo": np.clip(rho - z * se_rl[:, 0], 0.0, 1.0),
+                "hi": np.clip(rho + z * se_rl[:, 0], 0.0, 1.0),
+            },
+            "lam": _entry(lam, se_rl[:, 1]),
+            "u1": _entry(u1, se_eta[:, 1]),
+            "u2": _entry(u2, se_eta[:, 2]),
+            "level": level,
+            "cov": cov,
+        }
         return out
 
     @staticmethod
