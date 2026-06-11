@@ -1028,13 +1028,16 @@ class circularuniform_gen(CircularContinuous):
     pdf(x)
         Probability density function.
 
+    logpdf(x)
+        Logarithm of the probability density function.
+
     cdf(x)
         Cumulative distribution function.
 
     ppf(q)
         Percent-point function (inverse of CDF).
 
-    rvs(size, random_state) 
+    rvs(size, random_state)
         Random variates.
     """
 
@@ -1060,6 +1063,26 @@ class circularuniform_gen(CircularContinuous):
             Probability density function evaluated at `x`.
         """
         return super().pdf(x, *args, **kwargs)
+
+    def _logpdf(self, x):
+        return np.full_like(np.asarray(x, dtype=float), -np.log(2.0 * np.pi))
+
+    def logpdf(self, x, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Circular
+        Uniform distribution: the constant $-\log 2\pi$.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, *args, **kwargs)
 
     def _cdf(self, x):
         return x / (2 * np.pi)
@@ -1155,12 +1178,15 @@ class triangular_gen(CircularContinuous):
     pdf(x, rho)
         Probability density function.
 
+    logpdf(x, rho)
+        Logarithm of the probability density function.
+
     cdf(x, rho)
         Cumulative distribution function.
 
     ppf(q, rho)
         Closed-form quantile (inverse CDF).
-        
+
     rvs(rho, size=None, random_state=None)
         Random variates via inverse-transform using the closed-form quantile.
 
@@ -1203,6 +1229,33 @@ class triangular_gen(CircularContinuous):
         """
 
         return super().pdf(x, rho, *args, **kwargs)
+
+    def _logpdf(self, x, rho):
+        # the piecewise-linear density never underflows, so the log of the
+        # closed form is already the stable log-density (kinks unchanged);
+        # −inf only at the honest zero (x = π at ρ = 4/π²)
+        with np.errstate(divide="ignore"):
+            return np.log(self._pdf(x, rho))
+
+    def logpdf(self, x, rho, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Triangular
+        distribution: the log of the closed form, $-\infty$ only where the
+        density is genuinely zero (the antipode at $\rho = 4/\pi^2$).
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        rho : float
+            Concentration parameter, 0 <= rho <= 4/pi^2.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, rho, *args, **kwargs)
 
     def _cdf(self, x, rho):
         x_arr = np.asarray(x, dtype=float)
@@ -1548,6 +1601,8 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
     -------
     pdf(x, mu, rho)
         Probability density function.
+    logpdf(x, mu, rho)
+        Logarithm of the probability density function.
     cdf(x, mu, rho)
         Cumulative distribution function.
     ppf(q, mu, rho)
@@ -1657,6 +1712,39 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
             Probability density function evaluated at `x`.
         """
         return super().pdf(x, mu, rho, *args, **kwargs)
+
+    def _logpdf(self, x, mu, rho):
+        # log1p keeps the log-density exact down to the honest zero at the
+        # antipode for ρ = 1/2 (the linear-space density never underflows)
+        with np.errstate(divide="ignore"):
+            return np.log1p(2.0 * rho * np.cos(x - mu)) - np.log(2.0 * np.pi)
+
+    def logpdf(self, x, mu, rho, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Cardioid
+        distribution,
+
+        $$
+        \log f(\theta) = \mathrm{log1p}\big(2\rho \cos(\theta - \mu)\big) - \log 2\pi,
+        $$
+
+        $-\infty$ only at the honest zero (the antipode at $\rho = 1/2$).
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 <= rho <= 0.5.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, mu, rho, *args, **kwargs)
 
     def _cdf(self, x, mu, rho):
         return (x + 2 * rho * (np.sin(x - mu) + np.sin(mu))) / (2 * np.pi)
@@ -2064,6 +2152,9 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
     pdf(x, mu, zeta)
         Probability density function.
 
+    logpdf(x, mu, zeta)
+        Logarithm of the probability density function.
+
     cdf(x, mu, zeta)
         Cumulative distribution function.
 
@@ -2187,11 +2278,10 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
         return float(result) if np.isscalar(zeta) else result
 
     def _pdf(self, x, mu, zeta):
-        return (
-            (2 ** (-1 + 1 / zeta) * (gamma(1 + 1 / zeta)) ** 2)
-            * (1 + np.cos(x - mu)) ** (1 / zeta)
-            / (np.pi * gamma(1 + 2 / zeta))
-        )
+        # exp of the gammaln log form: the previous raw-gamma assembly
+        # (2^{−1+1/ζ}Γ²(1+1/ζ)/(πΓ(1+2/ζ))·(1+cos φ)^{1/ζ}) returned nan
+        # for ζ ≲ 0.008 in-range — Γ(1+2/ζ) overflows at 2/ζ ≳ 170
+        return np.exp(self._logpdf(x, mu, zeta))
 
     def pdf(self, x, mu, zeta, *args, **kwargs):
         r"""
@@ -2219,6 +2309,55 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
         """
 
         return super().pdf(x, mu, zeta, *args, **kwargs)
+
+    def _logpdf(self, x, mu, zeta):
+        # (2/ζ − 1) log 2 + 2 log Γ(1+1/ζ) − log π − log Γ(1+2/ζ)
+        # + (2/ζ) log|cos(φ/2)| — the same form the regression l-derivatives
+        # differentiate (class comment above); the half-angle factorization
+        # avoids the 1+cos cancellation near the antipode, where the density
+        # has an honest zero for every ζ
+        half = 0.5 * (np.asarray(x, dtype=float) - mu)
+        with np.errstate(divide="ignore"):
+            log_cos = np.log(np.abs(np.cos(half)))
+        return (
+            (2.0 / zeta - 1.0) * np.log(2.0)
+            + 2.0 * gammaln(1.0 + 1.0 / zeta)
+            - gammaln(1.0 + 2.0 / zeta)
+            - np.log(np.pi)
+            + (2.0 / zeta) * log_cos
+        )
+
+    def logpdf(self, x, mu, zeta, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Cartwright
+        distribution,
+
+        $$
+        \log f(\theta) = \Big(\tfrac{2}{\zeta} - 1\Big)\log 2
+        + 2\log\Gamma\Big(1+\tfrac{1}{\zeta}\Big)
+        - \log\Gamma\Big(1+\tfrac{2}{\zeta}\Big) - \log\pi
+        + \tfrac{2}{\zeta}\log\Big|\cos\tfrac{\theta-\mu}{2}\Big|,
+        $$
+
+        finite for every $\zeta > 0$ (the raw-gamma density overflows for
+        $\zeta \lesssim 0.008$) and $-\infty$ only at the honest antipodal
+        zero.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        zeta : float
+            Shape parameter, zeta > 0.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, mu, zeta, *args, **kwargs)
 
     @staticmethod
     def _cartwright_cumulative(phi, a, b, half_norm):
@@ -2653,6 +2792,9 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
     pdf(x, mu, rho)
         Probability density function.
 
+    logpdf(x, mu, rho)
+        Logarithm of the probability density function.
+
     cdf(x, mu, rho)
         Cumulative distribution function.
 
@@ -2762,6 +2904,63 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
             Probability density function evaluated at `x`.
         """
         return super().pdf(x, mu, rho, *args, **kwargs)
+
+    def _logpdf(self, x, mu, rho):
+        x_b, mu_b, rho_b = np.broadcast_arrays(
+            *(np.asarray(v, dtype=float) for v in (x, mu, rho))
+        )
+        shape = x_b.shape
+        xf = x_b.reshape(-1)
+        mf = mu_b.reshape(-1)
+        rf = rho_b.reshape(-1)
+        out = np.empty(xf.shape, dtype=float)
+
+        lo = rf <= self._FOURIER_RHO_MAX
+        if np.any(lo):
+            # the Fourier density never underflows for ρ ≤ 0.8 (antipodal
+            # minimum ~2e-6), so log1p of the series is already exact
+            p = np.arange(1.0, 30.0)
+            d = xf[lo, None] - mf[lo, None]
+            series = np.sum(rf[lo, None] ** (p**2) * np.cos(p * d), axis=1)
+            out[lo] = np.log1p(2.0 * series) - np.log(2.0 * np.pi)
+        hi = ~lo
+        if np.any(hi):
+            # Gaussian-image branch in log space: logsumexp over the 5
+            # images keeps the antipodal tail finite (≈ −π²/(2σ²)) where
+            # the linear-space sum underflows from ρ ≈ 0.987
+            sigma = np.sqrt(-2.0 * np.log(np.clip(rf[hi], None, 1.0 - 1e-15)))
+            k = np.arange(-2.0, 3.0)
+            z = (xf[hi, None] - mf[hi, None] + 2.0 * np.pi * k) / sigma[:, None]
+            out[hi] = (
+                logsumexp(-0.5 * z**2, axis=1)
+                - np.log(sigma)
+                - 0.5 * np.log(2.0 * np.pi)
+            )
+        return out.reshape(shape)
+
+    def logpdf(self, x, mu, rho, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Wrapped Normal
+        distribution: ``log1p`` of the Fourier series for $\rho \le 0.8$ and
+        a log-sum-exp over the wrapped Gaussian images for $\rho > 0.8$, so
+        the log-density stays finite (antipodally $\approx -\pi^2/2\sigma^2$)
+        at concentrations where the linear-space density underflows.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        rho : float
+            Mean resultant length, 0 < rho < 1.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, mu, rho, *args, **kwargs)
 
     # Derivative methods (the regression contract) reuse the same hybrid
     # split as ``_pdf``, so l1/l2 differentiate exactly the density that
@@ -3558,7 +3757,17 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         return super().pdf(x, mu, rho, *args, **kwargs)
 
     def _logpdf(self, x, mu, rho):
-        return np.log(np.clip(self._pdf(x, mu, rho), 1e-16, None))
+        # exact log form on the same cancellation-free denominator as
+        # ``_pdf`` (P2): the previous log(clip(pdf, 1e-16)) floored the
+        # honest tail once ρ came within a few ulp of 1
+        denom = (1 - rho) ** 2 + 4 * rho * np.sin(0.5 * (x - mu)) ** 2
+        with np.errstate(divide="ignore"):
+            return (
+                np.log1p(-rho)
+                + np.log1p(rho)
+                - np.log(2.0 * np.pi)
+                - np.log(denom)
+            )
 
     def logpdf(self, x, mu, rho, *args, **kwargs):
         """
@@ -5052,8 +5261,21 @@ class vonmises_flattopped_gen(CircularContinuous):
     pdf(x, mu, kappa, nu)
         Probability density function.
 
+    logpdf(x, mu, kappa, nu)
+        Logarithm of the probability density function.
+
     cdf(x, mu, kappa, nu)
         Cumulative distribution function.
+
+    ppf(q, mu, kappa, nu)
+        Percent-point function (inverse CDF) through the cached table's
+        monotone inverse.
+
+    rvs(mu, kappa, nu, size=None, random_state=None)
+        Random variates by inverse transform on the cached table.
+
+    fit(data, *, weights=None, method="mle", ...)
+        Estimate ``(mu, kappa, nu)`` by moments seed + maximum likelihood.
 
     Note
     ----
@@ -5152,6 +5374,55 @@ class vonmises_flattopped_gen(CircularContinuous):
         kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
         nu_val = _vmft_ensure_scalar(nu, "nu")
         return super().pdf(x, mu_val, kappa_val, nu_val, *args, **kwargs)
+
+    def _logpdf(self, x, mu, kappa, nu):
+        # the same log-space assembly ``_pdf`` exponentiates (log-kernel +
+        # cached table log-normalizer), returned before the exp so the
+        # antipodal tail stays finite at concentrations where the density
+        # underflows (κ ≳ 360 for ν = 0)
+        x_arr = np.asarray(x, dtype=float)
+        mu_val = _vmft_ensure_scalar(mu, "mu")
+        kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+
+        if not np.isfinite(mu_val) or not np.isfinite(kappa_val) or not np.isfinite(nu_val):
+            return np.full_like(x_arr, np.nan, dtype=float)
+
+        if kappa_val <= _VMFT_KAPPA_TOL:
+            return np.full_like(x_arr, -np.log(2.0 * np.pi), dtype=float)
+
+        table = self._get_vmft_table(kappa_val, nu_val)
+        phi = ((x_arr - mu_val + np.pi) % (2.0 * np.pi)) - np.pi
+        return kappa_val * np.cos(phi + nu_val * np.sin(phi)) + table["log_normalizer"]
+
+    def logpdf(self, x, mu, kappa, nu, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the flat-topped
+        von Mises distribution: the log-kernel
+        $\kappa\cos(\phi + \nu\sin\phi)$ plus the cached log-normalizer —
+        finite across the advertised parameter range, including tails where
+        the density itself underflows.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        kappa : float
+            Concentration parameter, 0 <= kappa <= 1e3.
+        nu : float
+            Shape parameter, -1 <= nu <= 1.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        mu_val = _vmft_ensure_scalar(mu, "mu")
+        kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
+        nu_val = _vmft_ensure_scalar(nu, "nu")
+        return super().logpdf(x, mu_val, kappa_val, nu_val, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, nu):
         wrapped = self._wrap_angles(x)
@@ -5779,16 +6050,27 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
     pdf(x, mu, kappa, psi)
         Probability density function.
 
+    logpdf(x, mu, kappa, psi)
+        Logarithm of the probability density function.
+
     cdf(x, mu, kappa, psi)
         Cumulative distribution function.
 
+    ppf(q, mu, kappa, psi)
+        Percent-point function (inverse CDF).
+
+    rvs(mu, kappa, psi, size=None, random_state=None)
+        Random variates by inverse transform on the kernel quantile table.
+
+    fit(data, *, weights=None, method="mle", ...)
+        Estimate ``(mu, kappa, psi)`` by moments or maximum likelihood.
 
     Note
     ----
     Scalar parameters use cached normalisation tables; ``pdf``/``logpdf`` also
     accept per-observation parameter arrays (the regression contract),
-    normalised via the vectorized Legendre identity with a quadrature
-    fallback. Other methods (cdf, rvs, …) remain scalar-only.
+    normalised through the shared log-space Gauss–Legendre ladder
+    (``_jp_log_c_vec``). Other methods (cdf, rvs, …) remain scalar-only.
     Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
 
@@ -5943,6 +6225,79 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
             Probability density function evaluated at `x`.
         """
         return super().pdf(x, mu, kappa, psi, *args, **kwargs)
+
+    def _logpdf(self, x, mu, kappa, psi):
+        # the log-space assembly ``_pdf`` exponentiates, returned before the
+        # exp (P2): h from ``_jp_score_terms`` is stable at any κ and the
+        # log-normalizer already exists, so the antipodal tail stays finite
+        # (e.g. ≈ −1200 at κ=600, ψ=0.1) where the density underflows — and
+        # finite at the deep ψ < 0 mode where the density overflows to inf.
+        # Mirrors ``_pdf`` branch-for-branch, incl. the per-observation
+        # regression path.
+        x = np.asarray(x, dtype=float)
+        kappa_scalar = _jp_as_scalar(kappa)
+        psi_scalar = _jp_as_scalar(psi)
+
+        if kappa_scalar is None or psi_scalar is None:
+            mu_b, kappa_b, psi_b = np.broadcast_arrays(
+                *(np.asarray(a, dtype=float) for a in (mu, kappa, psi))
+            )
+            phi = x - mu_b
+            logc = _jp_log_c_vec(kappa_b, psi_b)
+            h = _jp_score_terms(phi, kappa_b, psi_b, second=False)["h"]
+            vm = np.abs(psi_b) < _JP_PSI_TOL
+            h = np.where(vm, kappa_b * np.cos(phi), h)
+            return np.where(
+                kappa_b < _JP_KAPPA_TOL, -np.log(2.0 * np.pi), h + logc
+            )
+
+        if not np.isfinite(kappa_scalar) or not np.isfinite(psi_scalar):
+            return np.full_like(x, np.nan, dtype=float)
+
+        if abs(kappa_scalar) < _JP_KAPPA_TOL:
+            return np.full_like(x, -np.log(2.0 * np.pi), dtype=float)
+
+        log_c = self._get_cached_normalizer(
+            lambda: _jp_log_c(kappa_scalar, psi_scalar),
+            kappa_scalar,
+            psi_scalar,
+        )
+
+        if abs(psi_scalar) < _JP_PSI_TOL:
+            return kappa_scalar * np.cos(x - mu) + log_c
+
+        h = _jp_score_terms(x - mu, kappa_scalar, psi_scalar, second=False)["h"]
+        return h + log_c
+
+    def logpdf(self, x, mu, kappa, psi, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Jones-Pewsey
+        distribution: the stable log-kernel
+        $h(\theta; \kappa, \psi) = \tfrac{1}{\psi}\log(\cosh\kappa\psi +
+        \sinh\kappa\psi\cos(\theta-\mu))$ plus the log normalizing constant,
+        assembled entirely in log space — finite in underflowed tails and at
+        deep $\psi < 0$ modes whose density exceeds the double range.
+
+        Accepts per-observation parameter arrays like ``pdf`` (the
+        regression contract).
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        mu : float
+            Mean direction, 0 <= mu <= 2*pi.
+        kappa : float
+            Concentration parameter, kappa >= 0.
+        psi : float
+            Shape parameter.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, mu, kappa, psi, *args, **kwargs)
 
     def _cdf(self, x, mu, kappa, psi):
         wrapped = self._wrap_angles(x)
@@ -7032,9 +7387,20 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
     pdf(x, xi, kappa, psi, lmbd)
         Probability density function.
 
+    logpdf(x, xi, kappa, psi, lmbd)
+        Logarithm of the probability density function.
+
     cdf(x, xi, kappa, psi, lmbd)
         Cumulative distribution function.
 
+    ppf(q, xi, kappa, psi, lmbd)
+        Percent-point function (inverse CDF).
+
+    rvs(xi, kappa, psi, lmbd, size=None, random_state=None)
+        Random variates (base-JP draws with sine-skew rejection).
+
+    fit(data, *, weights=None, method="mle", ...)
+        Estimate ``(xi, kappa, psi, lmbd)`` by moments or maximum likelihood.
 
     Note
     ----
@@ -7217,6 +7583,83 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         """
 
         return super().pdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
+
+    def _logpdf(self, x, xi, kappa, psi, lmbd):
+        # base-JP log density + log1p(λ sin φ) (P2), mirroring ``_pdf``
+        # branch-for-branch incl. the per-observation regression path;
+        # −inf only at the honest sine-skew zero (|λ| = 1 at sin φ = ∓1)
+        x = np.asarray(x, dtype=float)
+        xi_scalar = _jp_as_scalar(xi)
+        kappa_scalar = _jp_as_scalar(kappa)
+        psi_scalar = _jp_as_scalar(psi)
+        lmbd_scalar = _jp_as_scalar(lmbd)
+
+        if any(v is None for v in (xi_scalar, kappa_scalar, psi_scalar, lmbd_scalar)):
+            xi_b, kappa_b, psi_b, lmbd_b = np.broadcast_arrays(
+                *(np.asarray(a, dtype=float) for a in (xi, kappa, psi, lmbd))
+            )
+            phi = x - xi_b
+            with np.errstate(divide="ignore"):
+                log_skew = np.log1p(lmbd_b * np.sin(phi))
+            logc = _jp_log_c_vec(kappa_b, psi_b)
+            h = _jp_score_terms(phi, kappa_b, psi_b, second=False)["h"]
+            vm = np.abs(psi_b) < _JP_PSI_TOL
+            h = np.where(vm, kappa_b * np.cos(phi), h)
+            return np.where(
+                kappa_b < _JP_KAPPA_TOL,
+                log_skew - np.log(2.0 * np.pi),
+                h + logc + log_skew,
+            )
+
+        phi = x - xi_scalar
+        with np.errstate(divide="ignore"):
+            log_skew = np.log1p(lmbd_scalar * np.sin(phi))
+
+        if abs(kappa_scalar) < _JP_KAPPA_TOL:
+            return log_skew - np.log(2.0 * np.pi)
+
+        log_c = self._get_cached_normalizer(
+            lambda: _jp_log_c(kappa_scalar, psi_scalar),
+            kappa_scalar,
+            psi_scalar,
+        )
+
+        if abs(psi_scalar) < _JP_PSI_TOL:
+            h = kappa_scalar * np.cos(phi)
+        else:
+            h = _jp_score_terms(phi, kappa_scalar, psi_scalar, second=False)["h"]
+        return h + log_c + log_skew
+
+    def logpdf(self, x, xi, kappa, psi, lmbd, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the sine-skewed
+        Jones-Pewsey distribution: the base-JP log density plus
+        $\mathrm{log1p}(\lambda\sin(\theta-\xi))$, assembled in log space —
+        finite in underflowed tails, $-\infty$ only at the honest sine-skew
+        zero ($|\lambda| = 1$).
+
+        Accepts per-observation parameter arrays like ``pdf`` (the
+        regression contract).
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        xi : float
+            Direction parameter, 0 <= xi <= 2*pi.
+        kappa : float
+            Concentration parameter, kappa >= 0.
+        psi : float
+            Shape parameter.
+        lmbd : float
+            Skewness parameter, -1 <= lmbd <= 1.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, lmbd):
         wrapped = self._wrap_angles(x)
@@ -7637,9 +8080,21 @@ class jonespewsey_asym_gen(CircularContinuous):
     pdf(x, xi, kappa, psi, nu)
         Probability density function.
 
+    logpdf(x, xi, kappa, psi, nu)
+        Logarithm of the probability density function.
+
     cdf(x, xi, kappa, psi, nu)
         Cumulative distribution function.
 
+    ppf(q, xi, kappa, psi, nu)
+        Percent-point function (inverse CDF).
+
+    rvs(xi, kappa, psi, nu, size=None, random_state=None)
+        Random variates (kernel-table proposals in u = g(φ) with the
+        bounded warp-weight acceptance).
+
+    fit(data, *, weights=None, ...)
+        Estimate ``(xi, kappa, psi, nu)`` by maximum likelihood.
 
     Note
     ----
@@ -7743,6 +8198,58 @@ class jonespewsey_asym_gen(CircularContinuous):
             - When $\kappa = 0$, the distribution becomes uniform on $[0, 2\pi)$.
         """
         return super().pdf(x, xi, kappa, psi, nu, *args, **kwargs)
+
+    def _logpdf(self, x, xi, kappa, psi, nu):
+        # the log-space assembly ``_pdf`` exponentiates (stable kernel h at
+        # the warped angle g(φ) plus the u-substituted log-normalizer),
+        # returned before the exp so deep-spike tails stay finite (P2)
+        x = np.asarray(x, dtype=float)
+        xi_scalar = _jp_ensure_scalar(xi, "xi")
+        kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
+        psi_scalar = _jp_ensure_scalar(psi, "psi")
+        nu_scalar = _jp_ensure_scalar(nu, "nu")
+
+        if abs(kappa_scalar) < _JP_KAPPA_TOL:
+            return np.full_like(x, -np.log(2.0 * np.pi), dtype=float)
+
+        log_c = self._get_cached_normalizer(
+            lambda: _jp_log_c_asym(kappa_scalar, psi_scalar, nu_scalar),
+            kappa_scalar,
+            psi_scalar,
+            nu_scalar,
+        )
+        phi = x - xi_scalar
+        g = phi + nu_scalar * np.cos(phi)
+        h = _jp_score_terms(g, kappa_scalar, psi_scalar, second=False)["h"]
+        return h + log_c
+
+    def logpdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the asymmetric
+        extended Jones-Pewsey distribution: the stable log-kernel evaluated
+        at the warped angle $g(\phi) = \phi + \nu\cos\phi$ plus the
+        u-substituted log normalizing constant — finite in underflowed
+        tails and at deep $\psi < 0$ spikes.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        xi : float
+            Direction parameter, 0 <= xi <= 2*pi.
+        kappa : float
+            Concentration parameter, kappa >= 0.
+        psi : float
+            Shape parameter.
+        nu : float
+            Asymmetry parameter, 0 <= nu < 1.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, xi, kappa, psi, nu, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, psi, nu):
         wrapped = self._wrap_angles(x)
@@ -8315,6 +8822,9 @@ class inverse_batschelet_gen(CircularContinuous):
     pdf(x, xi, kappa, nu, lmbd)
         Probability density function.
 
+    logpdf(x, xi, kappa, nu, lmbd)
+        Logarithm of the probability density function.
+
     cdf(x, xi, kappa, nu, lmbd)
         Cumulative distribution function.
 
@@ -8453,6 +8963,84 @@ class inverse_batschelet_gen(CircularContinuous):
             Values of the probability density function at the specified points.
         """
         return super().pdf(x, xi, kappa, nu, lmbd, *args, **kwargs)
+
+    def _logpdf(self, x, xi, kappa, nu, lmbd):
+        # log(normalizer) + log-kernel — the assembly ``_pdf`` exponentiates
+        # (P2): the warped vM kernel underflows from κ ≈ 360 at the
+        # antipodal flank while the log form stays finite across the
+        # κ ≤ 700 range
+        scalar_input = np.isscalar(x)
+        x_arr = np.asarray([x], dtype=float) if scalar_input else np.asarray(x, dtype=float)
+        if x_arr.size == 0:
+            return x_arr.astype(float)
+
+        xi_val = _invbat_ensure_scalar(xi, "xi")
+        kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
+        nu_val = _invbat_ensure_scalar(nu, "nu")
+        lmbd_val = _invbat_ensure_scalar(lmbd, "lmbd")
+
+        if not (
+            np.isfinite(xi_val)
+            and np.isfinite(kappa_val)
+            and np.isfinite(nu_val)
+            and np.isfinite(lmbd_val)
+        ):
+            result = np.full_like(x_arr, np.nan, dtype=float)
+            return float(result[0]) if scalar_input else result
+
+        if kappa_val <= _INVBAT_KAPPA_TOL:
+            result = np.full_like(x_arr, -np.log(2.0 * np.pi), dtype=float)
+            return float(result[0]) if scalar_input else result
+
+        normalizer = self._get_cached_normalizer(
+            lambda: _c_invbatschelet(kappa_val, lmbd_val),
+            kappa_val,
+            lmbd_val,
+        )
+        if not np.isfinite(normalizer) or normalizer <= 0.0:
+            normalizer = _c_invbatschelet_numeric(kappa_val, lmbd_val, grid_size=_INVBAT_NUMERIC_GRID)
+
+        phi = _tnu(x_arr, nu_val, xi_val)
+        skew = _slmbdinv(phi, lmbd_val)
+
+        if np.isclose(lmbd_val, -1.0):
+            log_kernel = kappa_val * np.cos(phi - np.sin(phi))
+        else:
+            con1 = (1.0 - lmbd_val) / (1.0 + lmbd_val)
+            con2 = (2.0 * lmbd_val) / (1.0 + lmbd_val)
+            log_kernel = kappa_val * np.cos(con1 * phi + con2 * skew)
+
+        logpdf_vals = np.log(normalizer) + log_kernel
+        if scalar_input:
+            return float(logpdf_vals.reshape(-1)[0])
+        return logpdf_vals
+
+    def logpdf(self, x, xi, kappa, nu, lmbd, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the inverse
+        Batschelet distribution: the log normalizing constant plus the
+        warped von Mises log-kernel — finite across the advertised
+        parameter range, including tails where the density underflows.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        xi : float
+            Direction parameter, 0 <= xi <= 2*pi.
+        kappa : float
+            Concentration parameter, 0 <= kappa <= 700.
+        nu : float
+            Peakedness parameter, -1 <= nu <= 1.
+        lmbd : float
+            Skewness parameter, -1 <= lmbd <= 1.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, xi, kappa, nu, lmbd, *args, **kwargs)
 
     def _cdf(self, x, xi, kappa, nu, lmbd):
         wrapped = self._wrap_angles(x)
@@ -9317,6 +9905,10 @@ class wrapstable_gen(CircularContinuous):
     pdf(x, delta, alpha, beta, gamma)
         Probability density function via adaptive Fourier series.
 
+    logpdf(x, delta, alpha, beta, gamma)
+        Logarithm of the probability density function (series, floored at
+        float-tiny — the series is its own accuracy floor).
+
     cdf(x, delta, alpha, beta, gamma)
         Analytic cumulative distribution function using integrated series.
 
@@ -9414,6 +10006,44 @@ class wrapstable_gen(CircularContinuous):
             Values of the probability density function at the specified points.
         """
         return super().pdf(x, delta, alpha, beta, gamma, *args, **kwargs)
+
+    def _logpdf(self, x, delta, alpha, beta, gamma):
+        # log of the Fourier-series density, floored at float-tiny
+        # (methods-parity §6 decision 2): the series is a truncated trig
+        # polynomial whose ringing noise is the density's own accuracy
+        # floor, so values below ~2.2e-308 are not meaningful — the floor
+        # keeps the log finite (≈ −708) instead of nan on a noise-negative
+        # cell. Tails above that floor are exact.
+        pdf_vals = self._pdf(x, delta, alpha, beta, gamma)
+        return np.log(np.clip(pdf_vals, np.finfo(float).tiny, None))
+
+    def logpdf(self, x, delta, alpha, beta, gamma, *args, **kwargs):
+        r"""
+        Logarithm of the probability density function of the Wrapped Stable
+        distribution: the log of the Fourier-series density, floored at the
+        smallest normal double. The series is the density's own accuracy
+        floor (a truncated trigonometric polynomial), so log-density values
+        below ≈ −708 are reported as the floor rather than as noise.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the log-density.
+        delta : float
+            Location parameter, 0 <= delta <= 2*pi.
+        alpha : float
+            Stability parameter, 0 < alpha <= 2.
+        beta : float
+            Skewness parameter, -1 < beta < 1.
+        gamma : float
+            Scale parameter, gamma > 0.
+
+        Returns
+        -------
+        logpdf_values : array_like
+            Logarithm of the probability density function evaluated at `x`.
+        """
+        return super().logpdf(x, delta, alpha, beta, gamma, *args, **kwargs)
 
     def _cdf(self, x, delta, alpha, beta, gamma):
         x_arr = np.asarray(x, dtype=float)
