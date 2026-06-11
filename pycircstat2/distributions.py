@@ -883,7 +883,14 @@ class CircularContinuous(rv_continuous):
         return float(np.clip(abs(m1), 0.0, 1.0))
 
     def mean(self, *args, **kwargs) -> float:
-        """Circular mean direction μ = arg(m₁)."""
+        """Circular mean direction μ = arg(m₁).
+
+        Returns ``nan`` when the mean resultant length R = |m₁| is ≈ 0
+        (within 1e-12): for an isotropic law — the circular uniform, or
+        any family at its uniform limit — every direction is equally
+        central, so no mean direction exists. This is the standard
+        circular-statistics convention, not an error.
+        """
         m1 = self.trig_moment(1, *args, **kwargs)
         R = np.clip(abs(m1), 0.0, 1.0)
         if np.isclose(R, 0.0, atol=1e-12):
@@ -4745,9 +4752,6 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         # Call the private _rvs method
         return self._rvs(mu, kappa, size=size, random_state=random_state)
 
-    def support(self, *args, **kwargs):
-        return (0, 2 * np.pi)
-
     def mean(self, *args, **kwargs):
         """
         Circular mean of the Von Mises distribution.
@@ -5738,8 +5742,11 @@ class vonmises_flattopped_gen(CircularContinuous):
         super().__init__(*args, **kwargs)
         self._vmft_table_cache = {}
 
-    def _validate_params(self, mu, kappa, nu):
-        mu_arr, kappa_arr, nu_arr = np.broadcast_arrays(mu, kappa, nu)
+    def _argcheck(self, mu, kappa, nu):
+        try:
+            mu_arr, kappa_arr, nu_arr = np.broadcast_arrays(mu, kappa, nu)
+        except ValueError:
+            return False
         return (
             (mu_arr >= 0.0)
             & (mu_arr <= 2.0 * np.pi)
@@ -5748,12 +5755,6 @@ class vonmises_flattopped_gen(CircularContinuous):
             & (nu_arr >= -1.0)
             & (nu_arr <= 1.0)
         )
-
-    def _argcheck(self, mu, kappa, nu):
-        try:
-            return self._validate_params(mu, kappa, nu)
-        except ValueError:
-            return False
 
     def _clear_normalization_cache(self):
         super()._clear_normalization_cache()
@@ -6587,8 +6588,11 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         super().__init__(*args, **kwargs)
         self._series_cache = {}
 
-    def _validate_params(self, mu, kappa, psi):
-        mu_arr, kappa_arr, psi_arr = np.broadcast_arrays(mu, kappa, psi)
+    def _argcheck(self, mu, kappa, psi):
+        try:
+            mu_arr, kappa_arr, psi_arr = np.broadcast_arrays(mu, kappa, psi)
+        except ValueError:
+            return False
         return (
             (mu_arr >= 0.0)
             & (mu_arr <= 2.0 * np.pi)
@@ -6596,12 +6600,6 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
             & np.isfinite(kappa_arr)
             & np.isfinite(psi_arr)
         )
-
-    def _argcheck(self, mu, kappa, psi):
-        try:
-            return self._validate_params(mu, kappa, psi)
-        except ValueError:
-            return False
 
     def _pdf(self, x, mu, kappa, psi):
         x = np.asarray(x, dtype=float)
@@ -8032,8 +8030,11 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
             ("lmbd", "lmbd"): -s * s / Q2,
         }
 
-    def _validate_params(self, xi, kappa, psi, lmbd):
-        xi_arr, kappa_arr, psi_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, psi, lmbd)
+    def _argcheck(self, xi, kappa, psi, lmbd):
+        try:
+            xi_arr, kappa_arr, psi_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, psi, lmbd)
+        except ValueError:
+            return False
         return (
             (xi_arr >= 0.0)
             & (xi_arr <= 2.0 * np.pi)
@@ -8043,12 +8044,6 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
             & (lmbd_arr >= -1.0)
             & (lmbd_arr <= 1.0)
         )
-
-    def _argcheck(self, xi, kappa, psi, lmbd):
-        try:
-            return self._validate_params(xi, kappa, psi, lmbd)
-        except ValueError:
-            return False
 
     def _pdf(self, x, xi, kappa, psi, lmbd):
         x = np.asarray(x, dtype=float)
@@ -8677,8 +8672,11 @@ class jonespewsey_asym_gen(CircularContinuous):
         super().__init__(*args, **kwargs)
         self._cdf_table_cache = {}
 
-    def _validate_params(self, xi, kappa, psi, nu):
-        xi_arr, kappa_arr, psi_arr, nu_arr = np.broadcast_arrays(xi, kappa, psi, nu)
+    def _argcheck(self, xi, kappa, psi, nu):
+        try:
+            xi_arr, kappa_arr, psi_arr, nu_arr = np.broadcast_arrays(xi, kappa, psi, nu)
+        except ValueError:
+            return False
         return (
             (xi_arr >= 0.0)
             & (xi_arr <= 2.0 * np.pi)
@@ -8688,12 +8686,6 @@ class jonespewsey_asym_gen(CircularContinuous):
             & (nu_arr >= 0.0)
             & (nu_arr < 1.0)
         )
-
-    def _argcheck(self, xi, kappa, psi, nu):
-        try:
-            return self._validate_params(xi, kappa, psi, nu)
-        except ValueError:
-            return False
 
     def _pdf(self, x, xi, kappa, psi, nu):
         x = np.asarray(x, dtype=float)
@@ -9485,8 +9477,11 @@ class inverse_batschelet_gen(CircularContinuous):
         self._invbat_table_cache = {}
         self._invbat_sampler_cache = {}
 
-    def _validate_params(self, xi, kappa, nu, lmbd):
-        xi_arr, kappa_arr, nu_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, nu, lmbd)
+    def _argcheck(self, xi, kappa, nu, lmbd):
+        try:
+            xi_arr, kappa_arr, nu_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, nu, lmbd)
+        except ValueError:
+            return False
         return (
             (xi_arr >= 0.0)
             & (xi_arr <= 2.0 * np.pi)
@@ -9497,12 +9492,6 @@ class inverse_batschelet_gen(CircularContinuous):
             & (lmbd_arr >= -1.0)
             & (lmbd_arr <= 1.0)
         )
-
-    def _argcheck(self, xi, kappa, nu, lmbd):
-        try:
-            return self._validate_params(xi, kappa, nu, lmbd)
-        except ValueError:
-            return False
 
     def _pdf(self, x, xi, kappa, nu, lmbd):
         scalar_input = np.isscalar(x)
@@ -10564,6 +10553,22 @@ class wrapstable_gen(CircularContinuous):
 
     Parameters must be scalar; Fourier series coefficients are cached per
     parameter set.
+
+    **Small-α boundary (performance over diagnostics, by design).** As
+    α → 0 the law approaches an atom-plus-uniform mixture
+    (ρ_p = e^{−(γp)^α} → e^{−1} for *every* harmonic) which has no
+    density, and the number of terms a faithful density series would
+    need grows like (−ln ε)^{1/α}/γ. The series build is therefore
+    capped at 20 000 terms (`_WRAPSTABLE_MAX_TERMS`) and the cap engages
+    *silently*: below the cap-onset α (≈ 0.38 at γ = 0.7; earlier for
+    smaller γ) `pdf` degrades to a truncated-kernel artifact —
+    oscillatory, with negative side-lobes floored by `logpdf`'s tiny
+    clamp — while `cdf`/`ppf` inherit only the milder 1/p-damped
+    truncation error and stay monotone, and `trig_moment` is exact at
+    any α (closed characteristic-function form, no truncation). No
+    warning is raised and α is not floored: the cap is the performance
+    guard, and callers needing densities in the deep-α regime should
+    treat α ≲ 0.4 as out of the series' faithful range.
     """
 
     def __init__(self, *args, **kwargs):
@@ -10574,8 +10579,11 @@ class wrapstable_gen(CircularContinuous):
         super()._clear_normalization_cache()
         self._series_cache = {}
 
-    def _validate_params(self, delta, alpha, beta, gamma):
-        delta_arr, alpha_arr, beta_arr, gamma_arr = np.broadcast_arrays(delta, alpha, beta, gamma)
+    def _argcheck(self, delta, alpha, beta, gamma):
+        try:
+            delta_arr, alpha_arr, beta_arr, gamma_arr = np.broadcast_arrays(delta, alpha, beta, gamma)
+        except ValueError:
+            return False
         return (
             (delta_arr >= 0.0)
             & (delta_arr <= 2.0 * np.pi)
@@ -10585,12 +10593,6 @@ class wrapstable_gen(CircularContinuous):
             & (beta_arr < 1.0)
             & (gamma_arr > 0.0)
         )
-
-    def _argcheck(self, delta, alpha, beta, gamma):
-        try:
-            return self._validate_params(delta, alpha, beta, gamma)
-        except ValueError:
-            return False
 
     def _pdf(self, x, delta, alpha, beta, gamma):
         x_arr = np.asarray(x, dtype=float)
