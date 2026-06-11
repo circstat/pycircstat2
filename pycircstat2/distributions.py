@@ -23,6 +23,7 @@ from scipy.special import (
     expit,
     log_ndtr,
     logsumexp,
+    owens_t,
     polygamma,
     roots_legendre,
 )
@@ -2500,10 +2501,10 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
 
         if arr.ndim == 0:
             value = float(cdf[0])
-            return 1.0 if np.isclose(float(wrapped), 2.0 * np.pi) else value
+            return 1.0 if float(wrapped) == 2.0 * np.pi else value
 
         result = cdf.reshape(arr.shape)
-        result[np.isclose(arr, 2.0 * np.pi)] = 1.0
+        result[arr == 2.0 * np.pi] = 1.0
         return result
 
     def cdf(self, x, mu, zeta, *args, **kwargs):
@@ -3225,9 +3226,9 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
             uniform = flat / two_pi
             if arr.ndim == 0:
                 value = float(uniform[0])
-                return 1.0 if np.isclose(float(wrapped), two_pi) else value
+                return 1.0 if float(wrapped) == two_pi else value
             result = uniform.reshape(arr.shape)
-            result[np.isclose(arr, two_pi)] = 1.0
+            result[arr == two_pi] = 1.0
             return result
 
         rho_clipped = np.clip(rho_val, np.finfo(float).tiny, 1.0 - 1e-15)
@@ -3236,10 +3237,10 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
         cdf_flat, _ = self._wrapnorm_cdf_pdf(flat, mu_val, sigma)
         if arr.ndim == 0:
             value = float(cdf_flat.reshape(-1)[0])
-            return 1.0 if np.isclose(float(wrapped), two_pi) else value
+            return 1.0 if float(wrapped) == two_pi else value
 
         result = cdf_flat.reshape(arr.shape)
-        result[np.isclose(arr, two_pi)] = 1.0
+        result[arr == two_pi] = 1.0
         return result
 
     def cdf(self, x, mu, rho, *args, **kwargs):
@@ -3936,9 +3937,9 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
 
         if arr.ndim == 0:
             value = float(cdf[0])
-            return 1.0 if np.isclose(float(wrapped), 2.0 * np.pi) else value
+            return 1.0 if float(wrapped) == 2.0 * np.pi else value
         reshaped = cdf.reshape(arr.shape)
-        reshaped[np.isclose(arr, 2.0 * np.pi)] = 1.0
+        reshaped[arr == 2.0 * np.pi] = 1.0
         return reshaped
 
     def cdf(self, x, mu, rho, *args, **kwargs):
@@ -4522,55 +4523,36 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             uniform = flat / two_pi
             if arr.ndim == 0:
                 value = float(uniform[0])
-                return 1.0 if np.isclose(float(wrapped), two_pi) else value
+                return 1.0 if float(wrapped) == two_pi else value
             result = uniform.reshape(arr.shape)
-            result[np.isclose(arr, two_pi)] = 1.0
+            result[arr == two_pi] = 1.0
             return result
 
-        denom = i0(kappa_val)
-        if not np.isfinite(denom) or denom == 0.0:
-            return self._cdf_from_pdf(x, mu, kappa)
-
-        phi = (flat - mu_val + np.pi) % two_pi - np.pi
-        base_phi = (-mu_val + np.pi) % two_pi - np.pi
-
-        term_sum = np.zeros_like(phi)
-        term_base = 0.0
-        tol = 1e-12
-        max_terms = 500
-        converged = False
-
-        for n in range(1, max_terms + 1):
-            coeff = iv(n, kappa_val) / (denom * n)
-            if not np.isfinite(coeff):
-                continue
-
-            term = coeff * np.sin(n * phi)
-            term_sum += term
-            term_base += coeff * np.sin(n * base_phi)
-
-            max_term = np.max(np.abs(term))
-            if max_term < tol and abs(coeff) < tol:
-                converged = True
-                break
-
-        if not converged:
-            return self._cdf_from_pdf(x, mu, kappa)
-
-        cdf_raw = 0.5 + phi / two_pi + (1.0 / np.pi) * term_sum
-        base_val = 0.5 + base_phi / two_pi + (1.0 / np.pi) * term_base
-
-        forward = np.clip(cdf_raw - base_val, 0.0, 1.0)
-        backward = np.clip(base_val - cdf_raw, 0.0, 1.0)
-        cdf = np.where(phi >= base_phi, forward, 1.0 - backward)
-        cdf = np.clip(cdf, 0.0, 1.0)
+        # Exact feature-scale GL ladder on the centered kernel — the von
+        # Mises is the ψ → 0 member of the Jones–Pewsey clan
+        # (h = κ cos φ exactly in `_jp_score_terms`), so the P1-C cdf
+        # machinery applies verbatim: the integrand e^{κ(cos φ − 1)} ≤ 1
+        # never overflows at any κ, and the 1/√κ peak panels resolve every
+        # representable concentration. This retires both defects of the
+        # former Fourier–Bessel series path (raw iv/i0 overflowed at
+        # κ ≥ 713, the 500-term cap missed for κ ≳ 3000 — both fell back
+        # to per-point quadrature, ~200 ms per call).
+        phi_c = (flat - mu_val) % two_pi
+        c0 = (-mu_val) % two_pi
+        h_q, _ = _jp_cum01(phi_c, kappa_val, 0.0, want_skew=False)
+        h_0, _ = _jp_cum01(np.array([c0]), kappa_val, 0.0, want_skew=False)
+        diff = h_q - float(h_0[0])
+        # wrap is decided by the anchor *positions*, never by the sign of
+        # the mass between them — in a concentrated dead zone that mass is
+        # float dust of either sign while the true cdf is 0 or 1.
+        cdf = np.clip(np.where(phi_c >= c0, diff, diff + 1.0), 0.0, 1.0)
 
         if arr.ndim == 0:
             value = float(cdf[0])
-            return 1.0 if np.isclose(float(wrapped), two_pi) else value
+            return 1.0 if float(wrapped) == two_pi else value
 
         result = cdf.reshape(arr.shape)
-        result[np.isclose(arr, two_pi)] = 1.0
+        result[arr == two_pi] = 1.0
         return result
 
     def cdf(self, x, mu, kappa, *args, **kwargs):
@@ -4578,17 +4560,15 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         Cumulative distribution function of the Von Mises distribution.
 
         $$
-        F(\theta) = \frac{1}{2 \pi I_0(\kappa)}\int_{0}^{\theta} e^{\kappa \cos(\theta - \mu)} dx
+        F(\theta) = \frac{1}{2 \pi I_0(\kappa)}\int_{0}^{\theta} e^{\kappa \cos(t - \mu)} dt
         $$
 
-        The CDF is evaluated via its Fourier-Bessel series expansion,
-        $$
-        F(\theta) = \frac{1}{2} + \frac{\theta - \mu}{2\pi}
-        + \frac{1}{\pi}\sum_{n=1}^{\infty} \frac{I_n(\kappa)}{I_0(\kappa)\,n}
-        \sin\bigl(n(\theta - \mu)\bigr),
-        $$
-        truncated adaptively for numerical stability and re-normalised to the
-        $[0, 2\pi)$ support.
+        The CDF is evaluated exactly by composite Gauss–Legendre quadrature
+        on the feature-scale panel ladder of the centered kernel
+        ``e^{κ(cos φ − 1)} ≤ 1`` (cached edge cumulatives plus one partial
+        panel per query) — overflow-free and quadrature-exact at every
+        representable concentration, including the regression log-link
+        regime ``κ ≫ 700`` where Bessel-ratio series fail.
 
         Parameters
         ----------
@@ -4638,77 +4618,20 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             result[interior] = (two_pi * q_int) % two_pi
             return result.reshape(q_arr.shape)
 
-        eps = 1e-15
-        q_clipped = np.clip(q_int, eps, 1.0 - eps)
-
-        theta = (mu_val + two_pi * (q_clipped - 0.5)) % two_pi
-        if kappa_val < 0.3:
-            theta = (two_pi * q_clipped) % two_pi
-        elif kappa_val > 5.0:
-            normal_guess = mu_val + ndtri(q_clipped) / np.sqrt(kappa_val)
-            normal_guess = np.mod(normal_guess, two_pi)
-            blend = 0.5 if kappa_val < 20.0 else 0.8
-            theta = np.mod(blend * normal_guess + (1.0 - blend) * (two_pi * q_clipped), two_pi)
-
-        L = np.zeros_like(theta)
-        H = np.full_like(theta, two_pi)
-
-        tol_cdf = 1e-12
-        tol_theta = 1e-10
-        max_iter = 6
-
-        theta_curr = theta.copy()
-        for _ in range(max_iter):
-            cdf_vals = np.asarray(self.cdf(theta_curr, mu_val, kappa_val), dtype=float)
-            pdf_vals = self._pdf(theta_curr, mu_val, kappa_val)
-            delta = cdf_vals - q_clipped
-
-            L = np.where(delta <= 0.0, theta_curr, L)
-            H = np.where(delta > 0.0, theta_curr, H)
-
-            converged = (np.abs(delta) <= tol_cdf) & ((H - L) <= tol_theta)
-            if np.all(converged):
-                break
-
-            denom = np.where(pdf_vals > 1e-15, pdf_vals, 1e-15)
-            step = np.clip(delta / denom, -np.pi, np.pi)
-            theta_next = theta_curr - step
-            midpoint = 0.5 * (L + H)
-            theta_next = np.where((theta_next <= L) | (theta_next >= H), midpoint, theta_next)
-            theta_next = np.mod(theta_next, two_pi)
-            theta_curr = theta_next
-
-        delta = np.asarray(self.cdf(theta_curr, mu_val, kappa_val), dtype=float) - q_clipped
-        mask = (np.abs(delta) > tol_cdf) | ((H - L) > tol_theta)
-        if np.any(mask):
-            theta_b = theta_curr.copy()
-            L_b = L.copy()
-            H_b = H.copy()
-            for _ in range(30):
-                if not np.any(mask):
-                    break
-                mid = 0.5 * (L_b + H_b)
-                mid_vals = np.asarray(self.cdf(mid, mu_val, kappa_val), dtype=float)
-                delta_mid = mid_vals - q_clipped
-                take_upper = (delta_mid > 0.0) & mask
-                take_lower = (~take_upper) & mask
-                H_b = np.where(take_upper, mid, H_b)
-                L_b = np.where(take_lower, mid, L_b)
-                theta_b = np.where(mask, mid, theta_b)
-                mask = mask & (np.abs(delta_mid) > tol_cdf)
-            theta_curr = np.where(mask, 0.5 * (L_b + H_b), theta_b)
-
-        result[interior] = np.mod(theta_curr, two_pi)
+        # Centered-angle ladder solve (the ψ = 0 member of the JP clan):
+        # quantile-table inverse init + bracket-safeguarded Newton on the
+        # exact GL-ladder cdf — see `_jp_ppf_ladder`.
+        result[interior] = _jp_ppf_ladder(q_int, mu_val, kappa_val, 0.0)
         return result.reshape(q_arr.shape)
-
 
     def ppf(self, q, mu, kappa, *args, **kwargs):
         """
         Percent-point function (inverse of the CDF) of the Von Mises distribution.
 
-        The quantile is obtained by inverting the analytic Fourier–Bessel series
-        using a safeguarded Newton iteration with the exact von Mises PDF as the
-        slope, followed by a bisection polish.
+        Quantiles solve the exact Gauss–Legendre ladder CDF in the centered
+        angle by bracket-safeguarded Newton, initialized from the sampler's
+        quantile-table inverse, so ``ppf`` stays in exact sync with ``cdf``
+        at every representable concentration.
 
         Parameters
         ----------
@@ -5028,6 +4951,70 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
 vonmises = vonmises_gen(name="vonmises")
 
 
+def _pn_bvn_cdf(h, k, rho, s=None):
+    r"""Standard bivariate-normal cdf ``Φ₂(h, k; ρ)`` via Owen (1956).
+
+    ``Φ₂ = ½[Φ(h) + Φ(k)] − T(h, a_h) − T(k, a_k) − δ`` with
+    ``a_h = (k − ρh)/(h√(1−ρ²))`` (and symmetrically ``a_k``), where ``T``
+    is Owen's T function and ``δ = ½`` iff ``hk < 0`` or
+    (``hk = 0`` and ``h + k < 0``). Singular cells are patched explicitly:
+    ``√(1−ρ²) = 0`` (comonotone/antimonotone) and ``h = k = 0``
+    (``¼ + atan2(ρ, √(1−ρ²))/2π``, i.e. ``¼ + arcsin ρ / 2π``). When
+    exactly one of ``h, k`` is zero the Owen term is its limit
+    ``T(0, ±∞) = ±¼`` with the sign of the *other* argument — riding IEEE
+    division here is wrong, because a caller passing ``-0.0`` flips the
+    infinity's sign while δ (which compares ``== 0``) cannot compensate,
+    producing O(½) errors.
+
+    ``s`` lets the caller supply ``√(1−ρ²)`` exactly when it is known in a
+    cancellation-free form. The projected-normal wedge cdf passes
+    ``ρ = −cos θ, s = |sin θ|``: near ``θ = π`` the rounded ρ collapses to
+    exactly 1.0 over a ~1e-8-wide stretch of θ (``1 − ζ²/2`` rounds to 1
+    for ``ζ < √eps``), so deriving ``s`` from ρ would flatten the cdf
+    there, while ``|sin θ| = ζ`` keeps full precision.
+
+    Vectorized; accuracy ~1e-15 against ``scipy.stats.multivariate_normal``
+    (Owen's T itself is Patefield–Tandy).
+    """
+    if s is None:
+        s = np.sqrt(np.clip(1.0 - np.asarray(rho, dtype=float) ** 2, 0.0, None))
+    h, k, rho, s = np.broadcast_arrays(
+        np.asarray(h, dtype=float),
+        np.asarray(k, dtype=float),
+        np.asarray(rho, dtype=float),
+        np.asarray(s, dtype=float),
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        a_h = (k - rho * h) / (h * s)
+        a_k = (h - rho * k) / (k * s)
+    t_h = np.where(
+        h == 0.0,
+        0.25 * np.sign(k),
+        owens_t(h, np.where(np.isnan(a_h), 0.0, a_h)),
+    )
+    t_k = np.where(
+        k == 0.0,
+        0.25 * np.sign(h),
+        owens_t(k, np.where(np.isnan(a_k), 0.0, a_k)),
+    )
+    delta = np.where((h * k < 0) | ((h * k == 0) & (h + k < 0)), 0.5, 0.0)
+    val = 0.5 * (ndtr(h) + ndtr(k)) - t_h - t_k - delta
+    val = np.where((s == 0.0) & (rho > 0.0), ndtr(np.minimum(h, k)), val)
+    val = np.where(
+        (s == 0.0) & (rho <= 0.0),
+        np.clip(ndtr(h) + ndtr(k) - 1.0, 0.0, None),
+        val,
+    )
+    both_zero = (h == 0.0) & (k == 0.0) & (s > 0.0)
+    if np.any(both_zero):
+        val = np.where(
+            both_zero,
+            0.25 + np.arctan2(rho, s) / (2.0 * np.pi),
+            val,
+        )
+    return np.clip(val, 0.0, 1.0)
+
+
 class projectednormal_gen(_RegressionReady, CircularContinuous):
     r"""Projected Normal (angular Gaussian) Distribution ``PN₂(μ, I)``.
 
@@ -5055,7 +5042,12 @@ class projectednormal_gen(_RegressionReady, CircularContinuous):
         Probability density function (closed form).
 
     cdf(x, mu1, mu2)
-        Cumulative distribution function (numeric integration of the pdf).
+        Cumulative distribution function (closed form: bivariate-normal
+        wedge probability via Owen's T).
+
+    ppf(q, mu1, mu2)
+        Percent-point function (bracket-safeguarded Newton on the
+        closed-form CDF).
 
     rvs(mu1, mu2, size=None, random_state=None)
         Random variates by direct projection of bivariate normal draws.
@@ -5160,6 +5152,284 @@ class projectednormal_gen(_RegressionReady, CircularContinuous):
             Logarithm of the probability density function evaluated at `x`.
         """
         return super().logpdf(x, mu1, mu2, *args, **kwargs)
+
+    def _pdf_and_slope(self, x, mu1, mu2):
+        """Closed pdf and its θ-derivative: with ℓ(θ) = log f,
+        dℓ/dθ = s·(t + G'(t)) where G' = 1/(t + R), so f' = f·s·(t + G')."""
+        t, s = self._t_s(x, mu1, mu2)
+        f = np.exp(self._logpdf(x, mu1, mu2))
+        return f, f * s * (t + 1.0 / (t + self._mills_inv(t)))
+
+    def _wedge_cdf(self, theta, mu1, mu2):
+        r"""Closed-form cdf on already-wrapped angles in ``[0, 2π]``.
+
+        ``{Θ ≤ θ}`` is the wedge between the rays at angles 0 and θ, i.e.
+        for θ ∈ [0, π] the intersection of the half-planes ``{X₂ ≥ 0}`` and
+        ``{X₁ sin θ − X₂ cos θ ≥ 0}``; both events are linear in the
+        bivariate normal X, so
+
+        ``F(θ) = Φ₂(μ₂, μ₁ sin θ − μ₂ cos θ; −cos θ)``,
+
+        and for θ ∈ (π, 2π] the complement wedge gives
+        ``F(θ) = 1 − Φ₂(−μ₂, −(μ₁ sin θ − μ₂ cos θ); −cos θ)``.
+
+        Within ``1e-5`` of the corners θ ∈ {0, π, 2π} the Owen formula is
+        replaced by the exact second-order Taylor expansion of F: doubles
+        cannot represent ``1 ∓ cos θ`` below ~√eps while Φ₂'s
+        ρ-sensitivity diverges like ``1/√(1−ρ²)`` there, which would
+        otherwise dent the local slope by O(pdf) over a ~1e-8-wide stretch
+        (Taylor error ≤ W³|f″|/6 ~ 1e-13; seam quantization ~1e-11).
+        """
+        theta_b, mu1_b, mu2_b = np.broadcast_arrays(
+            np.asarray(theta, dtype=float),
+            np.asarray(mu1, dtype=float),
+            np.asarray(mu2, dtype=float),
+        )
+        shape = theta_b.shape
+        th = theta_b.reshape(-1).astype(float)
+        m1 = mu1_b.reshape(-1).astype(float)
+        m2 = mu2_b.reshape(-1).astype(float)
+
+        sin_t, cos_t = np.sin(th), np.cos(th)
+        k = m1 * sin_t - m2 * cos_t
+        rho = -cos_t
+        s = np.abs(sin_t)
+        val = np.empty_like(th)
+        low_m = th <= np.pi
+        if np.any(low_m):
+            val[low_m] = _pn_bvn_cdf(m2[low_m], k[low_m], rho[low_m], s[low_m])
+        high_m = ~low_m
+        if np.any(high_m):
+            val[high_m] = 1.0 - _pn_bvn_cdf(
+                np.negative(m2[high_m]), -k[high_m], rho[high_m], s[high_m]
+            )
+
+        corner_w = 1e-5
+        two_pi = 2.0 * np.pi
+        near_zero = th <= corner_w
+        near_pi = np.abs(th - np.pi) <= corner_w
+        near_two_pi = (two_pi - th) <= corner_w
+        if np.any(near_zero) or np.any(near_two_pi):
+            mask = near_zero | near_two_pi
+            f0, fp0 = self._pdf_and_slope(0.0, m1[mask], m2[mask])
+            zeta = np.where(near_zero[mask], th[mask], th[mask] - two_pi)
+            base = np.where(near_zero[mask], 0.0, 1.0)
+            val[mask] = np.clip(
+                base + zeta * f0 + 0.5 * zeta * zeta * fp0, 0.0, 1.0
+            )
+        if np.any(near_pi):
+            f_pi, fp_pi = self._pdf_and_slope(np.pi, m1[near_pi], m2[near_pi])
+            base = _pn_bvn_cdf(
+                m2[near_pi],
+                m1[near_pi] * np.sin(np.pi) + m2[near_pi],
+                1.0,
+                np.sin(np.pi),
+            )
+            zeta = th[near_pi] - np.pi
+            val[near_pi] = np.clip(
+                base + zeta * f_pi + 0.5 * zeta * zeta * fp_pi, 0.0, 1.0
+            )
+
+        return val.reshape(shape)
+
+    def _cdf(self, x, mu1, mu2):
+        wrapped = self._wrap_angles(x)
+        arr = np.asarray(wrapped, dtype=float)
+        if arr.size == 0:
+            return arr.astype(float)
+
+        mu1_arr = np.asarray(mu1, dtype=float)
+        mu2_arr = np.asarray(mu2, dtype=float)
+        cdf_vals = self._wedge_cdf(arr, mu1_arr, mu2_arr)
+
+        # _wrap_angles already snaps inputs within eps·2π of the upper
+        # endpoint to exactly 2π, so only exact equality is pinned here —
+        # an isclose() with default rtol would swallow honest upper-tail
+        # values (e.g. F = 1 − 1e-6 lives ~6e-6 below 2π).
+        two_pi = 2.0 * np.pi
+        if arr.ndim == 0:
+            value = float(cdf_vals)
+            return 1.0 if float(wrapped) == two_pi else value
+        result = np.asarray(cdf_vals, dtype=float)
+        result[arr == two_pi] = 1.0
+        return result
+
+    def cdf(self, x, mu1, mu2, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Projected Normal
+        distribution (closed form).
+
+        ``{Θ ≤ θ}`` is a wedge of the plane, so the CDF is a bivariate
+        normal orthant probability evaluated via Owen's T function:
+
+        $$
+        F(\theta) = \Phi_2\!\left(\mu_2,\;
+        \mu_1\sin\theta - \mu_2\cos\theta;\; -\cos\theta\right),
+        \qquad \theta \in [0, \pi],
+        $$
+
+        and $F(\theta) = 1 - \Phi_2(-\mu_2, -(\mu_1\sin\theta -
+        \mu_2\cos\theta); -\cos\theta)$ for $\theta \in (\pi, 2\pi]$.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the CDF.
+        mu1 : float
+            First Cartesian mean component (any real).
+        mu2 : float
+            Second Cartesian mean component (any real).
+
+        Returns
+        -------
+        cdf_values : array_like
+            CDF evaluated at `x`.
+        """
+        return super().cdf(x, mu1, mu2, *args, **kwargs)
+
+    def _ppf(self, q, mu1, mu2):
+        q_arr = np.asarray(q, dtype=float)
+        mu1_b, mu2_b, q_b = np.broadcast_arrays(
+            np.asarray(mu1, dtype=float), np.asarray(mu2, dtype=float), q_arr
+        )
+        flat = q_b.reshape(-1).astype(float)
+        m1 = mu1_b.reshape(-1).astype(float)
+        m2 = mu2_b.reshape(-1).astype(float)
+        two_pi = 2.0 * np.pi
+
+        if flat.size == 0:
+            return q_arr.astype(float)
+
+        def _finish(arr):
+            reshaped = arr.reshape(q_b.shape)
+            if q_arr.ndim == 0:
+                return float(reshaped)
+            return reshaped
+
+        result = np.full_like(flat, np.nan, dtype=float)
+        valid = np.isfinite(flat)
+        close_zero = valid & (flat <= 0.0)
+        close_one = valid & (flat >= 1.0)
+        result[close_zero] = 0.0
+        result[close_one] = two_pi
+
+        interior = valid & ~(close_zero | close_one)
+        if not np.any(interior):
+            return _finish(result)
+
+        q_sub = flat[interior]
+        m1_sub = m1[interior]
+        m2_sub = m2[interior]
+
+        gamma_sub = np.hypot(m1_sub, m2_sub)
+        uniform = gamma_sub <= 1e-12
+        if np.all(uniform):
+            result[interior] = two_pi * q_sub
+            return _finish(result)
+
+        # Bracket each quantile on a coarse grid of the closed cdf, then
+        # polish with bracket-safeguarded Newton (pdf is the derivative).
+        grid = np.linspace(0.0, two_pi, 33)
+        scalar_params = bool(
+            np.all(m1_sub == m1_sub[0]) and np.all(m2_sub == m2_sub[0])
+        )
+        if scalar_params:
+            f_grid = self._wedge_cdf(grid, m1_sub[0], m2_sub[0])
+            idx = np.clip(np.sum(f_grid[:, None] <= q_sub[None, :], axis=0), 1, 32)
+            f_lo = f_grid[idx - 1]
+            f_hi = f_grid[idx]
+        else:
+            f_grid = self._wedge_cdf(
+                grid[:, None], m1_sub[None, :], m2_sub[None, :]
+            )
+            idx = np.clip(np.sum(f_grid <= q_sub[None, :], axis=0), 1, 32)
+            cols = np.arange(q_sub.size)
+            f_lo = f_grid[idx - 1, cols]
+            f_hi = f_grid[idx, cols]
+        lower = grid[idx - 1]
+        upper = grid[idx]
+        span = np.clip(f_hi - f_lo, 1e-300, None)
+        theta_curr = lower + (upper - lower) * np.clip(
+            (q_sub - f_lo) / span, 0.0, 1.0
+        )
+
+        tol = 1e-15
+        max_iter = 12
+        delta = self._wedge_cdf(theta_curr, m1_sub, m2_sub) - q_sub
+        lower = np.where(delta <= 0.0, theta_curr, lower)
+        upper = np.where(delta > 0.0, theta_curr, upper)
+        act = np.flatnonzero(np.abs(delta) > tol)
+        for _ in range(max_iter):
+            if not act.size:
+                break
+            th_a = theta_curr[act]
+            lo_a = lower[act]
+            hi_a = upper[act]
+            pdf_a = np.exp(self._logpdf(th_a, m1_sub[act], m2_sub[act]))
+            step = np.clip(
+                delta[act] / np.clip(pdf_a, 1e-300, None), -np.pi, np.pi
+            )
+            th_n = th_a - step
+            th_n = np.where(
+                (th_n <= lo_a) | (th_n >= hi_a), 0.5 * (lo_a + hi_a), th_n
+            )
+            d_n = self._wedge_cdf(th_n, m1_sub[act], m2_sub[act]) - q_sub[act]
+            theta_curr[act] = th_n
+            delta[act] = d_n
+            lower[act] = np.where(d_n <= 0.0, th_n, lo_a)
+            upper[act] = np.where(d_n > 0.0, th_n, hi_a)
+            act = act[np.abs(d_n) > tol]
+
+        if act.size:
+            # bisection cleanup, compressed to the unconverged cells
+            lo_u = lower[act]
+            hi_u = upper[act]
+            m1_u = m1_sub[act]
+            m2_u = m2_sub[act]
+            q_u = q_sub[act]
+            for _ in range(60):
+                if np.all(hi_u - lo_u <= 1e-15):
+                    break
+                mid = 0.5 * (lo_u + hi_u)
+                go_up = self._wedge_cdf(mid, m1_u, m2_u) <= q_u
+                lo_u = np.where(go_up, mid, lo_u)
+                hi_u = np.where(go_up, hi_u, mid)
+            theta_curr[act] = 0.5 * (lo_u + hi_u)
+
+        theta_curr = np.where(uniform, two_pi * q_sub, theta_curr)
+        theta_curr = np.clip(theta_curr, 0.0, two_pi)
+        endpoint_mask = theta_curr >= (two_pi - 1e-12)
+        if np.any(endpoint_mask):
+            theta_curr = np.where(
+                endpoint_mask, np.nextafter(two_pi, 0.0), theta_curr
+            )
+        result[interior] = theta_curr
+        return _finish(result)
+
+    def ppf(self, q, mu1, mu2, *args, **kwargs):
+        """
+        Percent-point function (inverse CDF) of the Projected Normal
+        distribution.
+
+        Quantiles are found by inverting the closed-form Owen's-T CDF with
+        a bracket-safeguarded Newton iteration (the closed-form PDF is the
+        derivative), so ``ppf`` stays in exact sync with ``cdf``.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (values in ``[0, 1]``).
+        mu1 : float
+            First Cartesian mean component (any real).
+        mu2 : float
+            Second Cartesian mean component (any real).
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles in ``[0, 2π)`` such that ``cdf(angle) = q``.
+        """
+        return super().ppf(q, mu1, mu2, *args, **kwargs)
 
     def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
         """First trigonometric moment in closed form (offset-normal
@@ -6516,8 +6786,12 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         if _jp_cdf_use_ladder(kappa_val, psi_val):
             # deep ψ < 0: exact ladder cumulative (P1-C) — the series
             # grid cannot resolve the spike there
-            H_start = float(_jp_cum01(np.array([phi_start]), kappa_val, psi_val)[0][0])
-            H_end = _jp_cum01(phi_end, kappa_val, psi_val)[0]
+            H_start = float(
+                _jp_cum01(
+                    np.array([phi_start]), kappa_val, psi_val, want_skew=False
+                )[0][0]
+            )
+            H_end = _jp_cum01(phi_end, kappa_val, psi_val, want_skew=False)[0]
         else:
             try:
                 n_idx, coeffs = self._jp_get_series(kappa_val, psi_val)
@@ -7123,7 +7397,7 @@ def _jp_quantile_table(kappa: float, psi: float):
     half = np.asarray(half, dtype=float)
     phi = np.concatenate([-half[::-1], half[1:]])
 
-    h = _jp_score_terms(phi, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(phi, kappa, psi)
     dens = np.exp(h - kappa)  # ∝ density; peak value exactly 1
     seg = 0.5 * (dens[1:] + dens[:-1]) * np.diff(phi)
     cdf = np.concatenate([[0.0], np.cumsum(seg)])
@@ -7188,6 +7462,32 @@ def _jp_cdf_use_ladder(kappa, psi):
     return w_peak < _JP_CDF_DEEP_W
 
 
+def _jp_log_kernel(phi, kappa, psi):
+    """The JP log-kernel ``h(φ; κ, ψ)`` alone — the ladder integrand and
+    moment paths need no scores, and the full `_jp_score_terms` bundle
+    costs ~15 array ops where one or four suffice. Branch-for-branch
+    bitwise-identical to ``_jp_score_terms(...)["h"]``: ``ψ = 0`` is the
+    von Mises member ``h = κ cos φ`` (equal to the cumulant series at
+    A = 0), ``|κψ| < _JP_A_SMALL`` the cumulant series, else the
+    overflow-safe ``logaddexp`` form."""
+    phi = np.asarray(phi, dtype=float)
+    if psi == 0.0:
+        return kappa * np.cos(phi)
+    A = kappa * psi
+    if abs(A) < _JP_A_SMALL:
+        s = np.sin(phi)
+        c = np.cos(phi)
+        s2 = s * s
+        k3 = -2.0 * c * s2
+        k4 = s2 * (4.0 - 6.0 * s2)
+        return kappa * (c + s2 * A / 2.0 + k3 * A * A / 6.0 + k4 * A**3 / 24.0)
+    half = 0.5 * phi
+    with np.errstate(divide="ignore"):
+        lp = 2.0 * np.log(np.abs(np.cos(half)))
+        lq = 2.0 * np.log(np.abs(np.sin(half)))
+    return np.logaddexp(A + lp, -A + lq) / psi
+
+
 @lru_cache(maxsize=1024)
 def _jp_cdf_ladder(kappa: float, psi: float):
     """Half-line cumulative tables for the centered JP kernel law: GL-exact
@@ -7196,7 +7496,7 @@ def _jp_cdf_ladder(kappa: float, psi: float):
     ``(edges, cum_base, cum_skew)`` with ``cum_*[0] = 0``."""
     edges = _jp_ladder_edges(kappa, psi)
     nodes, wts = _gl_panels_from_edges(edges)
-    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(nodes, kappa, psi)
     e = wts * np.exp(h - kappa)
     n_gl = _JP_GL_XW[0].size
     base = e.reshape(edges.size - 1, n_gl).sum(axis=1)
@@ -7206,24 +7506,27 @@ def _jp_cdf_ladder(kappa: float, psi: float):
     return edges, cum_base, cum_skew
 
 
-def _jp_half_cum(x, kappa, psi):
+def _jp_half_cum(x, kappa, psi, want_skew=True):
     """R(x) = ∫₀ˣ e^{h−κ} dt and S(x) = ∫₀ˣ e^{h−κ} sin t dt for x ∈
     [0, π]: cached edge cumulatives plus a 24-point partial panel
-    [edge_k, x] per query — quadrature-exact at any spike depth."""
+    [edge_k, x] per query — quadrature-exact at any spike depth. With
+    ``want_skew=False`` skips the sine moment and returns ``(R, None)``."""
     edges, cum_base, cum_skew = _jp_cdf_ladder(kappa, psi)
     x = np.clip(np.asarray(x, dtype=float).reshape(-1), 0.0, np.pi)
     k = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, edges.size - 2)
     hw = 0.5 * (x - edges[k])
     xi_gl, w_gl = _JP_GL_XW
     nodes = (edges[k] + hw)[:, None] + hw[:, None] * xi_gl[None, :]
-    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(nodes, kappa, psi)
     e = np.exp(h - kappa)
     base = cum_base[k] + hw * (e @ w_gl)
+    if not want_skew:
+        return base, None
     skew = cum_skew[k] + hw * ((e * np.sin(nodes)) @ w_gl)
     return base, skew
 
 
-def _jp_cum01(phi, kappa, psi):
+def _jp_cum01(phi, kappa, psi, want_skew=True):
     """Exact H(φ) = ∫₀^φ f_c dt and J(φ) = ∫₀^φ f_c sin t dt over
     φ ∈ [0, 2π) for the centered normalized JP kernel law f_c (drop-in
     replacements for the series cumulative and skew integral in the deep
@@ -7231,15 +7534,15 @@ def _jp_cum01(phi, kappa, psi):
     H = R(φ)/Z for φ ≤ π and 1 − R(2π−φ)/Z above; J = S(min(φ, 2π−φ))/Z.
     Beyond κψ ≈ −740 (spike below the smallest denormal) the tiny-floor
     guard makes values best-effort, never nan — same boundary as the
-    normalizer."""
+    normalizer. With ``want_skew=False`` returns ``(H, None)``."""
     phi = np.asarray(phi, dtype=float).reshape(-1)
     upper = phi > np.pi
     x = np.where(upper, 2.0 * np.pi - phi, phi)
-    R, S = _jp_half_cum(x, kappa, psi)
+    R, S = _jp_half_cum(x, kappa, psi, want_skew=want_skew)
     _, cum_base, _ = _jp_cdf_ladder(kappa, psi)
     ztot = max(2.0 * float(cum_base[-1]), np.finfo(float).tiny)
     H = np.where(upper, 1.0 - R / ztot, R / ztot)
-    return H, S / ztot
+    return H, (None if S is None else S / ztot)
 
 
 def _jp_solve_quantile(target, x0, lo, hi, cdf_fn, pdf_fn, tol=1e-13,
@@ -7276,18 +7579,18 @@ def _jp_ppf_ladder(q, mu, kappa, psi):
     initialized by the sampler's quantile-table inverse — which lands
     inside the spike at any representable depth. ``q`` must be interior."""
     two_pi = 2.0 * np.pi
-    H_start, _ = _jp_cum01(np.array([(-mu) % two_pi]), kappa, psi)
+    H_start, _ = _jp_cum01(np.array([(-mu) % two_pi]), kappa, psi, want_skew=False)
     u_t = (np.asarray(q, dtype=float) + float(H_start[0]) + 0.5) % 1.0
     zeta0 = _jp_table_invert(u_t, kappa, psi)
     _, cum_base, _ = _jp_cdf_ladder(kappa, psi)
     ztot = max(2.0 * float(cum_base[-1]), np.finfo(float).tiny)
 
     def cdf_fn(z):
-        R, _ = _jp_half_cum(np.abs(z), kappa, psi)
+        R, _ = _jp_half_cum(np.abs(z), kappa, psi, want_skew=False)
         return 0.5 + np.sign(z) * R / ztot
 
     def pdf_fn(z):
-        h = _jp_score_terms(z, kappa, psi, second=False)["h"]
+        h = _jp_log_kernel(z, kappa, psi)
         return np.exp(h - kappa) / ztot
 
     zeta = _jp_solve_quantile(u_t, zeta0, -np.pi, np.pi, cdf_fn, pdf_fn)
@@ -7315,7 +7618,7 @@ def _jp_ppf_ladder_sineskewed(q, xi, kappa, psi, lmbd):
         return 0.5 + np.sign(z) * R / ztot + lmbd * (S - sn_pi) / ztot
 
     def pdf_fn(z):
-        h = _jp_score_terms(z, kappa, psi, second=False)["h"]
+        h = _jp_log_kernel(z, kappa, psi)
         return np.exp(h - kappa) * (1.0 + lmbd * np.sin(z)) / ztot
 
     zeta = _jp_solve_quantile(u_t, zeta0, -np.pi, np.pi, cdf_fn, pdf_fn)
@@ -7352,7 +7655,7 @@ def _jp_log_c(kappa: float, psi: float) -> float:
     if abs(psi) < _JP_PSI_TOL:
         return float(-(np.log(2.0 * np.pi * i0e(kappa)) + kappa))
     nodes, wts = _jp_gl_panels(kappa, psi)
-    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(nodes, kappa, psi)
     # kernel even in φ with peak h(0) = κ exactly. The tiny-floor guard
     # only engages beyond |κψ| ≈ 740 with ψ < 0, where the spike is below
     # float resolution even at φ = 0 (the distribution is numerically a
@@ -7399,7 +7702,7 @@ def _jp_cos_moment(kappa: float, psi: float, q: int) -> float:
     if abs(psi) < _JP_PSI_TOL:
         return float(ive(q, kappa) / ive(0, kappa))
     nodes, wts = _jp_gl_panels(kappa, psi)
-    e = wts * np.exp(_jp_score_terms(nodes, kappa, psi, second=False)["h"] - kappa)
+    e = wts * np.exp(_jp_log_kernel(nodes, kappa, psi) - kappa)
     denom = max(float(np.sum(e)), np.finfo(float).tiny)
     return float(np.sum(np.cos(q * nodes) * e) / denom)
 
@@ -8956,7 +9259,7 @@ def _jp_log_c_asym(kappa: float, psi: float, nu: float) -> float:
 
     nodes, wts = _gl_panels_from_edges(_jp_ladder_edges_asym(kappa, psi, nu))
     weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(nodes, nu)))
-    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(nodes, kappa, psi)
     integral = float(np.sum(wts * np.exp(h - kappa) * weight))
     return float(-(kappa + np.log(max(integral, np.finfo(float).tiny))))
 
@@ -8970,7 +9273,7 @@ def _jp_cdf_ladder_asym(kappa: float, psi: float, nu: float):
     edges = _jp_ladder_edges_asym(kappa, psi, nu)
     nodes, wts = _gl_panels_from_edges(edges)
     weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(nodes, nu)))
-    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(nodes, kappa, psi)
     n_gl = _JP_GL_XW[0].size
     panels = (wts * np.exp(h - kappa) * weight).reshape(
         edges.size - 1, n_gl
@@ -8989,7 +9292,7 @@ def _jp_weighted_cum_asym(u, kappa, psi, nu):
     xi_gl, w_gl = _JP_GL_XW
     nodes = (edges[k] + hw)[:, None] + hw[:, None] * xi_gl[None, :]
     weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(nodes, nu)))
-    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    h = _jp_log_kernel(nodes, kappa, psi)
     return cum[k] + hw * ((np.exp(h - kappa) * weight) @ w_gl)
 
 
@@ -9034,7 +9337,7 @@ def _jp_ppf_ladder_asym(q, xi, kappa, psi, nu):
 
     def pdf_fn(u):
         weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(u, nu)))
-        h = _jp_score_terms(u, kappa, psi, second=False)["h"]
+        h = _jp_log_kernel(u, kappa, psi)
         return np.exp(h - kappa) * weight / z
 
     u_root = _jp_solve_quantile(
@@ -10343,18 +10646,58 @@ class wrapstable_gen(CircularContinuous):
         cdf_vals = (theta_flat[0] / (2.0 * np.pi)) + (1.0 / np.pi) * series_sum
 
         anchor = (1.0 / np.pi) * np.sum((rho_vals / p_vals) * np.sin(-mu_vals))
-        cdf_vals = cdf_vals - anchor
-        cdf_vals = np.where(cdf_vals < 0.0, cdf_vals + 1.0, cdf_vals)
-        cdf_vals = np.clip(cdf_vals, 0.0, 1.0)
+        # The anchored difference raw(θ) − raw(0) of one increasing function
+        # is ≥ 0 for every θ ∈ [0, 2π]; only float/truncation dust can go
+        # negative, so clip — never wrap by +1 (that would turn −1e-17 into
+        # ≈ 1).
+        cdf_vals = np.clip(cdf_vals - anchor, 0.0, 1.0)
 
-        # Ensure exact endpoints
+        # Exact-endpoint pins only: an isclose() here (whose default rtol
+        # survives an atol override) would swallow honest tail values up to
+        # ~6e-5 away from 2π.
         two_pi = 2.0 * np.pi
-        cdf_vals[np.isclose(theta_flat[0], 0.0, atol=1e-12)] = 0.0
-        cdf_vals[np.isclose(theta_flat[0], two_pi, atol=1e-12)] = 1.0
+        cdf_vals[theta_flat[0] == 0.0] = 0.0
+        cdf_vals[theta_flat[0] == two_pi] = 1.0
 
         if scalar_input:
             return float(cdf_vals.reshape(-1)[0])
         return cdf_vals.reshape(x_arr.shape)
+
+    def cdf(self, x, delta, alpha, beta, gamma, *args, **kwargs):
+        r"""
+        Cumulative distribution function of the Wrapped Stable distribution.
+
+        The characteristic-function series integrates term by term, giving
+        the analytic form
+
+        $$
+        F(\theta) = \frac{\theta}{2\pi} + \frac{1}{\pi}\sum_{p\ge 1}
+        \frac{\rho_p}{p}\,\Bigl[\sin(p\theta - \mu_p) - \sin(-\mu_p)\Bigr],
+        \qquad \rho_p = e^{-(\gamma p)^\alpha},
+        $$
+
+        truncated once the exact tail bound drops below tolerance — no
+        quadrature is involved.
+
+        Parameters
+        ----------
+        x : array_like
+            Points at which to evaluate the CDF.
+        delta : float
+            Location (mean-direction) parameter, ``0 <= delta <= 2*pi``.
+        alpha : float
+            Stability index, ``0 < alpha <= 2``.
+        beta : float
+            Skewness parameter, ``-1 < beta < 1``.
+        gamma : float
+            Scale parameter, ``gamma > 0``.
+
+        Returns
+        -------
+        cdf_values : array_like
+            CDF evaluated at `x`.
+        """
+        return super().cdf(x, delta, alpha, beta, gamma, *args, **kwargs)
 
     def _ppf(self, q, delta, alpha, beta, gamma):
         q_arr = np.asarray(q, dtype=float)
@@ -10373,68 +10716,140 @@ class wrapstable_gen(CircularContinuous):
             shaped = result.reshape(q_arr.shape)
             return float(shaped) if q_arr.ndim == 0 else shaped
 
-        q_valid = flat[valid]
-        close_zero = np.isclose(q_valid, 0.0, atol=1e-12, rtol=0.0)
-        close_one = np.isclose(q_valid, 1.0, atol=1e-12, rtol=0.0)
-
         two_pi = 2.0 * np.pi
+        close_zero = valid & np.isclose(flat, 0.0, atol=1e-12, rtol=0.0)
+        close_one = valid & np.isclose(flat, 1.0, atol=1e-12, rtol=0.0)
+        result[close_zero] = 0.0
+        result[close_one] = two_pi
 
-        theta_vals = np.empty_like(q_valid)
-        for idx, q_val in enumerate(q_valid):
-            if close_zero[idx]:
-                theta_vals[idx] = 0.0
-                continue
-            if close_one[idx]:
-                theta_vals[idx] = two_pi
-                continue
+        interior = valid & ~(close_zero | close_one)
+        if not np.any(interior):
+            shaped = result.reshape(q_arr.shape)
+            return float(shaped) if q_arr.ndim == 0 else shaped
 
-            lo, hi = 0.0, two_pi
-            theta = q_val * two_pi
+        q_sub = flat[interior]
 
-            for _ in range(_WRAPSTABLE_NEWTON_MAXITER):
-                cdf_theta = float(self._cdf(theta, delta_val, alpha_val, beta_val, gamma_val))
-                pdf_theta = float(self._pdf(theta, delta_val, alpha_val, beta_val, gamma_val))
-                residual = cdf_theta - q_val
+        def cdf_fn(t):
+            return np.asarray(
+                self._cdf(t, delta_val, alpha_val, beta_val, gamma_val),
+                dtype=float,
+            )
 
-                if abs(residual) <= _WRAPSTABLE_NEWTON_TOL and (hi - lo) <= _WRAPSTABLE_NEWTON_WIDTH_TOL:
+        def pdf_fn(t):
+            return np.asarray(
+                self._pdf(t, delta_val, alpha_val, beta_val, gamma_val),
+                dtype=float,
+            )
+
+        # Bracket every quantile on a coarse grid of the series cdf, then
+        # polish with one shared bracket-safeguarded Newton, iterating only
+        # the unconverged subset (the former per-quantile scalar loop paid
+        # the full series matrix per q per iteration).
+        grid = np.linspace(0.0, two_pi, 33)
+        f_grid = cdf_fn(grid)
+        idx = np.clip(np.sum(f_grid[:, None] <= q_sub[None, :], axis=0), 1, 32)
+        lower = grid[idx - 1]
+        upper = grid[idx]
+        f_lo = f_grid[idx - 1]
+        f_hi = f_grid[idx]
+        span = np.clip(f_hi - f_lo, 1e-300, None)
+        theta = lower + (upper - lower) * np.clip((q_sub - f_lo) / span, 0.0, 1.0)
+
+        residual = cdf_fn(theta) - q_sub
+        lower = np.where(residual <= 0.0, theta, lower)
+        upper = np.where(residual > 0.0, theta, upper)
+        act = np.flatnonzero(np.abs(residual) > _WRAPSTABLE_NEWTON_TOL)
+        for _ in range(_WRAPSTABLE_NEWTON_MAXITER):
+            if not act.size:
+                break
+            th_a = theta[act]
+            lo_a = lower[act]
+            hi_a = upper[act]
+            p_a = pdf_fn(th_a)
+            step = residual[act] / np.clip(p_a, np.finfo(float).tiny, None)
+            th_n = th_a - step
+            bad = (
+                ~np.isfinite(th_n)
+                | (th_n <= lo_a)
+                | (th_n >= hi_a)
+                | (p_a <= 0.0)
+                | ~np.isfinite(p_a)
+            )
+            th_n = np.where(bad, 0.5 * (lo_a + hi_a), th_n)
+            r_n = cdf_fn(th_n) - q_sub[act]
+            theta[act] = th_n
+            residual[act] = r_n
+            lower[act] = np.where(r_n <= 0.0, th_n, lo_a)
+            upper[act] = np.where(r_n > 0.0, th_n, hi_a)
+            act = act[np.abs(r_n) > _WRAPSTABLE_NEWTON_TOL]
+
+        # Residual-converged cells still owe the width certificate
+        # (|F − q| ≤ tol alone cannot pin θ in a flat stretch). One probe
+        # pass settles all sharp cells with two cdf evals — a ±w bracket is
+        # confirmed wherever the cdf visibly crosses q inside it — instead
+        # of the ~30 blanket bisections the per-quantile loop paid.
+        need = np.flatnonzero(upper - lower > _WRAPSTABLE_NEWTON_WIDTH_TOL)
+        if need.size:
+            w = 0.4 * _WRAPSTABLE_NEWTON_WIDTH_TOL
+            lo_p = np.maximum(theta[need] - w, lower[need])
+            hi_p = np.minimum(theta[need] + w, upper[need])
+            below = cdf_fn(lo_p) - q_sub[need] <= 0.0
+            above = cdf_fn(hi_p) - q_sub[need] > 0.0
+            lower[need] = np.where(below, lo_p, lower[need])
+            upper[need] = np.where(above, hi_p, upper[need])
+
+        # flat-zone stragglers: bisect the bracket to the width tolerance
+        rem = np.flatnonzero(upper - lower > _WRAPSTABLE_NEWTON_WIDTH_TOL)
+        if rem.size:
+            lo_u = lower[rem]
+            hi_u = upper[rem]
+            q_u = q_sub[rem]
+            for _ in range(40):
+                if np.all(hi_u - lo_u <= _WRAPSTABLE_NEWTON_WIDTH_TOL):
                     break
+                mid = 0.5 * (lo_u + hi_u)
+                go_up = cdf_fn(mid) <= q_u
+                lo_u = np.where(go_up, mid, lo_u)
+                hi_u = np.where(go_up, hi_u, mid)
+            theta[rem] = 0.5 * (lo_u + hi_u)
+            lower[rem] = lo_u
+            upper[rem] = hi_u
 
-                if residual > 0.0:
-                    hi = min(hi, theta)
-                else:
-                    lo = max(lo, theta)
-
-                if pdf_theta <= 0.0 or not np.isfinite(pdf_theta):
-                    theta = 0.5 * (lo + hi)
-                    continue
-
-                step = residual / pdf_theta
-                theta_new = theta - step
-                if not np.isfinite(theta_new) or theta_new <= lo or theta_new >= hi:
-                    theta = 0.5 * (lo + hi)
-                else:
-                    theta = theta_new
-
-                if (hi - lo) <= _WRAPSTABLE_NEWTON_WIDTH_TOL:
-                    break
-
-            else:  # pragma: no cover - fallback to bisection if Newton fails
-                for _ in range(30):
-                    theta_mid = 0.5 * (lo + hi)
-                    cdf_mid = float(self._cdf(theta_mid, delta_val, alpha_val, beta_val, gamma_val))
-                    if cdf_mid > q_val:
-                        hi = theta_mid
-                    else:
-                        lo = theta_mid
-                theta = 0.5 * (lo + hi)
-
-            theta_vals[idx] = (theta + two_pi) % two_pi
-
-        result[valid] = theta_vals
+        result[interior] = (theta + two_pi) % two_pi
         shaped = result.reshape(q_arr.shape)
         if q_arr.ndim == 0:
             return float(shaped)
         return shaped
+
+    def ppf(self, q, delta, alpha, beta, gamma, *args, **kwargs):
+        """
+        Percent-point function (inverse CDF) of the Wrapped Stable
+        distribution.
+
+        Quantiles invert the analytic series CDF with a vectorized
+        bracket-safeguarded Newton iteration (series PDF as the slope) and
+        a bracket-width certificate, so ``ppf`` stays in exact sync with
+        ``cdf``.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (values in ``[0, 1]``).
+        delta : float
+            Location (mean-direction) parameter, ``0 <= delta <= 2*pi``.
+        alpha : float
+            Stability index, ``0 < alpha <= 2``.
+        beta : float
+            Skewness parameter, ``-1 < beta < 1``.
+        gamma : float
+            Scale parameter, ``gamma > 0``.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles in ``[0, 2π)`` such that ``cdf(angle) = q``.
+        """
+        return super().ppf(q, delta, alpha, beta, gamma, *args, **kwargs)
 
     def _rvs(self, delta, alpha, beta, gamma, size=None, random_state=None):
         rng = self._init_rng(random_state)
@@ -10908,6 +11323,9 @@ class katojones_gen(_RegressionReady, CircularContinuous):
         Probability density function.
     cdf(x, mu, gamma, rho, lam)
         Cumulative distribution function via adaptive Fourier series.
+    ppf(q, mu, gamma, rho, lam)
+        Percent-point function (vectorized bracket-safeguarded Newton on
+        the series CDF).
 
     rvs(mu, gamma, rho, lam, size=None, random_state=None)
         Random variates obtained by inverting the CDF.
@@ -11212,11 +11630,16 @@ class katojones_gen(_RegressionReady, CircularContinuous):
         else:
             series = self._get_series_terms(mu_val, gamma_val, rho_val, lam_val)
             cdf_raw = self._evaluate_cdf_series(flat, mu_val, gamma_val, rho_val, lam_val, series=series)
-            cdf_flat = np.mod(cdf_raw, 1.0)
+            # The anchored series G(θ) − G(0) is ≥ 0 and ≤ 1 for every
+            # θ ∈ [0, 2π]; only dust strays outside, so clip — a mod(·, 1)
+            # here would wrap −1e-17 to ≈ 1 (and 1 + 1e-17 to ≈ 0).
+            cdf_flat = cdf_raw
 
+        # exact-endpoint pins only (isclose's default rtol survives an
+        # atol override and would swallow honest tail values near 2π)
         cdf_flat = np.clip(cdf_flat, 0.0, 1.0)
-        cdf_flat[np.isclose(flat, 0.0, atol=1e-12)] = 0.0
-        cdf_flat[np.isclose(flat, 2.0 * np.pi, atol=1e-12)] = 1.0
+        cdf_flat[flat == 0.0] = 0.0
+        cdf_flat[flat == 2.0 * np.pi] = 1.0
 
         if scalar_input:
             return float(cdf_flat[0])
@@ -11311,60 +11734,98 @@ class katojones_gen(_RegressionReady, CircularContinuous):
         series = self._get_series_terms(mu_val, gamma_val, rho_val, lam_val)
         two_pi = 2.0 * np.pi
 
-        def cdf_single(theta):
-            value = self._evaluate_cdf_series(theta, mu_val, gamma_val, rho_val, lam_val, series=series)
-            value = np.mod(value, 1.0)
-            return float(np.clip(value, 0.0, 1.0))
+        # rtol=0.0 matters: isclose's default rtol against 1.0 would remap
+        # every q ≥ 1 − 1e-5 to the upper endpoint
+        close_zero = valid & np.isclose(flat, 0.0, atol=1e-12, rtol=0.0)
+        close_one = valid & np.isclose(flat, 1.0, atol=1e-12, rtol=0.0)
+        result[close_zero] = 0.0
+        result[close_one] = two_pi
 
-        for idx, q_val in enumerate(flat):
-            if not valid[idx]:
-                continue
-            if np.isclose(q_val, 0.0, atol=1e-12):
-                result[idx] = 0.0
-                continue
-            if np.isclose(q_val, 1.0, atol=1e-12):
-                result[idx] = two_pi
-                continue
+        interior = valid & ~(close_zero | close_one)
+        if not np.any(interior):
+            return float(result[0]) if scalar_input else result.reshape(q_arr.shape)
 
-            lo, hi = 0.0, two_pi
-            theta = q_val * two_pi
+        q_sub = flat[interior]
 
-            for _ in range(_KJ_NEWTON_MAXITER):
-                cdf_theta = cdf_single(theta)
-                pdf_theta = float(self._pdf(theta, mu_val, gamma_val, rho_val, lam_val))
-                residual = cdf_theta - q_val
+        def cdf_fn(t):
+            value = self._evaluate_cdf_series(
+                t, mu_val, gamma_val, rho_val, lam_val, series=series
+            )
+            return np.clip(np.asarray(value, dtype=float), 0.0, 1.0)
 
-                if abs(residual) <= _KJ_NEWTON_TOL and (hi - lo) <= _KJ_NEWTON_WIDTH_TOL:
+        def pdf_fn(t):
+            return np.asarray(
+                self._pdf(t, mu_val, gamma_val, rho_val, lam_val), dtype=float
+            )
+
+        # Bracket on a coarse grid of the series cdf, then one shared
+        # bracket-safeguarded Newton over the unconverged subset (the former
+        # per-quantile scalar loop re-evaluated the series per q per step).
+        grid = np.linspace(0.0, two_pi, 33)
+        f_grid = cdf_fn(grid)
+        idx = np.clip(np.sum(f_grid[:, None] <= q_sub[None, :], axis=0), 1, 32)
+        lower = grid[idx - 1]
+        upper = grid[idx]
+        f_lo = f_grid[idx - 1]
+        f_hi = f_grid[idx]
+        span = np.clip(f_hi - f_lo, 1e-300, None)
+        theta = lower + (upper - lower) * np.clip((q_sub - f_lo) / span, 0.0, 1.0)
+
+        residual = cdf_fn(theta) - q_sub
+        lower = np.where(residual <= 0.0, theta, lower)
+        upper = np.where(residual > 0.0, theta, upper)
+        act = np.flatnonzero(np.abs(residual) > _KJ_NEWTON_TOL)
+        for _ in range(_KJ_NEWTON_MAXITER):
+            if not act.size:
+                break
+            th_a = theta[act]
+            lo_a = lower[act]
+            hi_a = upper[act]
+            p_a = pdf_fn(th_a)
+            step = residual[act] / np.clip(p_a, np.finfo(float).tiny, None)
+            th_n = th_a - step
+            bad = (
+                ~np.isfinite(th_n)
+                | (th_n <= lo_a)
+                | (th_n >= hi_a)
+                | (p_a <= 0.0)
+                | ~np.isfinite(p_a)
+            )
+            th_n = np.where(bad, 0.5 * (lo_a + hi_a), th_n)
+            r_n = cdf_fn(th_n) - q_sub[act]
+            theta[act] = th_n
+            residual[act] = r_n
+            lower[act] = np.where(r_n <= 0.0, th_n, lo_a)
+            upper[act] = np.where(r_n > 0.0, th_n, hi_a)
+            act = act[np.abs(r_n) > _KJ_NEWTON_TOL]
+
+        # width certificate: one probe pass settles sharp cells with two
+        # cdf evals; only flat-zone stragglers fall through to bisection
+        need = np.flatnonzero(upper - lower > _KJ_NEWTON_WIDTH_TOL)
+        if need.size:
+            w = 0.4 * _KJ_NEWTON_WIDTH_TOL
+            lo_p = np.maximum(theta[need] - w, lower[need])
+            hi_p = np.minimum(theta[need] + w, upper[need])
+            below = cdf_fn(lo_p) - q_sub[need] <= 0.0
+            above = cdf_fn(hi_p) - q_sub[need] > 0.0
+            lower[need] = np.where(below, lo_p, lower[need])
+            upper[need] = np.where(above, hi_p, upper[need])
+
+        rem = np.flatnonzero(upper - lower > _KJ_NEWTON_WIDTH_TOL)
+        if rem.size:
+            lo_u = lower[rem]
+            hi_u = upper[rem]
+            q_u = q_sub[rem]
+            for _ in range(40):
+                if np.all(hi_u - lo_u <= _KJ_NEWTON_WIDTH_TOL):
                     break
+                mid = 0.5 * (lo_u + hi_u)
+                go_up = cdf_fn(mid) <= q_u
+                lo_u = np.where(go_up, mid, lo_u)
+                hi_u = np.where(go_up, hi_u, mid)
+            theta[rem] = 0.5 * (lo_u + hi_u)
 
-                if residual > 0.0:
-                    hi = min(hi, theta)
-                else:
-                    lo = max(lo, theta)
-
-                if pdf_theta <= 0.0 or not np.isfinite(pdf_theta):
-                    theta = 0.5 * (lo + hi)
-                    continue
-
-                step = residual / pdf_theta
-                theta_candidate = theta - step
-                if not np.isfinite(theta_candidate) or theta_candidate <= lo or theta_candidate >= hi:
-                    theta = 0.5 * (lo + hi)
-                else:
-                    theta = theta_candidate
-
-                if (hi - lo) <= _KJ_NEWTON_WIDTH_TOL:
-                    break
-            else:
-                for _ in range(30):
-                    mid = 0.5 * (lo + hi)
-                    if cdf_single(mid) > q_val:
-                        hi = mid
-                    else:
-                        lo = mid
-                theta = 0.5 * (lo + hi)
-
-            result[idx] = theta % two_pi
+        result[interior] = theta % two_pi
 
         if scalar_input:
             return float(result[0])
