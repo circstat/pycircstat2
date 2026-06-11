@@ -1652,7 +1652,7 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
 
     Notes
     -----
-    Implementation based on Section 4.3.4 of Pewsey et al. (2014).
+    Implementation based on Section 4.3.4 of Pewsey et al. (2013).
     """
 
     # --- regression overlay (Phase 1 contract; read by the regression engine
@@ -2230,7 +2230,7 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
 
     Note
     ----
-    Implementation based on Section 4.3.5 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.5 of Pewsey et al. (2013)
     """
 
     # --- regression overlay (Phase 1 contract; read by the regression engine
@@ -2904,7 +2904,7 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
 
     Notes
     -----
-    Implementation based on Section 4.3.7 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.7 of Pewsey et al. (2013)
     """
 
     # --- regression overlay (Phase 1 contract; read by the regression engine
@@ -3690,7 +3690,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
 
     Notes
     -----
-    Implementation based on Section 4.3.6 of Pewsey et al. (2014).
+    Implementation based on Section 4.3.6 of Pewsey et al. (2013).
     """
 
     # --- regression overlay (Phase 1 contract; read by the regression engine
@@ -3722,7 +3722,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         rho = np.asarray(rho, dtype=float)
         d = x - mu
         s, c = np.sin(d), np.cos(d)
-        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        w = 1.0 / ((1.0 - rho) ** 2 + 4.0 * rho * np.sin(0.5 * d) ** 2)
         return {
             "mu": 2.0 * rho * s * w,
             "rho": -2.0 * rho / (1.0 - rho**2) - (2.0 * rho - 2.0 * c) * w,
@@ -3738,7 +3738,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         rho = np.asarray(rho, dtype=float)
         d = x - mu
         s, c = np.sin(d), np.cos(d)
-        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        w = 1.0 / ((1.0 - rho) ** 2 + 4.0 * rho * np.sin(0.5 * d) ** 2)
         Dm, Dr = -2.0 * rho * s, 2.0 * rho - 2.0 * c
         w2 = w * w
         return {
@@ -3760,7 +3760,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         rho = np.asarray(rho, dtype=float)
         d = x - mu
         s, c = np.sin(d), np.cos(d)
-        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        w = 1.0 / ((1.0 - rho) ** 2 + 4.0 * rho * np.sin(0.5 * d) ** 2)
         Dm, Dr = -2.0 * rho * s, 2.0 * rho - 2.0 * c
         Dmm, Dmr, Drr = 2.0 * rho * c, -2.0 * s, 2.0
         Dmmm, Dmmr = 2.0 * rho * s, 2.0 * c
@@ -3794,7 +3794,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
         rho = np.asarray(rho, dtype=float)
         d = x - mu
         s, c = np.sin(d), np.cos(d)
-        w = 1.0 / (1.0 + rho**2 - 2.0 * rho * c)
+        w = 1.0 / ((1.0 - rho) ** 2 + 4.0 * rho * np.sin(0.5 * d) ** 2)
         Dm, Dr = -2.0 * rho * s, 2.0 * rho - 2.0 * c
         Dmm, Dmr, Drr = 2.0 * rho * c, -2.0 * s, 2.0
         Dmmm, Dmmr = 2.0 * rho * s, 2.0 * c
@@ -4195,14 +4195,14 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
             mu_param, rho_param = params
             if not (0.0 <= rho_param < 1.0):
                 return np.inf
-            denom = np.clip(1.0 + rho_param**2 - 2.0 * rho_param * np.cos(x - mu_param), 1e-15, None)
+            denom = (1.0 - rho_param) ** 2 + 4.0 * rho_param * np.sin(0.5 * (x - mu_param)) ** 2
             log_pdf = np.log1p(-rho_param**2) - np.log(2.0 * np.pi) - np.log(denom)
             value = -np.sum(w * log_pdf)
             return float(value)
 
         def grad(params):
             mu_param, rho_param = params
-            denom = np.clip(1.0 + rho_param**2 - 2.0 * rho_param * np.cos(x - mu_param), 1e-15, None)
+            denom = (1.0 - rho_param) ** 2 + 4.0 * rho_param * np.sin(0.5 * (x - mu_param)) ** 2
             cos_term = np.cos(x - mu_param)
             sin_term = np.sin(x - mu_param)
 
@@ -4303,7 +4303,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
 
     References
     ----------
-    - Section 4.3.8 of Pewsey et al. (2014)
+    - Section 4.3.8 of Pewsey et al. (2013)
 
     """
 
@@ -4315,7 +4315,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
     mu : float
         The mean direction of the distribution (0 <= mu <= 2*pi).
     kappa : float
-        The concentration parameter of the distribution (kappa > 0).
+        The concentration parameter of the distribution (kappa >= 0; kappa = 0 is the circular uniform limit).
 
     Returns
     -------
@@ -4437,7 +4437,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         return (
             (mu_arr >= 0.0)
             & (mu_arr <= 2.0 * np.pi)
-            & (kappa_arr > 0.0)
+            & (kappa_arr >= 0.0)
         )
 
     def _pdf(self, x, mu, kappa):
@@ -4460,7 +4460,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
         kappa : float
-            The concentration parameter of the distribution (kappa > 0).
+            The concentration parameter of the distribution (kappa >= 0; kappa = 0 is the circular uniform limit).
 
         Returns
         -------
@@ -4487,7 +4487,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
         kappa : float
-            The concentration parameter of the distribution (kappa > 0).
+            The concentration parameter of the distribution (kappa >= 0; kappa = 0 is the circular uniform limit).
 
         Returns
         -------
@@ -4598,7 +4598,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
         kappa : float
-            The concentration parameter of the distribution (kappa > 0).
+            The concentration parameter of the distribution (kappa >= 0; kappa = 0 is the circular uniform limit).
 
         Returns
         -------
@@ -4661,7 +4661,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         mu : float
             The mean direction of the distribution (0 <= mu <= 2*pi).
         kappa : float
-            The concentration parameter of the distribution (kappa > 0).
+            The concentration parameter of the distribution (kappa >= 0; kappa = 0 is the circular uniform limit).
 
         Returns
         -------
@@ -4760,8 +4760,13 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         -------
         mean : float
             The circular mean direction (in radians), equal to `mu`.
+            At the uniform limit ``kappa = 0`` (admitted per the book)
+            the mean resultant length is 0 and no mean direction exists —
+            returns ``nan``, matching the base-class convention.
         """
-        (mu, _) = self._parse_args(*args, **kwargs)[0]
+        (mu, kappa) = self._parse_args(*args, **kwargs)[0]
+        if np.isclose(A1(kappa), 0.0, atol=1e-12):
+            return float("nan")
         return mu
 
     def median(self, *args, **kwargs):
@@ -4772,8 +4777,13 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         -------
         median : float
             The circular median direction (in radians), equal to `mu`.
+            At the uniform limit ``kappa = 0`` falls back to the
+            base-class linearized convention ``ppf(0.5)`` (= π).
         """
-        return self.mean(*args, **kwargs)
+        (mu, kappa) = self._parse_args(*args, **kwargs)[0]
+        if np.isclose(A1(kappa), 0.0, atol=1e-12):
+            return super().median(*args, **kwargs)
+        return mu
 
     def var(self, *args, **kwargs):
         """
@@ -4794,11 +4804,13 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         Returns
         -------
         std : float
-            The circular standard deviation, derived from `kappa`.
+            The circular standard deviation, derived from `kappa`;
+            ``inf`` at the uniform limit ``kappa = 0`` (R = 0).
         """
         (_, kappa) = self._parse_args(*args, **kwargs)[0]
         r = A1(kappa)
-
+        if np.isclose(r, 0.0, atol=1e-12):
+            return float("inf")
         return np.sqrt(-2 * np.log(r))
 
     def entropy(self, *args, **kwargs):
@@ -5735,7 +5747,7 @@ class vonmises_flattopped_gen(CircularContinuous):
     Note
     ----
     Parameters must be scalar; cached normalization tables are built per parameter set.
-    Implementation based on Section 4.3.10 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.10 of Pewsey et al. (2013)
     """
 
     def __init__(self, *args, **kwargs):
@@ -6523,7 +6535,7 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
     accept per-observation parameter arrays (the regression contract),
     normalised through the shared log-space Gauss–Legendre ladder
     (``_jp_log_c_vec``). Other methods (cdf, rvs, …) remain scalar-only.
-    Implementation based on Section 4.3.9 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.9 of Pewsey et al. (2013)
     """
 
     # --- regression overlay (Phase 1 contract; read by the regression engine
@@ -7944,7 +7956,7 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
     Scalar parameters use cached normalisation tables; ``pdf``/``logpdf`` also
     accept per-observation parameter arrays (the regression contract). Other
     methods (cdf, rvs, …) remain scalar-only.
-    Implementation based on Section 4.3.11 of Pewsey et al. (2014)
+    Implementation based on Section 4.3.11 of Pewsey et al. (2013)
     """
 
     # --- regression overlay (Phase 1 contract; read by the regression engine
@@ -8665,7 +8677,7 @@ class jonespewsey_asym_gen(CircularContinuous):
     Note
     ----
     Parameters must be scalar; cached normalisation tables are built per parameter set.
-    Implementation from 4.3.12 of Pewsey et al. (2014)
+    Implementation from 4.3.12 of Pewsey et al. (2013)
     """
 
     def __init__(self, *args, **kwargs):
@@ -8683,7 +8695,7 @@ class jonespewsey_asym_gen(CircularContinuous):
             & (kappa_arr >= 0.0)
             & np.isfinite(kappa_arr)
             & np.isfinite(psi_arr)
-            & (nu_arr >= 0.0)
+            & (nu_arr > -1.0)
             & (nu_arr < 1.0)
         )
 
@@ -8746,7 +8758,7 @@ class jonespewsey_asym_gen(CircularContinuous):
         psi : float
             Shape parameter, $-\infty \leq \psi \leq \infty$. When $\psi = 0$, the distribution reduces to a simpler von Mises-like form.
         nu : float
-            Asymmetry parameter, $0 \leq \nu < 1$. Introduces skewness in the circular distribution.
+            Asymmetry parameter, $-1 < \nu < 1$. Introduces skewness in the circular distribution.
 
         Returns
         -------
@@ -8805,7 +8817,7 @@ class jonespewsey_asym_gen(CircularContinuous):
         psi : float
             Shape parameter.
         nu : float
-            Asymmetry parameter, 0 <= nu < 1.
+            Asymmetry parameter, -1 < nu < 1.
 
         Returns
         -------
@@ -8898,7 +8910,7 @@ class jonespewsey_asym_gen(CircularContinuous):
                 q_int = q_valid[interior]
                 eps = 1e-15
                 q_clipped = np.clip(q_int, eps, 1.0 - eps)
-                if kappa_val < _JP_KAPPA_TOL and nu_val < 1e-12:
+                if kappa_val < _JP_KAPPA_TOL and abs(nu_val) < 1e-12:
                     theta_vals[interior] = two_pi * q_clipped
                 elif _jp_cdf_use_ladder(kappa_val, psi_val):
                     # deep ψ < 0: table-initialized exact u-space solve
@@ -8997,8 +9009,8 @@ class jonespewsey_asym_gen(CircularContinuous):
         kappa_val = _jp_ensure_scalar(kappa, "kappa")
         psi_val = _jp_ensure_scalar(psi, "psi")
         nu_val = _jp_ensure_scalar(nu, "nu")
-        if not (0.0 <= nu_val < 1.0):
-            raise ValueError("`nu` must lie in [0, 1).")
+        if not (-1.0 < nu_val < 1.0):
+            raise ValueError("`nu` must lie in (-1, 1).")
 
         if size is None:
             size_tuple = ()
@@ -9015,27 +9027,30 @@ class jonespewsey_asym_gen(CircularContinuous):
             samples = rng.uniform(0.0, two_pi, size=total)
             return samples.reshape(size_tuple)
 
-        if abs(psi_val) < _JP_PSI_TOL and nu_val < 1e-12:
+        if abs(psi_val) < _JP_PSI_TOL and abs(nu_val) < 1e-12:
             return vonmises.rvs(mu=xi_val, kappa=kappa_val, size=size_tuple or None, random_state=rng)
 
         # In the kernel's own angle U = g(Φ) the target law has density
         # ∝ kernel(u)/g′(g⁻¹(u)): propose u from the pure-kernel table
         # (exact at any spike depth — see ``_jp_quantile_table``), accept
-        # with the bounded weight ratio (1−ν)/g′ ∈ [(1−ν)/(1+ν), 1], then
-        # invert the monotone warp by bisection. (The previous von Mises
-        # rejection envelope shared the symmetric sampler's blindness to
-        # sub-grid ψ < 0 spikes.)
+        # with the bounded weight ratio (1−|ν|)/g′ ≤ 1 (min g′ = 1 − |ν|
+        # for either sign of ν), then invert the monotone warp by
+        # bisection. (The previous von Mises rejection envelope shared the
+        # symmetric sampler's blindness to sub-grid ψ < 0 spikes.)
         two_pi_f = 2.0 * np.pi
         samples = np.empty(total, dtype=float)
         filled = 0
         while filled < total:
             remaining = total - filled
             u_prop = _jp_sample_table(kappa_val, psi_val, remaining, rng)
-            # map into g's principal range [−π−ν, π−ν] (kernel is periodic)
+            # map into g's principal range [−π−ν, π−ν] (kernel is
+            # periodic; for ν > 0 the table's upper sliver folds down, for
+            # ν < 0 the lower sliver folds up)
             u_prop = np.where(u_prop > np.pi - nu_val, u_prop - two_pi_f, u_prop)
+            u_prop = np.where(u_prop < -np.pi - nu_val, u_prop + two_pi_f, u_prop)
             phi = _jp_warp_inv(u_prop, nu_val)
             accept = rng.uniform(0.0, 1.0, size=remaining) <= (
-                (1.0 - nu_val) / (1.0 - nu_val * np.sin(phi))
+                (1.0 - abs(nu_val)) / (1.0 - nu_val * np.sin(phi))
             )
             n_accept = int(np.sum(accept))
             if n_accept > 0:
@@ -9053,7 +9068,8 @@ class jonespewsey_asym_gen(CircularContinuous):
         Sampling works in the kernel's own angle: proposals come from the
         symmetric kernel's quantile table (exact at any concentration), the
         warp's Jacobian enters as a bounded acceptance weight
-        ``(1−ν)/g′ ≥ (1−ν)/(1+ν)``, and the monotone warp is inverted by
+        ``(1−|ν|)/g′ ≤ 1`` (min g′ = 1 − |ν| for either sign), and the
+        monotone warp is inverted by
         bisection. Uniform and von Mises limits are handled explicitly.
         """
         return super().rvs(xi, kappa, psi, nu, size=size, random_state=random_state)
@@ -9093,7 +9109,7 @@ class jonespewsey_asym_gen(CircularContinuous):
         optimizer="L-BFGS-B",
         psi_bounds=(-4.0, 4.0),
         kappa_bounds=(1e-6, 1e3),
-        nu_bounds=(0.0, 0.99),
+        nu_bounds=(-0.99, 0.99),
         base_kwargs=None,
         **kwargs,
     ):
@@ -9281,10 +9297,11 @@ def _jp_warp_inv(u, nu):
 def _jp_ladder_edges_asym(kappa, psi, nu):
     """Break-point ladder in the kernel's own angle u = g(φ) over one
     period [−π − ν, π − ν]: decade rungs at the ``_jp_feature_scales`` of
-    the peak (u = 0, interior) and the antipodal near-kink (u ≡ ±π; −π is
-    interior, +π sits ν beyond the upper end so only its inward rungs
-    land), plus rungs for the weight 1/g′'s own bump at u = g(π/2) = π/2
-    of u-width ~(1−ν)^{3/2} — unresolved it costs ~1e-5 relative at
+    the peak (u = 0, interior) and the antipodal near-kink (u ≡ ±π; for
+    ν > 0 only −π is interior, for ν < 0 only +π — candidates outside the
+    window are filtered), plus rungs for the weight 1/g′'s own bump at
+    u = g(±π/2) = ±π/2 (the +π/2 bump for ν > 0, −π/2 for ν < 0) of
+    u-width ~(1−|ν|)^{3/2} — unresolved it costs ~1e-5 relative at
     ν = 0.9 (the kernel ladders have no rungs mid-window)."""
     two_pi = 2.0 * np.pi
     lo, hi = -np.pi - nu, np.pi - nu
@@ -9298,13 +9315,16 @@ def _jp_ladder_edges_asym(kappa, psi, nu):
         r *= 10.0
     r = w_anti
     while r < two_pi:
-        for cand in (-np.pi - r, -np.pi + r, np.pi - r):
+        for cand in (-np.pi - r, -np.pi + r, np.pi - r, np.pi + r):
             if lo < cand < hi:
                 edge_set.add(cand)
         r *= 10.0
-    r = max((1.0 - nu) ** 1.5, 1e-3)
+    # the 1/g′ weight bump sits at u = g(±π/2) = ±π/2 (at +π/2 for ν > 0,
+    # at −π/2 for ν < 0); rung both, the window filter drops the inert one
+    r = max((1.0 - abs(nu)) ** 1.5, 1e-3)
     while r < two_pi:
-        for cand in (0.5 * np.pi - r, 0.5 * np.pi + r):
+        for cand in (0.5 * np.pi - r, 0.5 * np.pi + r,
+                     -0.5 * np.pi - r, -0.5 * np.pi + r):
             if lo < cand < hi:
                 edge_set.add(cand)
         r *= 10.0
@@ -9404,9 +9424,11 @@ def _jp_ppf_ladder_asym(q, xi, kappa, psi, nu):
     C_nu = float(_jp_weighted_cum_asym(np.array([nu]), kappa, psi, nu)[0]) / z
     u_t = (np.asarray(q, dtype=float) + H_start + C_nu) % 1.0
     u0 = _jp_table_invert(u_t, kappa, psi)
-    # the kernel table spans [−π, π]; map its (π − ν, π] sliver onto the
-    # equivalent (−π − ν, −π] stretch of the aeJP period (cf. _rvs)
+    # the kernel table spans [−π, π]; fold the out-of-window sliver onto
+    # the equivalent stretch of the aeJP period [−π − ν, π − ν] (upper
+    # sliver for ν > 0, lower for ν < 0 — cf. _rvs)
     u0 = np.where(u0 > np.pi - nu, u0 - two_pi, u0)
+    u0 = np.where(u0 < -np.pi - nu, u0 + two_pi, u0)
 
     def cdf_fn(u):
         return _jp_weighted_cum_asym(u, kappa, psi, nu) / z
@@ -9427,7 +9449,7 @@ class inverse_batschelet_gen(CircularContinuous):
 
     ![inverse-batschelet](../images/circ-mod-inverse-batschelet.png)
 
-    The inverse Batschelet family (Pewsey, Neuhaüser & Ruxton, 2014, §4.3.13)
+    The inverse Batschelet family (Pewsey, Neuhäuser & Ruxton, 2013, §4.3.13)
     extends the von Mises distribution by applying two inverse angular warps:
     a "peakedness" transform controlled by $\nu$, and an inverse
     Batschelet skew transform governed by $\lambda$. The resulting density on
@@ -10589,8 +10611,8 @@ class wrapstable_gen(CircularContinuous):
             & (delta_arr <= 2.0 * np.pi)
             & (alpha_arr > 0.0)
             & (alpha_arr <= 2.0)
-            & (beta_arr > -1.0)
-            & (beta_arr < 1.0)
+            & (beta_arr >= -1.0)
+            & (beta_arr <= 1.0)
             & (gamma_arr > 0.0)
         )
 
@@ -10947,8 +10969,8 @@ class wrapstable_gen(CircularContinuous):
 
         if not (0.0 < alpha_val <= 2.0):
             raise ValueError("`alpha` must lie in (0, 2].")
-        if not (-1.0 < beta_val < 1.0):
-            raise ValueError("`beta` must lie in (-1, 1).")
+        if not (-1.0 <= beta_val <= 1.0):
+            raise ValueError("`beta` must lie in [-1, 1].")
         if not (gamma_val > 0.0):
             raise ValueError("`gamma` must be positive.")
 

@@ -9,7 +9,7 @@ from pycircstat2.utils import A1inv
 
 
 def _lung_dataframe(drop_feb_outliers: bool = True) -> "pl.DataFrame":
-    """Pewsey, Neuhäuser & Ruxton (2014) §8.4.1 lung-disease deaths."""
+    """Pewsey, Neuhäuser & Ruxton (2013) §8.4.1 lung-disease deaths."""
     df = load_data("lung_deaths", source="pewsey")
     df = df.with_columns(((np.pi / 6) * pl.col("month")).alias("theta"))
     df = df.rename({"deaths": "y"})

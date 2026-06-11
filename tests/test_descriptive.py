@@ -392,7 +392,7 @@ def test_circ_dispersion():
 
 
 def test_circ_moment():
-    # Section 3.2, Pewsey (2014) P24
+    # Section 3.2, Pewsey (2013) P24
 
     b11 = load_data("B11", source="fisher")["θ"].to_numpy()
     c11 = Circular(data=b11)

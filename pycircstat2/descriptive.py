@@ -302,7 +302,7 @@ def circ_skewness(alpha: np.ndarray, w: Optional[np.ndarray] = None) -> float:
 
     $$\hat s = [\hat\rho_2 \sin(\hat\mu_2 - 2 \hat\mu_1)] / (1 - \hat\rho_1)^{\frac{3}{2}}$$
 
-    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by NOT centering the second moment.
+    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2013) by NOT centering the second moment.
 
     Parameters
     ----------
@@ -338,7 +338,7 @@ def circ_kurtosis(alpha: np.ndarray, w: Optional[np.ndarray] = None) -> float:
 
     $$\hat k = [\hat\rho_2 \cos(\hat\mu_2 - 2 \hat\mu_1) - \hat\rho_1^4] / (1 - \hat\rho_1)^{2}$$
 
-    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2014) by **NOT** centering the second moment.
+    But unlike the implementation of Fisher (1993), here we followed Pewsey et al. (2013) by **NOT** centering the second moment.
 
     Parameters
     ----------

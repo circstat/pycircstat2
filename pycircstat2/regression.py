@@ -616,7 +616,7 @@ class CLRegression:
     References
     ----------
     - Fisher, N. I. (1993). Statistical analysis of circular data. Cambridge University Press.
-    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2014) Circular Statistics in R. Oxford University Press.
+    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2013) Circular Statistics in R. Oxford University Press.
     """
 
     def __init__(
@@ -1876,7 +1876,7 @@ class CCRegression:
     References
     ----------
     - Jammalamadaka, S. R., & Sengupta, A. (2001) Topics in Circular Statistics. World Scientific.
-    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2014) Circular Statistics in R. Oxford University Press.
+    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2013) Circular Statistics in R. Oxford University Press.
     """
 
     def __init__(
@@ -2616,7 +2616,7 @@ class LCRegression:
     The right-hand side accepts either a marker that expands to a Fourier
     basis, or fully explicit ``cos(...) / sin(...)`` terms (or both).
 
-    - ``"y ~ harmonic(theta)"`` — basic cosine model (Pewsey et al. 2014, §8.4.1)
+    - ``"y ~ harmonic(theta)"`` — basic cosine model (Pewsey et al. 2013, §8.4.1)
     - ``"y ~ harmonic(theta, k=K)"`` — extended model with K harmonics (§8.4.2)
     - ``"y ~ cos(theta) + sin(theta) + cos(3*theta) + sin(3*theta)"`` —
       fully explicit; useful for non-contiguous harmonic orders
@@ -2673,7 +2673,7 @@ class LCRegression:
 
     References
     ----------
-    Pewsey, A., Neuhäuser, M., Ruxton, G. D. (2014). *Circular Statistics
+    Pewsey, A., Neuhäuser, M., Ruxton, G. D. (2013). *Circular Statistics
     in R*. Oxford University Press, §8.4.
     """
 
