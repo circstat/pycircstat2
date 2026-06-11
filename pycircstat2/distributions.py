@@ -5964,17 +5964,23 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         if abs(psi_val) < _JP_PSI_TOL:
             return vonmises.cdf(arr, mu=mu_val, kappa=kappa_val)
 
-        try:
-            n_idx, coeffs = self._jp_get_series(kappa_val, psi_val)
-        except Exception:  # pragma: no cover - defensive fallback
-            cdf_vals = self._cdf_from_pdf(arr, mu_val, kappa_val, psi_val)
-            return np.asarray(cdf_vals, dtype=float).reshape(arr.shape)
-
         phi_start = (-mu_val) % two_pi
         phi_end = (flat - mu_val) % two_pi
 
-        H_start = float(self._jp_series_cumulative(np.array([phi_start]), n_idx, coeffs)[0])
-        H_end = self._jp_series_cumulative(phi_end, n_idx, coeffs)
+        if _jp_cdf_use_ladder(kappa_val, psi_val):
+            # deep ψ < 0: exact ladder cumulative (P1-C) — the series
+            # grid cannot resolve the spike there
+            H_start = float(_jp_cum01(np.array([phi_start]), kappa_val, psi_val)[0][0])
+            H_end = _jp_cum01(phi_end, kappa_val, psi_val)[0]
+        else:
+            try:
+                n_idx, coeffs = self._jp_get_series(kappa_val, psi_val)
+            except Exception:  # pragma: no cover - defensive fallback
+                cdf_vals = self._cdf_from_pdf(arr, mu_val, kappa_val, psi_val)
+                return np.asarray(cdf_vals, dtype=float).reshape(arr.shape)
+
+            H_start = float(self._jp_series_cumulative(np.array([phi_start]), n_idx, coeffs)[0])
+            H_end = self._jp_series_cumulative(phi_end, n_idx, coeffs)
 
         cdf = np.where(
             phi_end >= phi_start,
@@ -5998,7 +6004,11 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         Coefficients are cached per parameter set and the routine falls back to
         numerical quadrature only when the series becomes unstable,
         reproducing the von Mises limit as $\psi \to 0$ and the uniform limit
-        as $\kappa \to 0$.
+        as $\kappa \to 0$. For deep $\psi < 0$ spikes beyond the series
+        resolution (roughly $\kappa\psi \lesssim -3$) the routine switches to
+        an exact composite Gauss--Legendre cumulative on the same
+        feature-scale ladder that serves the normalizer and the sampler, so
+        CDF values stay correct at any representable spike depth.
 
         Parameters
         ----------
@@ -6048,6 +6058,13 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
                 elif abs(psi_val) < _JP_PSI_TOL:
                     vm = vonmises(kappa=kappa_val, mu=mu_val)
                     theta_vals[interior] = vm.ppf(q_clipped)
+                elif _jp_cdf_use_ladder(kappa_val, psi_val):
+                    # deep ψ < 0: table-initialized exact solve (P1-C) —
+                    # the generic Newton scaffold cannot land inside a
+                    # sub-resolution spike from a uniform start
+                    theta_vals[interior] = _jp_ppf_ladder(
+                        q_clipped, mu_val, kappa_val, psi_val
+                    )
                 else:
                     theta_curr = two_pi * q_clipped
                     L = np.zeros_like(theta_curr)
@@ -6128,6 +6145,9 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         slope.  Bracketing and bisection polishing guarantee convergence on the
         circular interval [0, 2π] while the implementation switches to the
         closed-form von Mises or uniform solutions in their respective limits.
+        For deep ψ < 0 spikes the solve runs in the centered angle against the
+        exact ladder CDF instead, initialized by the sampler's quantile-table
+        inverse, which lands inside the spike at any representable depth.
 
         Parameters
         ----------
@@ -6482,11 +6502,12 @@ def _jp_feature_scales(kappa, psi):
         keff = max(kappa, 1e-12)
         w_peak = float(np.clip(1.0 / np.sqrt(keff), 1e-320, 1.0))
     else:
-        if A >= 0.0:
-            log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
-        else:
-            log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
-        with np.errstate(over="ignore"):
+        with np.errstate(over="ignore"):  # expm1 → inf is fine: w_peak
+            # lands on the 1e-320 denormal guard either way
+            if A >= 0.0:
+                log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+            else:
+                log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
             w_peak = float(np.clip(np.exp(-0.5 * log_keff), 1e-320, 1.0))
     w_anti = float(np.clip(2.0 * np.exp(-abs(A)), 1e-320, 1.0))
     return w_peak, w_anti
@@ -6504,15 +6525,12 @@ def _gl_panels_from_edges(edges):
     return np.concatenate(nodes), np.concatenate(wts)
 
 
-def _jp_gl_panels(kappa, psi):
-    """[0, π] composite Gauss–Legendre nodes/weights on the JP break-point
-    ladder (the kernel is even in φ, so a half-circle sweep suffices).
-
-    Rungs grow geometrically from *both* ends at the ``_jp_feature_scales``
-    of the peak and the antipodal near-kink. Every panel spans at most one
-    decade of its feature scale, so 24-point GL per panel is at quadrature
-    precision. Returns ``(nodes, weights)``.
-    """
+def _jp_ladder_edges(kappa, psi):
+    """Break-point ladder over the half circle [0, π]: rungs grow
+    geometrically (decade steps) from *both* ends at the
+    ``_jp_feature_scales`` of the peak (φ = 0) and the antipodal near-kink
+    (φ = π), so every panel spans at most one decade of its feature scale.
+    Returns the sorted edge array."""
     w_peak, w_anti = _jp_feature_scales(kappa, psi)
     edge_set = {0.0, float(np.pi)}
     r = w_peak
@@ -6523,7 +6541,16 @@ def _jp_gl_panels(kappa, psi):
     while r < np.pi:
         edge_set.add(float(np.pi) - r)
         r *= 10.0
-    return _gl_panels_from_edges(sorted(edge_set))
+    return np.asarray(sorted(edge_set))
+
+
+def _jp_gl_panels(kappa, psi):
+    """[0, π] composite Gauss–Legendre nodes/weights on the JP break-point
+    ladder (the kernel is even in φ, so a half-circle sweep suffices) —
+    24-point GL per ``_jp_ladder_edges`` panel is at quadrature precision.
+    Returns ``(nodes, weights)``.
+    """
+    return _gl_panels_from_edges(_jp_ladder_edges(kappa, psi))
 
 
 @lru_cache(maxsize=1024)
@@ -6539,17 +6566,7 @@ def _jp_quantile_table(kappa: float, psi: float):
     (knot spacing ≤ 7% of the local scale ⇒ cdf bias ≪ KS resolution).
     Returns ``(phi, cdf, dens)`` with cdf[0] = 0, cdf[-1] = 1.
     """
-    w_peak, w_anti = _jp_feature_scales(kappa, psi)
-    edge_set = {0.0, float(np.pi)}
-    r = w_peak
-    while r < np.pi:
-        edge_set.add(r)
-        r *= 10.0
-    r = w_anti
-    while r < np.pi:
-        edge_set.add(float(np.pi) - r)
-        r *= 10.0
-    edges = np.asarray(sorted(edge_set))
+    edges = _jp_ladder_edges(kappa, psi)
 
     half = [0.0]
     for a, b in zip(edges[:-1], edges[1:]):
@@ -6568,12 +6585,15 @@ def _jp_quantile_table(kappa: float, psi: float):
     return phi, cdf / total, dens / total
 
 
-def _jp_sample_table(kappa, psi, total, rng):
-    """Draw ``total`` centered angles from the JP kernel law by inverse
-    transform on ``_jp_quantile_table``: locate the cell by searchsorted,
-    then invert the cell's quadratic cdf (linear density) in closed form."""
+def _jp_table_invert(u, kappa, psi):
+    """Invert the ``_jp_quantile_table`` cdf at probabilities ``u``: locate
+    the cell by searchsorted, then invert the cell's quadratic cdf (linear
+    density) in closed form. Returns centered angles in [−π, π] — exact for
+    the table's piecewise-linear density at any representable spike depth.
+    Serves the sampler (with uniform draws) and the deep-cdf ppf branch
+    (with target probabilities, as the Newton initialization)."""
     phi, cdf, dens = _jp_quantile_table(float(kappa), float(psi))
-    u = rng.random(total)
+    u = np.asarray(u, dtype=float)
     idx = np.clip(np.searchsorted(cdf, u, side="right") - 1, 0, len(phi) - 2)
     du = u - cdf[idx]
     dx = phi[idx + 1] - phi[idx]
@@ -6587,6 +6607,173 @@ def _jp_sample_table(kappa, psi, total, rng):
         t_lin = du / np.maximum(b, np.finfo(float).tiny)
     t = np.clip(np.where(lin, t_lin, t_quad), 0.0, 1.0)
     return phi[idx] + t * dx
+
+
+def _jp_sample_table(kappa, psi, total, rng):
+    """Draw ``total`` centered angles from the JP kernel law by inverse
+    transform on ``_jp_quantile_table`` (see ``_jp_table_invert``)."""
+    return _jp_table_invert(rng.random(total), kappa, psi)
+
+
+# --- deep-spike cdf/ppf branch (methods-parity P1-C) --------------------------
+# The series cdf path (4096-point coefficient grid, ≤ 256 harmonics) cannot
+# represent ψ < 0 spikes much narrower than the harmonic cap resolves:
+# probed 2026-06-11, its cdf error is ≤ 4e-11 at κψ = −3 for ψ ∈
+# [−2.5, −0.3] but reaches 1.5e-4 by κψ = −4 and 1.0 (at spike-interior
+# points) by −7. Below the gate the cdf is evaluated exactly instead, by
+# composite Gauss–Legendre on the same feature-scale ladder that serves the
+# normalizer and the sampler: cached cumulatives at the ladder edges plus a
+# 24-point partial panel per query.
+
+_JP_CDF_DEEP_A = -3.0  # κψ at/below which the series path is retired …
+_JP_CDF_DEEP_W = 0.06  # … or the peak feature scale that forces it
+
+
+def _jp_cdf_use_ladder(kappa, psi):
+    """True where the JP-clan cdf/ppf must leave the series / uniform-grid
+    path for the exact ladder branch: ψ < 0 with the spike near or below
+    the series resolution (the gate sits where the series is still clean,
+    so both branches agree to ~1e-10 at the boundary)."""
+    if psi >= 0.0 or kappa < _JP_KAPPA_TOL or abs(psi) < _JP_PSI_TOL:
+        return False
+    if kappa * psi <= _JP_CDF_DEEP_A:
+        return True
+    w_peak, _ = _jp_feature_scales(kappa, psi)
+    return w_peak < _JP_CDF_DEEP_W
+
+
+@lru_cache(maxsize=1024)
+def _jp_cdf_ladder(kappa: float, psi: float):
+    """Half-line cumulative tables for the centered JP kernel law: GL-exact
+    cumulatives of e^{h−κ} (base) and e^{h−κ} sin t (the sine-skew moment)
+    at the ``_jp_ladder_edges`` panel edges on [0, π]. Returns
+    ``(edges, cum_base, cum_skew)`` with ``cum_*[0] = 0``."""
+    edges = _jp_ladder_edges(kappa, psi)
+    nodes, wts = _gl_panels_from_edges(edges)
+    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    e = wts * np.exp(h - kappa)
+    n_gl = _JP_GL_XW[0].size
+    base = e.reshape(edges.size - 1, n_gl).sum(axis=1)
+    skew = (e * np.sin(nodes)).reshape(edges.size - 1, n_gl).sum(axis=1)
+    cum_base = np.concatenate([[0.0], np.cumsum(base)])
+    cum_skew = np.concatenate([[0.0], np.cumsum(skew)])
+    return edges, cum_base, cum_skew
+
+
+def _jp_half_cum(x, kappa, psi):
+    """R(x) = ∫₀ˣ e^{h−κ} dt and S(x) = ∫₀ˣ e^{h−κ} sin t dt for x ∈
+    [0, π]: cached edge cumulatives plus a 24-point partial panel
+    [edge_k, x] per query — quadrature-exact at any spike depth."""
+    edges, cum_base, cum_skew = _jp_cdf_ladder(kappa, psi)
+    x = np.clip(np.asarray(x, dtype=float).reshape(-1), 0.0, np.pi)
+    k = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, edges.size - 2)
+    hw = 0.5 * (x - edges[k])
+    xi_gl, w_gl = _JP_GL_XW
+    nodes = (edges[k] + hw)[:, None] + hw[:, None] * xi_gl[None, :]
+    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    e = np.exp(h - kappa)
+    base = cum_base[k] + hw * (e @ w_gl)
+    skew = cum_skew[k] + hw * ((e * np.sin(nodes)) @ w_gl)
+    return base, skew
+
+
+def _jp_cum01(phi, kappa, psi):
+    """Exact H(φ) = ∫₀^φ f_c dt and J(φ) = ∫₀^φ f_c sin t dt over
+    φ ∈ [0, 2π) for the centered normalized JP kernel law f_c (drop-in
+    replacements for the series cumulative and skew integral in the deep
+    regime). The kernel is even, so both fold onto the half-line tables:
+    H = R(φ)/Z for φ ≤ π and 1 − R(2π−φ)/Z above; J = S(min(φ, 2π−φ))/Z.
+    Beyond κψ ≈ −740 (spike below the smallest denormal) the tiny-floor
+    guard makes values best-effort, never nan — same boundary as the
+    normalizer."""
+    phi = np.asarray(phi, dtype=float).reshape(-1)
+    upper = phi > np.pi
+    x = np.where(upper, 2.0 * np.pi - phi, phi)
+    R, S = _jp_half_cum(x, kappa, psi)
+    _, cum_base, _ = _jp_cdf_ladder(kappa, psi)
+    ztot = max(2.0 * float(cum_base[-1]), np.finfo(float).tiny)
+    H = np.where(upper, 1.0 - R / ztot, R / ztot)
+    return H, S / ztot
+
+
+def _jp_solve_quantile(target, x0, lo, hi, cdf_fn, pdf_fn, tol=1e-13,
+                       max_iter=100):
+    """Vectorized safeguarded Newton on a monotone cdf: solve
+    cdf_fn(x) = target from init ``x0`` with brackets [lo, hi] (bisection
+    midpoint wherever the Newton step is non-finite or leaves the
+    bracket). Convergence is on the cdf residual — in dead-flat tails the
+    bracket midpoint is the honest answer and the iteration cap bounds the
+    cost."""
+    x = np.clip(np.asarray(x0, dtype=float), lo, hi)
+    target = np.asarray(target, dtype=float)
+    L = np.full_like(x, lo)
+    H = np.full_like(x, hi)
+    for _ in range(max_iter):
+        d = cdf_fn(x) - target
+        L = np.where(d <= 0.0, x, L)
+        H = np.where(d > 0.0, x, H)
+        done = np.abs(d) <= tol
+        if np.all(done):
+            break
+        p = pdf_fn(x)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            xn = x - d / p
+        xn = np.where(np.isfinite(xn) & (xn > L) & (xn < H), xn,
+                      0.5 * (L + H))
+        x = np.where(done, x, xn)
+    return x
+
+
+def _jp_ppf_ladder(q, mu, kappa, psi):
+    """Deep-regime JP quantiles: solve F_c(ζ) = u in the centered angle
+    (spike at ζ = 0, where doubles are dense) with the exact ladder cdf,
+    initialized by the sampler's quantile-table inverse — which lands
+    inside the spike at any representable depth. ``q`` must be interior."""
+    two_pi = 2.0 * np.pi
+    H_start, _ = _jp_cum01(np.array([(-mu) % two_pi]), kappa, psi)
+    u_t = (np.asarray(q, dtype=float) + float(H_start[0]) + 0.5) % 1.0
+    zeta0 = _jp_table_invert(u_t, kappa, psi)
+    _, cum_base, _ = _jp_cdf_ladder(kappa, psi)
+    ztot = max(2.0 * float(cum_base[-1]), np.finfo(float).tiny)
+
+    def cdf_fn(z):
+        R, _ = _jp_half_cum(np.abs(z), kappa, psi)
+        return 0.5 + np.sign(z) * R / ztot
+
+    def pdf_fn(z):
+        h = _jp_score_terms(z, kappa, psi, second=False)["h"]
+        return np.exp(h - kappa) / ztot
+
+    zeta = _jp_solve_quantile(u_t, zeta0, -np.pi, np.pi, cdf_fn, pdf_fn)
+    return np.mod(mu + zeta, two_pi)
+
+
+def _jp_ppf_ladder_sineskewed(q, xi, kappa, psi, lmbd):
+    """Deep-regime sine-skewed JP quantiles: same centered-angle solve as
+    ``_jp_ppf_ladder`` against F_c(ζ) + λ(S(|ζ|) − S(π))/Z. The init from
+    the unskewed kernel table is skew-blind, which the Newton polish
+    absorbs (inside a deep spike sin ζ ≈ 0, so the skew factor is ≈ 1
+    exactly where the init has to be precise)."""
+    two_pi = 2.0 * np.pi
+    H_s, J_s = _jp_cum01(np.array([(-xi) % two_pi]), kappa, psi)
+    _, cum_base, cum_skew = _jp_cdf_ladder(kappa, psi)
+    ztot = max(2.0 * float(cum_base[-1]), np.finfo(float).tiny)
+    sn_pi = float(cum_skew[-1])
+    g_start = float(H_s[0]) + lmbd * float(J_s[0])
+    g_c0 = 0.5 - lmbd * sn_pi / ztot
+    u_t = (np.asarray(q, dtype=float) + g_start + g_c0) % 1.0
+    zeta0 = _jp_table_invert(u_t, kappa, psi)
+
+    def cdf_fn(z):
+        R, S = _jp_half_cum(np.abs(z), kappa, psi)
+        return 0.5 + np.sign(z) * R / ztot + lmbd * (S - sn_pi) / ztot
+
+    def pdf_fn(z):
+        h = _jp_score_terms(z, kappa, psi, second=False)["h"]
+        return np.exp(h - kappa) * (1.0 + lmbd * np.sin(z)) / ztot
+
+    zeta = _jp_solve_quantile(u_t, zeta0, -np.pi, np.pi, cdf_fn, pdf_fn)
+    return np.mod(xi + zeta, two_pi)
 
 
 @lru_cache(maxsize=4096)
@@ -7055,20 +7242,27 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         if abs(psi_val) < _JP_PSI_TOL and abs(lmbd_val) < 1e-12:
             return jonespewsey.cdf(arr, mu=xi_val, kappa=kappa_val, psi=psi_val)
 
-        n_idx, coeffs = jonespewsey._jp_get_series(kappa_val, psi_val)
-
         phi_start = (-xi_val) % two_pi
         phi_end = (flat - xi_val) % two_pi
 
-        H_start = float(jonespewsey._jp_series_cumulative(np.array([phi_start]), n_idx, coeffs)[0])
-        H_end = jonespewsey._jp_series_cumulative(phi_end, n_idx, coeffs)
-
-        if abs(lmbd_val) > 0:
-            J_start = float(jonespewsey._jp_series_skew_integral(np.array([phi_start]), n_idx, coeffs)[0])
-            J_end = jonespewsey._jp_series_skew_integral(phi_end, n_idx, coeffs)
+        if _jp_cdf_use_ladder(kappa_val, psi_val):
+            # deep ψ < 0: exact ladder cumulatives for both the base and
+            # the sine-skew term (P1-C)
+            H_s, J_s = _jp_cum01(np.array([phi_start]), kappa_val, psi_val)
+            H_start, J_start = float(H_s[0]), float(J_s[0])
+            H_end, J_end = _jp_cum01(phi_end, kappa_val, psi_val)
         else:
-            J_start = 0.0
-            J_end = np.zeros_like(H_end)
+            n_idx, coeffs = jonespewsey._jp_get_series(kappa_val, psi_val)
+
+            H_start = float(jonespewsey._jp_series_cumulative(np.array([phi_start]), n_idx, coeffs)[0])
+            H_end = jonespewsey._jp_series_cumulative(phi_end, n_idx, coeffs)
+
+            if abs(lmbd_val) > 0:
+                J_start = float(jonespewsey._jp_series_skew_integral(np.array([phi_start]), n_idx, coeffs)[0])
+                J_end = jonespewsey._jp_series_skew_integral(phi_end, n_idx, coeffs)
+            else:
+                J_start = 0.0
+                J_end = np.zeros_like(H_end)
 
         base_cdf = np.where(
             phi_end >= phi_start,
@@ -7089,9 +7283,11 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         r"""
         Cumulative distribution function of the sine-skewed Jones--Pewsey law.
 
-        No closed form is available; the implementation integrates the PDF on
-        [0, 2π) using adaptive quadrature, honouring the symmetric JP and
-        uniform limits when ``lambda`` or ``kappa`` approach zero.
+        No closed form is available; the base-JP Fourier series supplies both
+        the symmetric cumulative and the sine-skew integral, honouring the
+        symmetric JP and uniform limits when ``lambda`` or ``kappa`` approach
+        zero. For deep ψ < 0 spikes beyond the series resolution both terms
+        are evaluated exactly on the kernel's feature-scale ladder instead.
         """
         return super().cdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
 
@@ -7129,6 +7325,11 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
                 elif abs(lmbd_val) < 1e-12:
                     theta_vals[interior] = jonespewsey.ppf(
                         q_clipped, mu=xi_val, kappa=kappa_val, psi=psi_val
+                    )
+                elif _jp_cdf_use_ladder(kappa_val, psi_val):
+                    # deep ψ < 0: table-initialized exact solve (P1-C)
+                    theta_vals[interior] = _jp_ppf_ladder_sineskewed(
+                        q_clipped, xi_val, kappa_val, psi_val, lmbd_val
                     )
                 else:
                     theta_curr = two_pi * q_clipped
@@ -7563,10 +7764,18 @@ class jonespewsey_asym_gen(CircularContinuous):
         phi_start = (-xi_val) % two_pi
         phi_end = (flat - xi_val) % two_pi
 
-        phi_grid, cdf_grid = self._asym_cdf_table(xi_val, kappa_val, psi_val, nu_val)
+        if _jp_cdf_use_ladder(kappa_val, psi_val):
+            # deep ψ < 0: exact u-space ladder cumulative (P1-C) — the
+            # uniform 4096-point table cannot resolve the spike there
+            H_start = float(
+                _jp_cum01_asym(np.array([phi_start]), kappa_val, psi_val, nu_val)[0]
+            )
+            H_end = _jp_cum01_asym(phi_end, kappa_val, psi_val, nu_val)
+        else:
+            phi_grid, cdf_grid = self._asym_cdf_table(xi_val, kappa_val, psi_val, nu_val)
 
-        H_start = float(np.interp(phi_start, phi_grid, cdf_grid, left=0.0, right=1.0))
-        H_end = np.interp(phi_end, phi_grid, cdf_grid, left=0.0, right=1.0)
+            H_start = float(np.interp(phi_start, phi_grid, cdf_grid, left=0.0, right=1.0))
+            H_end = np.interp(phi_end, phi_grid, cdf_grid, left=0.0, right=1.0)
 
         cdf = np.where(
             phi_end >= phi_start,
@@ -7584,6 +7793,9 @@ class jonespewsey_asym_gen(CircularContinuous):
         precomputing a high-resolution trapezoidal cumulative table for each
         parameter set.  Interpolation of this table gives fast evaluations while
         preserving the limiting cases (nu -> 0 reduces to the symmetric JP CDF).
+        For deep psi < 0 spikes beyond the table resolution the cumulative is
+        instead evaluated exactly in the kernel's own angle u = g(phi) on the
+        same feature-scale ladder that serves the normalizer and the sampler.
         """
         return super().cdf(x, xi, kappa, psi, nu, *args, **kwargs)
 
@@ -7618,6 +7830,12 @@ class jonespewsey_asym_gen(CircularContinuous):
                 q_clipped = np.clip(q_int, eps, 1.0 - eps)
                 if kappa_val < _JP_KAPPA_TOL and nu_val < 1e-12:
                     theta_vals[interior] = two_pi * q_clipped
+                elif _jp_cdf_use_ladder(kappa_val, psi_val):
+                    # deep ψ < 0: table-initialized exact u-space solve
+                    # (P1-C)
+                    theta_vals[interior] = _jp_ppf_ladder_asym(
+                        q_clipped, xi_val, kappa_val, psi_val, nu_val
+                    )
                 else:
                     theta_curr = two_pi * q_clipped
                     L = np.zeros_like(theta_curr)
@@ -7694,8 +7912,10 @@ class jonespewsey_asym_gen(CircularContinuous):
         Quantile function of the asymmetric Jones--Pewsey distribution.
 
         Quantiles are obtained by the same safeguarded Newton iteration as in
-        the symmetric case, with the warp-aware CDF supplying residuals.  When
-        nu is effectively zero the method delegates to the symmetric JP solver.
+        the symmetric case, with the warp-aware CDF supplying residuals.  For
+        deep psi < 0 spikes the solve runs in the kernel's own angle against
+        the exact u-space cumulative, initialized from the kernel's quantile
+        table, and the warp is inverted by bisection at the end.
         """
         return super().ppf(q, xi, kappa, psi, nu, *args, **kwargs)
 
@@ -7743,14 +7963,7 @@ class jonespewsey_asym_gen(CircularContinuous):
             u_prop = _jp_sample_table(kappa_val, psi_val, remaining, rng)
             # map into g's principal range [−π−ν, π−ν] (kernel is periodic)
             u_prop = np.where(u_prop > np.pi - nu_val, u_prop - two_pi_f, u_prop)
-            a = np.full_like(u_prop, -np.pi)
-            b = np.full_like(u_prop, np.pi)
-            for _ in range(60):
-                m = 0.5 * (a + b)
-                too_high = m + nu_val * np.cos(m) > u_prop
-                b = np.where(too_high, m, b)
-                a = np.where(too_high, a, m)
-            phi = 0.5 * (a + b)
+            phi = _jp_warp_inv(u_prop, nu_val)
             accept = rng.uniform(0.0, 1.0, size=remaining) <= (
                 (1.0 - nu_val) / (1.0 - nu_val * np.sin(phi))
             )
@@ -7913,6 +8126,55 @@ class jonespewsey_asym_gen(CircularContinuous):
 jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
 
 
+def _jp_warp_inv(u, nu):
+    """φ = g⁻¹(u) on the principal branch of the asymmetry warp
+    g(φ) = φ + ν cos φ, by bisection — monotone (g′ ≥ 1 − ν > 0), and 60
+    halvings (2π/2⁶⁰ ≈ 5e-18) are beyond what the smooth weight consuming
+    φ(u) can distinguish."""
+    u = np.asarray(u, dtype=float)
+    a = np.full_like(u, -np.pi)
+    b = np.full_like(u, np.pi)
+    for _ in range(60):
+        m = 0.5 * (a + b)
+        too_high = m + nu * np.cos(m) > u
+        b = np.where(too_high, m, b)
+        a = np.where(too_high, a, m)
+    return 0.5 * (a + b)
+
+
+def _jp_ladder_edges_asym(kappa, psi, nu):
+    """Break-point ladder in the kernel's own angle u = g(φ) over one
+    period [−π − ν, π − ν]: decade rungs at the ``_jp_feature_scales`` of
+    the peak (u = 0, interior) and the antipodal near-kink (u ≡ ±π; −π is
+    interior, +π sits ν beyond the upper end so only its inward rungs
+    land), plus rungs for the weight 1/g′'s own bump at u = g(π/2) = π/2
+    of u-width ~(1−ν)^{3/2} — unresolved it costs ~1e-5 relative at
+    ν = 0.9 (the kernel ladders have no rungs mid-window)."""
+    two_pi = 2.0 * np.pi
+    lo, hi = -np.pi - nu, np.pi - nu
+    w_peak, w_anti = _jp_feature_scales(kappa, psi)
+    edge_set = {lo, hi, 0.0}
+    r = w_peak
+    while r < two_pi:
+        for cand in (-r, r):
+            if lo < cand < hi:
+                edge_set.add(cand)
+        r *= 10.0
+    r = w_anti
+    while r < two_pi:
+        for cand in (-np.pi - r, -np.pi + r, np.pi - r):
+            if lo < cand < hi:
+                edge_set.add(cand)
+        r *= 10.0
+    r = max((1.0 - nu) ** 1.5, 1e-3)
+    while r < two_pi:
+        for cand in (0.5 * np.pi - r, 0.5 * np.pi + r):
+            if lo < cand < hi:
+                edge_set.add(cand)
+        r *= 10.0
+    return np.asarray(sorted(edge_set))
+
+
 @lru_cache(maxsize=4096)
 def _jp_log_c_asym(kappa: float, psi: float, nu: float) -> float:
     """log normalizing constant of the asymmetric-extended JP kernel
@@ -7935,51 +8197,93 @@ def _jp_log_c_asym(kappa: float, psi: float, nu: float) -> float:
     if kappa < _JP_KAPPA_TOL:
         return float(-np.log(2.0 * np.pi))
 
-    two_pi = 2.0 * np.pi
-    lo, hi = -np.pi - nu, np.pi - nu  # u over exactly one period
-    w_peak, w_anti = _jp_feature_scales(kappa, psi)
-    edge_set = {lo, hi, 0.0}
-    r = w_peak
-    while r < two_pi:
-        for cand in (-r, r):
-            if lo < cand < hi:
-                edge_set.add(cand)
-        r *= 10.0
-    r = w_anti
-    while r < two_pi:
-        # the kink at u = −π is interior; u = +π sits ν beyond hi, so only
-        # its inward rungs land inside
-        for cand in (-np.pi - r, -np.pi + r, np.pi - r):
-            if lo < cand < hi:
-                edge_set.add(cand)
-        r *= 10.0
-    # the weight has its own bump where g′ dips to 1 − ν: φ = π/2, i.e.
-    # u = g(π/2) = π/2 exactly, of u-width ~(1−ν)^{3/2} — unresolved it
-    # costs ~1e-5 relative at ν = 0.9 (the kernel ladders have no rungs
-    # mid-window)
-    r = max((1.0 - nu) ** 1.5, 1e-3)
-    while r < two_pi:
-        for cand in (0.5 * np.pi - r, 0.5 * np.pi + r):
-            if lo < cand < hi:
-                edge_set.add(cand)
-        r *= 10.0
-
-    nodes, wts = _gl_panels_from_edges(sorted(edge_set))
-    # invert the warp by bisection — monotone (g′ ≥ 1 − ν > 0), and only
-    # the smooth weight consumes φ(u), so 60 halvings (2π/2⁶⁰ ≈ 5e-18) are
-    # beyond what the weight can distinguish
-    a = np.full_like(nodes, -np.pi)
-    b = np.full_like(nodes, np.pi)
-    for _ in range(60):
-        m = 0.5 * (a + b)
-        too_high = m + nu * np.cos(m) > nodes
-        b = np.where(too_high, m, b)
-        a = np.where(too_high, a, m)
-    weight = 1.0 / (1.0 - nu * np.sin(0.5 * (a + b)))
-
+    nodes, wts = _gl_panels_from_edges(_jp_ladder_edges_asym(kappa, psi, nu))
+    weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(nodes, nu)))
     h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
     integral = float(np.sum(wts * np.exp(h - kappa) * weight))
     return float(-(kappa + np.log(max(integral, np.finfo(float).tiny))))
+
+
+@lru_cache(maxsize=1024)
+def _jp_cdf_ladder_asym(kappa: float, psi: float, nu: float):
+    """Cumulative table for the asymmetric-extended JP law in the kernel's
+    own angle: GL-exact cumulatives of kernel(u)/g′(g⁻¹(u)) (peak value
+    suppressed to e^{h−κ}) at the ``_jp_ladder_edges_asym`` panel edges
+    over [−π − ν, π − ν]. Returns ``(edges, cum)`` with ``cum[0] = 0``."""
+    edges = _jp_ladder_edges_asym(kappa, psi, nu)
+    nodes, wts = _gl_panels_from_edges(edges)
+    weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(nodes, nu)))
+    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    n_gl = _JP_GL_XW[0].size
+    panels = (wts * np.exp(h - kappa) * weight).reshape(
+        edges.size - 1, n_gl
+    ).sum(axis=1)
+    return edges, np.concatenate([[0.0], np.cumsum(panels)])
+
+
+def _jp_weighted_cum_asym(u, kappa, psi, nu):
+    """Cw(u) = ∫_{−π−ν}^{u} e^{h(t)−κ}/g′(g⁻¹(t)) dt: cached edge
+    cumulatives plus a 24-point partial panel per query (the aeJP analog
+    of ``_jp_half_cum``; no half-line fold — the weight is not even)."""
+    edges, cum = _jp_cdf_ladder_asym(kappa, psi, nu)
+    u = np.clip(np.asarray(u, dtype=float).reshape(-1), edges[0], edges[-1])
+    k = np.clip(np.searchsorted(edges, u, side="right") - 1, 0, edges.size - 2)
+    hw = 0.5 * (u - edges[k])
+    xi_gl, w_gl = _JP_GL_XW
+    nodes = (edges[k] + hw)[:, None] + hw[:, None] * xi_gl[None, :]
+    weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(nodes, nu)))
+    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    return cum[k] + hw * ((np.exp(h - kappa) * weight) @ w_gl)
+
+
+def _jp_cum01_asym(s, kappa, psi, nu):
+    """Exact H(s) = ∫₀ˢ f_ae(ξ + t) dt over s ∈ [0, 2π) for the
+    asymmetric-extended JP law (ξ-invariant): fold s into the centered
+    offset ζ ∈ (−π, π], map through the warp u = g(ζ), and difference the
+    u-space cumulative against the mass below the start point g(0) = ν.
+    Same denormal best-effort boundary as ``_jp_cum01``."""
+    s = np.asarray(s, dtype=float).reshape(-1)
+    upper = s > np.pi
+    zeta = np.where(upper, s - 2.0 * np.pi, s)
+    u = zeta + nu * np.cos(zeta)
+    edges, cum = _jp_cdf_ladder_asym(kappa, psi, nu)
+    z = max(float(cum[-1]), np.finfo(float).tiny)
+    C = _jp_weighted_cum_asym(u, kappa, psi, nu) / z
+    C_nu = float(_jp_weighted_cum_asym(np.array([nu]), kappa, psi, nu)[0]) / z
+    return np.where(upper, 1.0 - C_nu + C, C - C_nu)
+
+
+def _jp_ppf_ladder_asym(q, xi, kappa, psi, nu):
+    """Deep-regime aeJP quantiles: solve C(u) = target in the kernel's own
+    angle (spike at u = 0), initialized weight-blind from the symmetric
+    kernel's quantile table (the weight is a bounded smooth factor the
+    Newton polish absorbs), then invert the warp. ``q`` must be
+    interior."""
+    two_pi = 2.0 * np.pi
+    H_start = float(
+        _jp_cum01_asym(np.array([(-xi) % two_pi]), kappa, psi, nu)[0]
+    )
+    edges, cum = _jp_cdf_ladder_asym(kappa, psi, nu)
+    z = max(float(cum[-1]), np.finfo(float).tiny)
+    C_nu = float(_jp_weighted_cum_asym(np.array([nu]), kappa, psi, nu)[0]) / z
+    u_t = (np.asarray(q, dtype=float) + H_start + C_nu) % 1.0
+    u0 = _jp_table_invert(u_t, kappa, psi)
+    # the kernel table spans [−π, π]; map its (π − ν, π] sliver onto the
+    # equivalent (−π − ν, −π] stretch of the aeJP period (cf. _rvs)
+    u0 = np.where(u0 > np.pi - nu, u0 - two_pi, u0)
+
+    def cdf_fn(u):
+        return _jp_weighted_cum_asym(u, kappa, psi, nu) / z
+
+    def pdf_fn(u):
+        weight = 1.0 / (1.0 - nu * np.sin(_jp_warp_inv(u, nu)))
+        h = _jp_score_terms(u, kappa, psi, second=False)["h"]
+        return np.exp(h - kappa) * weight / z
+
+    u_root = _jp_solve_quantile(
+        u_t, u0, -np.pi - nu, np.pi - nu, cdf_fn, pdf_fn
+    )
+    return np.mod(xi + _jp_warp_inv(u_root, nu), two_pi)
 
 
 class inverse_batschelet_gen(CircularContinuous):
