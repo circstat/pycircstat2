@@ -62,7 +62,6 @@ _VMFT_GRID_BASE = 64.0
 _VMFT_GRID_SHARPNESS = 12.0
 _VMFT_KAPPA_TOL = 1e-9
 _VMFT_KAPPA_UPPER = 1e3
-_VMFT_ENV_MIN_KAPPA = 1e-6
 _VMFT_ACCEPT_EPS = 1e-12
 _VMFT_NEWTON_MAXITER = 50
 _VMFT_NEWTON_TOL = 1e-12
@@ -326,6 +325,33 @@ def get_link(link: "str | Link") -> Link:
     if isinstance(link, str) and link in _LINKS:
         return _LINKS[link]()
     raise ValueError(f"unknown link {link!r}; available: {sorted(_LINKS)}")
+
+
+def _inverse_cdf_knots(phi, cumulative, min_step=1e-14):
+    """Strictly-increasing (cdf, angle) knots for an inverse-cdf
+    interpolant, greedily thinned to steps ≥ ``min_step``: in dead tails a
+    tabulated cdf grows by denormal amounts per node (the pdf is floored at
+    ``np.finfo(float).tiny``), so dφ/dq overflows and Pchip's derivative
+    screen rejects the work arrays ("``dydx`` must contain only finite
+    values" — the κ ≳ 200 vmft crash of the methods-parity P1 review, and
+    its inverse-Batschelet twin at κ ≳ 400). Quantile accuracy is
+    unaffected for any q the thinned knots can distinguish; the forced
+    q = 1 endpoint keeps the domain closed (its gap is ≥ ~1e-16, because
+    doubles within eps of 1 collapse to 1). Returns ``(values, angles)``,
+    or ``None`` when fewer than two knots survive."""
+    unique_vals, unique_idx = np.unique(cumulative, return_index=True)
+    if unique_vals.size < 2:
+        return None
+    sel = [0]
+    last = unique_vals[0]
+    for i in range(1, unique_vals.size):
+        if unique_vals[i] - last >= min_step:
+            sel.append(i)
+            last = unique_vals[i]
+    if sel[-1] != unique_vals.size - 1:
+        sel.append(unique_vals.size - 1)
+    keep = np.asarray(sel, dtype=int)
+    return unique_vals[keep], np.asarray(phi, dtype=float)[unique_idx[keep]]
 
 
 def _as_scalar_param(value, dist_name):
@@ -5038,7 +5064,6 @@ class vonmises_flattopped_gen(CircularContinuous):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._vmft_table_cache = {}
-        self._vmft_sampler_cache = {}
 
     def _validate_params(self, mu, kappa, nu):
         mu_arr, kappa_arr, nu_arr = np.broadcast_arrays(mu, kappa, nu)
@@ -5060,7 +5085,6 @@ class vonmises_flattopped_gen(CircularContinuous):
     def _clear_normalization_cache(self):
         super()._clear_normalization_cache()
         self._vmft_table_cache = {}
-        self._vmft_sampler_cache = {}
 
     def _pdf(self, x, mu, kappa, nu):
         x_arr = np.asarray(x, dtype=float)
@@ -5331,36 +5355,23 @@ class vonmises_flattopped_gen(CircularContinuous):
                 return float(samples)
             return samples
 
+        # Inverse-transform through the spectral cdf table: the centered
+        # quantile function maps U(0,1) draws straight to angles (the μ
+        # shift is absorbed by uniformity), one vectorized Pchip evaluation
+        # per call. This replaced the curvature-matched rejection sampler,
+        # whose von Mises envelope κ_e = κ(1+ν)² under-covers a flat-topped
+        # target's shoulders — the acceptance multiplier exploded with κ
+        # for ν ≠ 0 (12 s for 5 draws at κ = 5, ν = 0.5; an effective hang
+        # from κ ≈ 100; methods-parity P1 follow-up).
         table = self._get_vmft_table(kappa_val, nu_val)
-        sampler_params = self._get_vmft_sampler_params(kappa_val, nu_val)
-        kappa_env = sampler_params["kappa_env"]
-        log_env_norm = sampler_params["log_env_norm"]
-        log_multiplier = sampler_params["log_multiplier"]
+        inv_interp = table["inv_cdf_interp"]
+        u = rng.random(size=total)
+        if inv_interp is not None:
+            phi = np.clip(np.asarray(inv_interp(u), dtype=float), -np.pi, np.pi)
+        else:  # degenerate single-knot cdf: effectively uniform
+            phi = (u - 0.5) * two_pi
 
-        samples = np.empty(total, dtype=float)
-        filled = 0
-        batch_base = max(8, min(4 * total, 4096))
-
-        while filled < total:
-            batch = min(batch_base, total - filled) if filled > 0 else batch_base
-            proposals = rng.vonmises(mu_val, kappa_env, size=batch)
-            phi = ((proposals - mu_val + np.pi) % two_pi) - np.pi
-
-            log_target = kappa_val * np.cos(phi + nu_val * np.sin(phi)) + table["log_normalizer"]
-            log_env = kappa_env * np.cos(phi) - log_env_norm
-            log_accept = log_target - log_env - log_multiplier
-
-            accept_mask = np.log(rng.random(size=batch)) <= log_accept
-            if not np.any(accept_mask):
-                continue
-
-            accepted = proposals[accept_mask]
-            take = min(accepted.size, total - filled)
-            samples[filled : filled + take] = accepted[:take]
-            filled += take
-
-        samples = np.mod(samples, two_pi)
-        samples = samples.reshape(shape)
+        samples = np.mod(mu_val + phi, two_pi).reshape(shape)
         if samples.ndim == 0:
             return float(samples)
         return samples
@@ -5369,14 +5380,15 @@ class vonmises_flattopped_gen(CircularContinuous):
         r"""
         Draw random variates from the flat-topped von Mises distribution.
 
-        Sampling uses an acceptance–rejection scheme with a curvature-matched
-        von Mises envelope. Writing $\phi = \theta - \mu$ and matching the
-        curvature at the mode yields a proposal concentration
-        $\kappa_e = \kappa(1+\nu)^2$ (clipped to a small positive value). The
-        envelope constant $M \ge \sup_\phi f(\phi)/g(\phi)$ is precomputed on
-        the same spectral grid used for `cdf`, so once calibrated the
-        sampler draws each variate with a single von Mises proposal followed by
-        a scalar acceptance test.
+        Sampling is by inverse transform through the same spectral cdf table
+        that serves `cdf`/`ppf`: uniform draws are pushed through the
+        monotone inverse-cdf interpolant of the centered density and shifted
+        by $\mu$ — one vectorized evaluation per call, with cost independent
+        of $\kappa$ and $\nu$. (An earlier acceptance–rejection scheme with
+        a curvature-matched von Mises envelope degraded catastrophically for
+        $\nu \ne 0$ at large $\kappa$: matching the mode curvature
+        under-covers a flat-topped density's shoulders, so the envelope
+        constant grew without bound.)
 
         Parameters
         ----------
@@ -5662,35 +5674,6 @@ class vonmises_flattopped_gen(CircularContinuous):
             self._vmft_table_cache[key] = table
         return table
 
-    def _get_vmft_sampler_params(self, kappa, nu):
-        key = (float(kappa), float(nu))
-        params = self._vmft_sampler_cache.get(key)
-        if params is not None:
-            return params
-
-        table = self._get_vmft_table(kappa, nu)
-        kappa_env = float(np.clip(kappa * (1.0 + nu) ** 2, _VMFT_ENV_MIN_KAPPA, _VMFT_KAPPA_UPPER))
-
-        log_env_norm = (
-            np.log(2.0 * np.pi)
-            + np.log(i0e(kappa_env))
-            + kappa_env
-        )
-        log_env_pdf = kappa_env * np.cos(table["phi"]) - log_env_norm
-        log_ratio = np.log(table["pdf"]) - log_env_pdf
-        log_multiplier = float(np.max(log_ratio))
-        multiplier = float(np.exp(log_multiplier) * (1.0 + 5e-12))
-
-        params = {
-            "kappa_env": kappa_env,
-            "log_env_norm": float(log_env_norm),
-            "log_multiplier": float(np.log(multiplier)),
-            "multiplier": multiplier,
-        }
-        self._vmft_sampler_cache[key] = params
-        return params
-
-
 vonmises_flattopped = vonmises_flattopped_gen(name="vonmises_flattopped")
 
 ##############################################
@@ -5739,34 +5722,12 @@ def _vmft_build_table(kappa, nu, grid_size):
 
     cdf_interp = PchipInterpolator(phi, cumulative, extrapolate=True)
 
-    unique_vals, unique_idx = np.unique(cumulative, return_index=True)
-    # Thin the inverse-cdf knots to steps the inverse slope can represent:
-    # in the dead tails the cdf grows by denormal amounts per node (the pdf
-    # is floored at np.finfo.tiny), so dφ/dq overflows and Pchip's
-    # derivative screen rejects the work arrays ("`dydx` must contain only
-    # finite values" — the κ ≳ 200 crash of the methods-parity P1 review).
-    # Greedy thinning at steps ≥ 1e-14 leaves every distinguishable
-    # quantile exact; the forced q = 1 endpoint keeps the domain closed
-    # (its gap is ≥ ~1e-16 because doubles within eps of 1 collapse to 1).
-    if unique_vals.size >= 2:
-        sel = [0]
-        last = unique_vals[0]
-        for i in range(1, unique_vals.size):
-            if unique_vals[i] - last >= 1e-14:
-                sel.append(i)
-                last = unique_vals[i]
-        if sel[-1] != unique_vals.size - 1:
-            sel.append(unique_vals.size - 1)
-        keep = np.asarray(sel, dtype=int)
-        vals = unique_vals[keep]
-        locs = phi[unique_idx][keep]
-        inv_interp = (
-            PchipInterpolator(vals, locs, extrapolate=True)
-            if vals.size >= 2
-            else None
-        )
-    else:
-        inv_interp = None
+    knots = _inverse_cdf_knots(phi, cumulative)
+    inv_interp = (
+        PchipInterpolator(knots[0], knots[1], extrapolate=True)
+        if knots is not None
+        else None
+    )
 
     return {
         "phi": phi,
@@ -5891,7 +5852,6 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._sampler_cache = {}
         self._series_cache = {}
 
     def _validate_params(self, mu, kappa, psi):
@@ -6209,37 +6169,25 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         if abs(psi_val) < _JP_PSI_TOL:
             return vonmises.rvs(mu=mu_val, kappa=kappa_val, size=size_tuple or None, random_state=rng)
 
-        kappa_env, envelope_const = self._jp_sampler_envelope(mu_val, kappa_val, psi_val)
-        samples = np.empty(total, dtype=float)
-        filled = 0
-
-        while filled < total:
-            remaining = total - filled
-            proposals = vonmises.rvs(
-                mu=mu_val,
-                kappa=kappa_env,
-                size=remaining,
-                random_state=rng,
-            )
-            target_vals = self.pdf(proposals, mu_val, kappa_val, psi_val)
-            proposal_vals = vonmises.pdf(proposals, mu=mu_val, kappa=kappa_env)
-            ratio = np.where(proposal_vals > 0.0, target_vals / (envelope_const * proposal_vals), 0.0)
-            u = rng.uniform(0.0, 1.0, size=remaining)
-            accept = ratio >= u
-            n_accept = int(np.sum(accept))
-            if n_accept > 0:
-                samples[filled:filled + n_accept] = proposals[accept][:n_accept]
-                filled += n_accept
-
+        # Inverse transform on the ladder-graded kernel table — exact at
+        # any spike depth, one vectorized pass, no rejection loop. (The
+        # previous von Mises rejection envelope was calibrated on a
+        # 2048-point uniform grid, which cannot see the ψ < 0 spike once
+        # it is narrower than ~6e-3: draws were distributionally wrong
+        # from κψ ≈ −6 — KS p ~ 1e-113 at (κ=8, ψ=−1) — and the
+        # acceptance rate collapsed into an effective hang by κψ ≈ −50.)
+        phi_draws = _jp_sample_table(kappa_val, psi_val, total, rng)
+        samples = np.mod(mu_val + phi_draws, two_pi)
         return samples.reshape(size_tuple)
 
     def rvs(self, mu, kappa, psi, size=None, random_state=None):
         r"""
         Draw random variates from the Jones-Pewsey distribution.
 
-        A von Mises envelope is tuned to the target density via local curvature
-        matching and a grid-based optimisation, yielding an acceptance-rejection
-        sampler that is both exact and efficient across the parameter space.
+        Sampling is by inverse transform through a cached quantile table of
+        the centered kernel on a feature-scale-graded grid (the same
+        break-point ladder that serves the normalizer), so cost and
+        correctness are independent of how narrow the ψ < 0 spike gets.
 
         Parameters
         ----------
@@ -6256,29 +6204,6 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
             Sample(s) wrapped to [0, 2π).
         """
         return super().rvs(mu, kappa, psi, size=size, random_state=random_state)
-
-    def _jp_sampler_envelope(self, mu, kappa, psi):
-        key = (float(np.mod(mu, 2.0 * np.pi)), float(kappa), float(psi))
-        cached = self._sampler_cache.get(key)
-        if cached is not None:
-            return cached
-
-        kappa_env = _jp_effective_kappa(kappa, psi)
-        phi_grid = np.linspace(0.0, 2.0 * np.pi, 2048, endpoint=False)
-        theta_grid = np.mod(mu + phi_grid, 2.0 * np.pi)
-
-        target_vals = self.pdf(theta_grid, mu, kappa, psi)
-        log_target = np.log(np.clip(target_vals, np.finfo(float).tiny, None))
-
-        kappa_env, envelope_const = _optimize_vonmises_envelope(
-            theta_grid,
-            log_target,
-            mu,
-            max(kappa_env, 1e-6),
-        )
-
-        self._sampler_cache[key] = (kappa_env, envelope_const)
-        return kappa_env, envelope_const
 
     def _jp_get_series(self, kappa, psi, max_harmonics=256, grid_size=4096):
         key = (float(kappa), float(psi))
@@ -6533,74 +6458,6 @@ def _jp_ensure_scalar(value, name):
     return scalar
 
 
-def _jp_effective_kappa(kappa, psi):
-    if abs(psi) < _JP_PSI_TOL:
-        return max(kappa, 1e-6)
-    A = kappa * psi
-    with np.errstate(over="ignore"):
-        factor = 1.0 - np.exp(-2.0 * A)
-    kappa_eff = factor / (2.0 * psi)
-    if not np.isfinite(kappa_eff) or kappa_eff <= 0.0:
-        return max(kappa, 1e-6)
-    return float(kappa_eff)
-
-
-def _log_vonmises_pdf(theta, mu, kappa):
-    theta = np.asarray(theta, dtype=float)
-    if kappa < 1e-8:
-        return np.full_like(theta, -np.log(2.0 * np.pi), dtype=float)
-    diff = theta - mu
-    log_i0 = kappa + np.log(i0e(kappa))
-    return kappa * np.cos(diff) - (np.log(2.0 * np.pi) + log_i0)
-
-
-def _optimize_vonmises_envelope(theta, log_target, mu, initial_guess, *, max_iter=3):
-    min_kappa = 1e-6
-    max_kappa = 1e4
-    best_kappa = max(initial_guess, min_kappa)
-    log_M_best = np.inf
-
-    def evaluate(candidates):
-        nonlocal best_kappa, log_M_best
-        for kappa_env in candidates:
-            kappa_env = float(np.clip(kappa_env, min_kappa, max_kappa))
-            log_proposal = _log_vonmises_pdf(theta, mu, kappa_env)
-            log_ratio = log_target - log_proposal
-            log_ratio_max = float(np.max(log_ratio))
-            if not np.isfinite(log_ratio_max):
-                continue
-            if log_ratio_max < log_M_best:
-                log_M_best = log_ratio_max
-                best_kappa = kappa_env
-
-    candidate_pool = np.array(
-        [
-            initial_guess,
-            max(initial_guess * 0.5, min_kappa),
-            initial_guess * 2.0,
-            max(initial_guess * 0.25, min_kappa),
-            initial_guess * 4.0,
-            0.5,
-            1.0,
-            max(initial_guess, 1.5),
-            max(initial_guess, 3.0),
-        ],
-        dtype=float,
-    )
-    candidate_pool = np.unique(np.clip(candidate_pool, min_kappa, max_kappa))
-    evaluate(candidate_pool)
-
-    for _ in range(max_iter):
-        span = np.linspace(best_kappa * 0.5, best_kappa * 1.5, num=7)
-        span = np.clip(span, min_kappa, max_kappa)
-        evaluate(span)
-
-    log_M_best = float(log_M_best)
-    K = float(best_kappa)
-    M = float(np.exp(log_M_best + np.log1p(0.02)))
-    return K, max(M, 1.01)
-
-
 def _jp_feature_scales(kappa, psi):
     """The two length scales of the JP kernel in its own angle: the peak
     curvature width 1/√κ_eff at φ = 0 (the ψ < 0 spike) and the antipodal
@@ -6667,6 +6524,69 @@ def _jp_gl_panels(kappa, psi):
         edge_set.add(float(np.pi) - r)
         r *= 10.0
     return _gl_panels_from_edges(sorted(edge_set))
+
+
+@lru_cache(maxsize=1024)
+def _jp_quantile_table(kappa: float, psi: float):
+    """Centered sampling table for the JP kernel law: density and cdf knots
+    on a ladder-graded grid (32 log-spaced points per feature-scale decade,
+    mirrored about 0), so the ψ < 0 spike is resolved at any representable
+    depth — the failure mode of the retired von Mises rejection envelope,
+    whose 2048-point uniform calibration grid never saw spikes narrower
+    than ~6e-3 (wrong draws from κψ ≈ −6, hangs by −50). Within-knot cells
+    the density is taken as linear, so inverse-transform draws sample
+    *exactly* from the piecewise-linear density through true knot values
+    (knot spacing ≤ 7% of the local scale ⇒ cdf bias ≪ KS resolution).
+    Returns ``(phi, cdf, dens)`` with cdf[0] = 0, cdf[-1] = 1.
+    """
+    w_peak, w_anti = _jp_feature_scales(kappa, psi)
+    edge_set = {0.0, float(np.pi)}
+    r = w_peak
+    while r < np.pi:
+        edge_set.add(r)
+        r *= 10.0
+    r = w_anti
+    while r < np.pi:
+        edge_set.add(float(np.pi) - r)
+        r *= 10.0
+    edges = np.asarray(sorted(edge_set))
+
+    half = [0.0]
+    for a, b in zip(edges[:-1], edges[1:]):
+        if a == 0.0:  # the flat-topped innermost cell: linear subdivision
+            half.extend(np.linspace(a, b, 33)[1:])
+        else:
+            half.extend(np.geomspace(a, b, 33)[1:])
+    half = np.asarray(half, dtype=float)
+    phi = np.concatenate([-half[::-1], half[1:]])
+
+    h = _jp_score_terms(phi, kappa, psi, second=False)["h"]
+    dens = np.exp(h - kappa)  # ∝ density; peak value exactly 1
+    seg = 0.5 * (dens[1:] + dens[:-1]) * np.diff(phi)
+    cdf = np.concatenate([[0.0], np.cumsum(seg)])
+    total = max(float(cdf[-1]), np.finfo(float).tiny)
+    return phi, cdf / total, dens / total
+
+
+def _jp_sample_table(kappa, psi, total, rng):
+    """Draw ``total`` centered angles from the JP kernel law by inverse
+    transform on ``_jp_quantile_table``: locate the cell by searchsorted,
+    then invert the cell's quadratic cdf (linear density) in closed form."""
+    phi, cdf, dens = _jp_quantile_table(float(kappa), float(psi))
+    u = rng.random(total)
+    idx = np.clip(np.searchsorted(cdf, u, side="right") - 1, 0, len(phi) - 2)
+    du = u - cdf[idx]
+    dx = phi[idx + 1] - phi[idx]
+    a = 0.5 * (dens[idx + 1] - dens[idx]) * dx
+    b = dens[idx] * dx
+    # solve a t² + b t = du for the position fraction t ∈ [0, 1]
+    lin = np.abs(a) <= 1e-12 * np.maximum(np.abs(b), np.finfo(float).tiny)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        disc = np.sqrt(np.maximum(b * b + 4.0 * a * du, 0.0))
+        t_quad = (disc - b) / np.where(lin, 1.0, 2.0 * a)
+        t_lin = du / np.maximum(b, np.finfo(float).tiny)
+    t = np.clip(np.where(lin, t_lin, t_quad), 0.0, 1.0)
+    return phi[idx] + t * dx
 
 
 @lru_cache(maxsize=4096)
@@ -7528,7 +7448,6 @@ class jonespewsey_asym_gen(CircularContinuous):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._sampler_cache = {}
         self._cdf_table_cache = {}
 
     def _validate_params(self, xi, kappa, psi, nu):
@@ -7809,26 +7728,37 @@ class jonespewsey_asym_gen(CircularContinuous):
         if abs(psi_val) < _JP_PSI_TOL and nu_val < 1e-12:
             return vonmises.rvs(mu=xi_val, kappa=kappa_val, size=size_tuple or None, random_state=rng)
 
-        kappa_env, envelope_const = self._asym_sampler_envelope(xi_val, kappa_val, psi_val, nu_val)
+        # In the kernel's own angle U = g(Φ) the target law has density
+        # ∝ kernel(u)/g′(g⁻¹(u)): propose u from the pure-kernel table
+        # (exact at any spike depth — see ``_jp_quantile_table``), accept
+        # with the bounded weight ratio (1−ν)/g′ ∈ [(1−ν)/(1+ν), 1], then
+        # invert the monotone warp by bisection. (The previous von Mises
+        # rejection envelope shared the symmetric sampler's blindness to
+        # sub-grid ψ < 0 spikes.)
+        two_pi_f = 2.0 * np.pi
         samples = np.empty(total, dtype=float)
         filled = 0
-
         while filled < total:
             remaining = total - filled
-            proposals = vonmises.rvs(
-                mu=xi_val,
-                kappa=kappa_env,
-                size=remaining,
-                random_state=rng,
+            u_prop = _jp_sample_table(kappa_val, psi_val, remaining, rng)
+            # map into g's principal range [−π−ν, π−ν] (kernel is periodic)
+            u_prop = np.where(u_prop > np.pi - nu_val, u_prop - two_pi_f, u_prop)
+            a = np.full_like(u_prop, -np.pi)
+            b = np.full_like(u_prop, np.pi)
+            for _ in range(60):
+                m = 0.5 * (a + b)
+                too_high = m + nu_val * np.cos(m) > u_prop
+                b = np.where(too_high, m, b)
+                a = np.where(too_high, a, m)
+            phi = 0.5 * (a + b)
+            accept = rng.uniform(0.0, 1.0, size=remaining) <= (
+                (1.0 - nu_val) / (1.0 - nu_val * np.sin(phi))
             )
-            target_vals = self.pdf(proposals, xi_val, kappa_val, psi_val, nu_val)
-            proposal_vals = vonmises.pdf(proposals, mu=xi_val, kappa=kappa_env)
-            ratio = np.where(proposal_vals > 0.0, target_vals / (envelope_const * proposal_vals), 0.0)
-            u = rng.uniform(0.0, 1.0, size=remaining)
-            accept = ratio >= u
             n_accept = int(np.sum(accept))
             if n_accept > 0:
-                samples[filled:filled + n_accept] = proposals[accept][:n_accept]
+                samples[filled:filled + n_accept] = np.mod(
+                    xi_val + phi[accept][:n_accept], two_pi_f
+                )
                 filled += n_accept
 
         return samples.reshape(size_tuple)
@@ -7837,35 +7767,13 @@ class jonespewsey_asym_gen(CircularContinuous):
         r"""
         Draw random variates from the asymmetric Jones--Pewsey distribution.
 
-        Sampling uses a curvature-matched von Mises envelope tuned via the
-        optimisation helper, providing an exact acceptance-rejection scheme that
-        works well across nu in [0, 1).  Uniform and symmetric limits are
-        handled explicitly.
+        Sampling works in the kernel's own angle: proposals come from the
+        symmetric kernel's quantile table (exact at any concentration), the
+        warp's Jacobian enters as a bounded acceptance weight
+        ``(1−ν)/g′ ≥ (1−ν)/(1+ν)``, and the monotone warp is inverted by
+        bisection. Uniform and von Mises limits are handled explicitly.
         """
         return super().rvs(xi, kappa, psi, nu, size=size, random_state=random_state)
-
-    def _asym_sampler_envelope(self, xi, kappa, psi, nu):
-        key = (float(np.mod(xi, 2.0 * np.pi)), float(kappa), float(psi), float(nu))
-        cached = self._sampler_cache.get(key)
-        if cached is not None:
-            return cached
-
-        kappa_env = _jp_effective_kappa(kappa, psi)
-        phi_grid = np.linspace(0.0, 2.0 * np.pi, 2048, endpoint=False)
-        theta_grid = np.mod(xi + phi_grid, 2.0 * np.pi)
-
-        target_vals = self.pdf(theta_grid, xi, kappa, psi, nu)
-        log_target = np.log(np.clip(target_vals, np.finfo(float).tiny, None))
-
-        kappa_env, envelope_const = _optimize_vonmises_envelope(
-            theta_grid,
-            log_target,
-            xi,
-            max(kappa_env, 1e-6),
-        )
-
-        self._sampler_cache[key] = (kappa_env, envelope_const)
-        return kappa_env, envelope_const
 
     def _asym_cdf_table(self, xi, kappa, psi, nu, grid_size=4096):
         key = (float(np.mod(xi, 2.0 * np.pi)), float(kappa), float(psi), float(nu), int(grid_size))
@@ -8892,10 +8800,10 @@ class inverse_batschelet_gen(CircularContinuous):
 
         cdf_interp = PchipInterpolator(phi, cumulative, extrapolate=True)
 
-        unique_vals, unique_idx = np.unique(cumulative, return_index=True)
+        knots = _inverse_cdf_knots(phi, cumulative)
         inv_cdf_interp = (
-            PchipInterpolator(unique_vals, phi[unique_idx], extrapolate=True)
-            if unique_vals.size >= 2
+            PchipInterpolator(knots[0], knots[1], extrapolate=True)
+            if knots is not None
             else None
         )
 
