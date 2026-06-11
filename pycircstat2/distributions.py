@@ -2,7 +2,7 @@ import types
 from functools import lru_cache
 
 import numpy as np
-from scipy.integrate import quad, quad_vec
+from scipy.integrate import quad
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import minimize, minimize_scalar, brentq, root_scalar
 from scipy.special import beta as beta_fn
@@ -11,6 +11,7 @@ from scipy.special import (
     i0,
     i0e,
     i1,
+    i1e,
     ndtr,
     ndtri,
     iv,
@@ -4067,7 +4068,9 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         )
 
     def _pdf(self, x, mu, kappa):
-        return np.exp(kappa * np.cos(x - mu)) / (2 * np.pi * i0(kappa))
+        # exponentially-scaled form: e^{κ(cosφ−1)}/(2π·i0e(κ)) — the naive
+        # e^{κcosφ}/I₀(κ) pair overflows to nan/inf for κ ≥ 713
+        return np.exp(kappa * (np.cos(x - mu) - 1.0)) / (2 * np.pi * i0e(kappa))
 
     def pdf(self, x, mu, kappa, *args, **kwargs):
         r"""
@@ -4094,7 +4097,10 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         return super().pdf(x, mu, kappa, *args, **kwargs)
 
     def _logpdf(self, x, mu, kappa):
-        return kappa * np.cos(x - mu) - np.log(2 * np.pi * i0(kappa))
+        # log(2πI₀(κ)) = log(2π·i0e(κ)) + κ, folded into κ(cosφ − 1) so the
+        # log-density stays finite at every κ (κ = 800 at the mode is ≈ +2.4,
+        # not −inf)
+        return kappa * (np.cos(x - mu) - 1.0) - np.log(2 * np.pi * i0e(kappa))
 
     def logpdf(self, x, mu, kappa, *args, **kwargs):
         """
@@ -4279,7 +4285,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         theta_curr = theta.copy()
         for _ in range(max_iter):
             cdf_vals = np.asarray(self.cdf(theta_curr, mu_val, kappa_val), dtype=float)
-            pdf_vals = np.exp(kappa_val * np.cos(theta_curr - mu_val)) / (2.0 * np.pi * i0(kappa_val))
+            pdf_vals = self._pdf(theta_curr, mu_val, kappa_val)
             delta = cdf_vals - q_clipped
 
             L = np.where(delta <= 0.0, theta_curr, L)
@@ -4463,7 +4469,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             The circular variance, derived from `kappa`.
         """
         (_, kappa) = self._parse_args(*args, **kwargs)[0]
-        return 1 - i1(kappa) / i0(kappa)
+        return 1 - A1(kappa)
 
     def std(self, *args, **kwargs):
         """
@@ -4475,7 +4481,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             The circular standard deviation, derived from `kappa`.
         """
         (_, kappa) = self._parse_args(*args, **kwargs)[0]
-        r = i1(kappa) / i0(kappa)
+        r = A1(kappa)
 
         return np.sqrt(-2 * np.log(r))
 
@@ -4488,8 +4494,12 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         entropy : float
             The entropy of the distribution.
         """
+        # H = log(2πI₀(κ)) − κ·A₁(κ), in scaled form log(2π·i0e(κ)) +
+        # κ(1 − A₁(κ)). (The previous expression −log I₀ + κA₁ had the I₀
+        # sign flipped and dropped the log 2π term — methods-parity review
+        # P1 audit, 2026-06-11; e.g. κ = 2 gave 0.572 instead of 1.266.)
         (_, kappa) = self._parse_args(*args, **kwargs)[0]
-        return -np.log(i0(kappa)) + (kappa * i1(kappa)) / i0(kappa)
+        return np.log(2 * np.pi * i0e(kappa)) + kappa * (1 - A1(kappa))
 
     def _nnlf(self, theta, data):
         """
@@ -4580,7 +4590,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
                 return np.inf
             cos_term = np.cos(x - mu_param)
             sum_cos = np.sum(w * cos_term)
-            log_i0_val = np.log(i0(kappa_param))
+            log_i0_val = kappa_param + np.log(i0e(kappa_param))
             return float(
                 -kappa_param * sum_cos + w_sum * (np.log(2.0 * np.pi) + log_i0_val)
             )
@@ -4591,7 +4601,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             sin_term = np.sin(x - mu_param)
             sum_sin = np.sum(w * sin_term)
             sum_cos = np.sum(w * cos_term)
-            ratio = i1(kappa_param) / i0(kappa_param)
+            ratio = A1(kappa_param)
             g_mu = kappa_param * sum_sin
             g_kappa = -sum_cos + w_sum * ratio
             return np.array([g_mu, g_kappa], dtype=float)
@@ -5730,8 +5740,31 @@ def _vmft_build_table(kappa, nu, grid_size):
     cdf_interp = PchipInterpolator(phi, cumulative, extrapolate=True)
 
     unique_vals, unique_idx = np.unique(cumulative, return_index=True)
+    # Thin the inverse-cdf knots to steps the inverse slope can represent:
+    # in the dead tails the cdf grows by denormal amounts per node (the pdf
+    # is floored at np.finfo.tiny), so dφ/dq overflows and Pchip's
+    # derivative screen rejects the work arrays ("`dydx` must contain only
+    # finite values" — the κ ≳ 200 crash of the methods-parity P1 review).
+    # Greedy thinning at steps ≥ 1e-14 leaves every distinguishable
+    # quantile exact; the forced q = 1 endpoint keeps the domain closed
+    # (its gap is ≥ ~1e-16 because doubles within eps of 1 collapse to 1).
     if unique_vals.size >= 2:
-        inv_interp = PchipInterpolator(unique_vals, phi[unique_idx], extrapolate=True)
+        sel = [0]
+        last = unique_vals[0]
+        for i in range(1, unique_vals.size):
+            if unique_vals[i] - last >= 1e-14:
+                sel.append(i)
+                last = unique_vals[i]
+        if sel[-1] != unique_vals.size - 1:
+            sel.append(unique_vals.size - 1)
+        keep = np.asarray(sel, dtype=int)
+        vals = unique_vals[keep]
+        locs = phi[unique_idx][keep]
+        inv_interp = (
+            PchipInterpolator(vals, locs, extrapolate=True)
+            if vals.size >= 2
+            else None
+        )
     else:
         inv_interp = None
 
@@ -5884,13 +5917,19 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
 
         if kappa_scalar is None or psi_scalar is None:
             # Per-observation (κ_i, ψ_i) — the regression contract path
-            # (concentration smoothing on a shape family). Uniform reduction
-            # applied element-wise to match the scalar branch exactly.
+            # (concentration smoothing on a shape family). Assembled in log
+            # space: the raw kernel peaks at e^κ and overflows for κ ≳ 709
+            # (methods-parity P1). Uniform/von-Mises reductions applied
+            # element-wise to match the scalar branch exactly.
             mu_b, kappa_b, psi_b = np.broadcast_arrays(
                 *(np.asarray(a, dtype=float) for a in (mu, kappa, psi))
             )
-            c = _c_jonespewsey_vec(kappa_b, psi_b)
-            dens = c * _jp_kernel_base(x - mu_b, kappa_b, psi_b)
+            phi = x - mu_b
+            logc = _jp_log_c_vec(kappa_b, psi_b)
+            h = _jp_score_terms(phi, kappa_b, psi_b, second=False)["h"]
+            vm = np.abs(psi_b) < _JP_PSI_TOL
+            h = np.where(vm, kappa_b * np.cos(phi), h)
+            dens = np.exp(h + logc)
             return np.where(kappa_b < _JP_KAPPA_TOL, 1.0 / (2.0 * np.pi), dens)
 
         if not np.isfinite(kappa_scalar) or not np.isfinite(psi_scalar):
@@ -5899,18 +5938,18 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         if abs(kappa_scalar) < _JP_KAPPA_TOL:
             return np.full_like(x, 1.0 / (2.0 * np.pi), dtype=float)
 
-        normalizer = self._get_cached_normalizer(
-            lambda: _c_jonespewsey(mu, kappa_scalar, psi_scalar),
-            mu,
+        log_c = self._get_cached_normalizer(
+            lambda: _jp_log_c(kappa_scalar, psi_scalar),
             kappa_scalar,
             psi_scalar,
         )
-        self._c = normalizer
+        self._c = float(np.exp(log_c))  # legacy attribute (write-only)
 
         if abs(psi_scalar) < _JP_PSI_TOL:
-            return normalizer * np.exp(kappa_scalar * np.cos(x - mu))
+            return np.exp(kappa_scalar * np.cos(x - mu) + log_c)
 
-        return normalizer * _kernel_jonespewsey(x, mu, kappa_scalar, psi_scalar)
+        h = _jp_score_terms(x - mu, kappa_scalar, psi_scalar, second=False)["h"]
+        return np.exp(h + log_c)
 
     def pdf(self, x, mu, kappa, psi, *args, **kwargs):
         r"""
@@ -6494,37 +6533,6 @@ def _jp_ensure_scalar(value, name):
     return scalar
 
 
-def _jp_kernel_base(phi, kappa, psi):
-    """JP kernel ``(cosh(κψ) + sinh(κψ) cos φ)^{1/ψ}`` via the exact
-    decomposition
-
-        cosh(A) + sinh(A) cos φ = e^{A} cos²(φ/2) + e^{-A} sin²(φ/2),
-
-    evaluated in log space. Both addends are positive, so the form does not
-    cancel for A = κψ < 0 — the naive cosh/sinh difference loses all
-    precision by |A| ≈ 14 and rounds to ≤ 0 beyond |A| ≈ 18.3 — and cannot
-    overflow before the final exponentiation. Handles scalar and
-    per-observation (κ_i, ψ_i) inputs uniformly; |ψ| below tolerance reduces
-    element-wise to the von Mises kernel ``exp(κ cos φ)``."""
-    phi_b, kappa_b, psi_b = np.broadcast_arrays(
-        np.asarray(phi, dtype=float),
-        np.asarray(kappa, dtype=float),
-        np.asarray(psi, dtype=float),
-    )
-    A = kappa_b * psi_b
-    half = 0.5 * phi_b
-    with np.errstate(divide="ignore"):  # log(0) at phi = 0 or ±π
-        log_cos2 = 2.0 * np.log(np.abs(np.cos(half)))
-        log_sin2 = 2.0 * np.log(np.abs(np.sin(half)))
-    log_base = np.logaddexp(A + log_cos2, -A + log_sin2)
-    vm_like = np.abs(psi_b) < _JP_PSI_TOL
-    psi_safe = np.where(vm_like, 1.0, psi_b)
-    with np.errstate(over="ignore"):
-        powered = np.exp(log_base / psi_safe)
-        vm_kernel = np.exp(kappa_b * np.cos(phi_b))
-    return np.where(vm_like, vm_kernel, powered)
-
-
 def _jp_effective_kappa(kappa, psi):
     if abs(psi) < _JP_PSI_TOL:
         return max(kappa, 1e-6)
@@ -6593,87 +6601,95 @@ def _optimize_vonmises_envelope(theta, log_target, mu, initial_guess, *, max_ite
     return K, max(M, 1.01)
 
 
-def _kernel_jonespewsey(x, mu, kappa, psi):
-    phi = np.asarray(x, dtype=float) - mu
-    return _jp_kernel_base(phi, kappa, psi)
+def _jp_gl_panels(kappa, psi):
+    """[0, π] composite Gauss–Legendre nodes/weights on the JP break-point
+    ladder (the kernel is even in φ, so a half-circle sweep suffices).
 
-
-def _c_jonespewsey(mu, kappa, psi):
-    """Jones–Pewsey normalizing constant ``c(κ, ψ)`` (μ-invariant; μ only
-    locates the kernel peak for the quadrature break point).
-
-    Always computed by adaptive quadrature of the stable kernel. The Legendre
-    closed form ``c = 1/(2π P_{1/ψ}(cosh κψ))`` is deliberately **not** used:
-    scipy's ``lpmv`` is defined for arguments |x| ≤ 1, and ``cosh(κψ) ≥ 1``
-    always — out of contract, it silently returns plausible-but-wrong finite
-    values in parts of the ψ < 0 half-plane (e.g. wrong by ×1e11 at
-    κ = 0.5, ψ = −4)."""
-    if kappa < _JP_KAPPA_TOL:
-        return 1.0 / (2.0 * np.pi)
-
-    if abs(psi) < _JP_PSI_TOL:
-        return 1.0 / (2.0 * np.pi * i0(kappa))
-
-    # The kernel peaks at x = mu (mod 2π) for every ψ sign, with curvature
-    # κ_eff = (1 - e^{-2κψ})/(2ψ) at the mode — for ψ < 0 the peak narrows
-    # like e^{κψ} and can carry essentially all of the mass (ψ = -1 is a
-    # Lorentzian of width ~2 e^{κψ}), which adaptive quadrature with a single
-    # break point mis-extrapolates. Hand quad a geometric ladder of break
-    # points at multiples of the peak width so every panel sees bounded
-    # variation.
-    mu_val = float(np.asarray(mu, dtype=float).reshape(-1)[0])
-    peak = (mu_val + np.pi) % (2.0 * np.pi) - np.pi
-
+    Rungs grow geometrically from *both* ends: the peak ladder (φ = 0,
+    curvature scale 1/√κ_eff) resolves the ψ < 0 spike; for ψ > 0 the hard
+    feature is instead the antipodal near-kink at scale 2e^{−|κψ|} (see
+    ``_jp_logZ_moments``). Every panel spans at most one decade of its
+    feature scale, so 24-point GL per panel is at quadrature precision.
+    Returns ``(nodes, weights)``.
+    """
     A = kappa * psi
-    if A >= 0.0:
-        log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+    if abs(A) < 1e-12:
+        keff = max(kappa, 1e-12)
+        width = float(np.clip(1.0 / np.sqrt(keff), 1e-13, 1.0))
     else:
-        log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
-    width = float(np.clip(np.exp(-0.5 * log_keff), 1e-13, 1.0))
+        if A >= 0.0:
+            log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+        else:
+            log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+        width = float(np.clip(np.exp(-0.5 * log_keff), 1e-13, 1.0))
 
-    pts = [peak]
+    w_anti = float(np.clip(2.0 * np.exp(-abs(A)), 1e-13, 1.0))
+    edge_set = {0.0, float(np.pi)}
     r = width
     while r < np.pi:
-        pts.extend([peak - r, peak + r])
+        edge_set.add(r)
         r *= 10.0
-    pts = sorted(p for p in set(pts) if -np.pi + 1e-12 < p < np.pi - 1e-12)
+    r = w_anti
+    while r < np.pi:
+        edge_set.add(float(np.pi) - r)
+        r *= 10.0
+    edges = sorted(edge_set)
 
-    integral = quad(
-        lambda t: float(_kernel_jonespewsey(t, mu_val, kappa, psi)),
-        -np.pi,
-        np.pi,
-        points=pts,
-        limit=500,
-        epsabs=1e-10,
-        epsrel=1e-10,
-    )[0]
-    return 1.0 / integral
+    xi, wgl = _JP_GL_XW
+    nodes, wts = [], []
+    for a, b in zip(edges[:-1], edges[1:]):
+        mid, hw = 0.5 * (a + b), 0.5 * (b - a)
+        nodes.append(mid + hw * xi)
+        wts.append(hw * wgl)
+    return np.concatenate(nodes), np.concatenate(wts)
 
 
-def _c_jonespewsey_vec(kappa, psi):
-    """Per-observation Jones–Pewsey normalizer ``c(κ_i, ψ_i)``.
+@lru_cache(maxsize=4096)
+def _jp_log_c(kappa: float, psi: float) -> float:
+    """log of the Jones–Pewsey normalizing constant, log c(κ, ψ) =
+    −log ∫ kernel dφ (μ-invariant).
 
-    Element-wise mirror of the scalar ``_c_jonespewsey`` preference order —
-    the uniform/von Mises reductions, then the quadrature normalizer,
-    evaluated once per unique ``(κ, ψ)`` pair (see ``_c_jonespewsey`` for why
-    the vectorized ``lpmv`` Legendre identity cannot be trusted here). No
-    caching: per-observation parameters change every regression iteration.
+    Same preference order as the historical linear-space normalizer
+    (uniform and von Mises reductions first; the Legendre closed form
+    ``1/(2π P_{1/ψ}(cosh κψ))`` stays banned — scipy's ``lpmv`` silently
+    returns garbage for arguments > 1), but evaluated **entirely in log
+    space** with the kernel's peak value e^κ factored out: the raw kernel
+    maximum is exp(κ) for every ψ, so any linear-space evaluation turns
+    the whole JP clan's pdf into nan for κ ≳ 709 (methods-parity P1).
+    The general branch integrates e^{h−κ} ≤ 1 by composite Gauss–Legendre
+    on ``_jp_gl_panels`` — the same engine as the regression moment
+    machinery (``_jp_logZ_moments``), which retired the per-call adaptive
+    quadrature this replaced.
     """
+    if kappa < _JP_KAPPA_TOL:
+        return float(-np.log(2.0 * np.pi))
+    if abs(psi) < _JP_PSI_TOL:
+        return float(-(np.log(2.0 * np.pi * i0e(kappa)) + kappa))
+    nodes, wts = _jp_gl_panels(kappa, psi)
+    h = _jp_score_terms(nodes, kappa, psi, second=False)["h"]
+    # kernel even in φ with peak h(0) = κ exactly
+    return float(-(kappa + np.log(2.0 * np.sum(wts * np.exp(h - kappa)))))
+
+
+def _jp_log_c_vec(kappa, psi):
+    """Per-observation ``_jp_log_c(κ_i, ψ_i)`` — element-wise mirror of the
+    scalar preference order, evaluated once per unique ``(κ, ψ)`` pair (the
+    lru cache on the scalar makes repeated regression iterations cheap)."""
     kappa, psi = np.broadcast_arrays(
         np.asarray(kappa, dtype=float), np.asarray(psi, dtype=float)
     )
-    out = np.full(kappa.shape, 1.0 / (2.0 * np.pi))
+    out = np.full(kappa.shape, -np.log(2.0 * np.pi))
     live = kappa >= _JP_KAPPA_TOL
     vm = live & (np.abs(psi) < _JP_PSI_TOL)
     if np.any(vm):
-        out[vm] = 1.0 / (2.0 * np.pi * i0(kappa[vm]))
+        out[vm] = -(np.log(2.0 * np.pi * i0e(kappa[vm])) + kappa[vm])
     gen = live & ~vm
     if not np.any(gen):
         return out
     pairs, inverse = np.unique(
         np.stack([kappa[gen], psi[gen]], axis=1), axis=0, return_inverse=True
     )
-    vals = np.array([_c_jonespewsey(0.0, float(k), float(p)) for k, p in pairs])
+    vals = np.array([_jp_log_c(float(k), float(p)) for k, p in pairs])
     out[gen] = vals[inverse]
     return out
 
@@ -6819,54 +6835,19 @@ def _jp_logZ_moments(kappa: float, psi: float):
         ∂²log Z/∂θ_a∂θ_b = E[h_ab + h_a h_b] − E[h_a]E[h_b],
 
     the expectations taken under the JP density itself. Evaluated by
-    composite 24-point Gauss–Legendre on the geometric break-point ladder of
-    ``_c_jonespewsey`` (every panel spans at most one decade of the peak
-    width, so each is smooth at GL precision); the kernel is even in φ, so
-    nodes live on [0, π]. One node sweep serves all five integrands — the
-    "one numeric expectation per unique parameter tuple" cost of the plan,
+    composite 24-point Gauss–Legendre on the two-ended break-point ladder
+    of ``_jp_gl_panels`` (for ψ > 0 the hard feature is the antipodal
+    near-kink — g ≈ e^A cos²(φ/2) + e^{−A} crosses over at π − φ ≈
+    2e^{−|A|}, which the kernel *and* the moment integrands (T swings
+    1 → −1 there) inherit; a coarse panel straddling it is only ~1e-7
+    accurate). One node sweep serves all five integrands — the "one
+    numeric expectation per unique parameter tuple" cost of the plan,
     cached per (κ, ψ) so ``dlogpdf``/``d2logpdf`` within one ``ll()``
     evaluation share the work.
 
     Returns ``(dk, dp, dkk, dkp, dpp)``.
     """
-    A = kappa * psi
-    if abs(A) < 1e-12:
-        keff = max(kappa, 1e-12)
-        width = float(np.clip(1.0 / np.sqrt(keff), 1e-13, 1.0))
-    else:
-        if A >= 0.0:
-            log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
-        else:
-            log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
-        width = float(np.clip(np.exp(-0.5 * log_keff), 1e-13, 1.0))
-
-    # Rungs from *both* ends: the peak ladder (φ = 0, curvature scale
-    # 1/√κ_eff) resolves the ψ < 0 spike; for ψ > 0 the hard feature is
-    # instead the near-zero at the antipode — g ≈ e^A cos²(φ/2) + e^{−A}
-    # crosses over at π − φ ≈ 2e^{−|A|}, a √-type near-kink the kernel
-    # *and* the moment integrands (T swings 1 → −1 there) inherit, which
-    # a coarse panel straddles at only ~1e-7 accuracy.
-    w_anti = float(np.clip(2.0 * np.exp(-abs(A)), 1e-13, 1.0))
-    edge_set = {0.0, float(np.pi)}
-    r = width
-    while r < np.pi:
-        edge_set.add(r)
-        r *= 10.0
-    r = w_anti
-    while r < np.pi:
-        edge_set.add(float(np.pi) - r)
-        r *= 10.0
-    edges = sorted(edge_set)
-
-    xi, wgl = _JP_GL_XW
-    nodes, wts = [], []
-    for a, b in zip(edges[:-1], edges[1:]):
-        mid, hw = 0.5 * (a + b), 0.5 * (b - a)
-        nodes.append(mid + hw * xi)
-        wts.append(hw * wgl)
-    nodes = np.concatenate(nodes)
-    wts = np.concatenate(wts)
-
+    nodes, wts = _jp_gl_panels(kappa, psi)
     t = _jp_score_terms(nodes, kappa, psi, second=True)
     e = np.exp(t["h"] - float(np.max(t["h"]))) * wts
     Z = float(np.sum(e))
@@ -7036,13 +7017,18 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         lmbd_scalar = _jp_as_scalar(lmbd)
 
         if any(v is None for v in (xi_scalar, kappa_scalar, psi_scalar, lmbd_scalar)):
-            # Per-observation parameters — regression contract path.
+            # Per-observation parameters — regression contract path,
+            # assembled in log space like the base JP (methods-parity P1).
             xi_b, kappa_b, psi_b, lmbd_b = np.broadcast_arrays(
                 *(np.asarray(a, dtype=float) for a in (xi, kappa, psi, lmbd))
             )
-            skew = 1.0 + lmbd_b * np.sin(x - xi_b)
-            c = _c_jonespewsey_vec(kappa_b, psi_b)
-            dens = c * _jp_kernel_base(x - xi_b, kappa_b, psi_b) * skew
+            phi = x - xi_b
+            skew = 1.0 + lmbd_b * np.sin(phi)
+            logc = _jp_log_c_vec(kappa_b, psi_b)
+            h = _jp_score_terms(phi, kappa_b, psi_b, second=False)["h"]
+            vm = np.abs(psi_b) < _JP_PSI_TOL
+            h = np.where(vm, kappa_b * np.cos(phi), h)
+            dens = np.exp(h + logc) * skew
             return np.where(
                 kappa_b < _JP_KAPPA_TOL, skew / (2.0 * np.pi), dens
             )
@@ -7050,16 +7036,19 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         if abs(kappa_scalar) < _JP_KAPPA_TOL:
             return (1.0 / (2.0 * np.pi)) * (1.0 + lmbd_scalar * np.sin(x - xi_scalar))
 
-        normalizer = self._get_cached_normalizer(
-            lambda: _c_jonespewsey(xi_scalar, kappa_scalar, psi_scalar),
-            xi_scalar,
+        log_c = self._get_cached_normalizer(
+            lambda: _jp_log_c(kappa_scalar, psi_scalar),
             kappa_scalar,
             psi_scalar,
         )
-        self._c = normalizer
+        self._c = float(np.exp(log_c))  # legacy attribute (write-only)
 
-        base = _kernel_jonespewsey(x, xi_scalar, kappa_scalar, psi_scalar)
-        return normalizer * base * (1.0 + lmbd_scalar * np.sin(x - xi_scalar))
+        phi = x - xi_scalar
+        if abs(psi_scalar) < _JP_PSI_TOL:
+            h = kappa_scalar * np.cos(phi)
+        else:
+            h = _jp_score_terms(phi, kappa_scalar, psi_scalar, second=False)["h"]
+        return np.exp(h + log_c) * (1.0 + lmbd_scalar * np.sin(phi))
 
     def pdf(self, x, xi, kappa, psi, lmbd, *args, **kwargs):
         r"""
@@ -7541,16 +7530,17 @@ class jonespewsey_asym_gen(CircularContinuous):
         if abs(kappa_scalar) < _JP_KAPPA_TOL:
             return np.full_like(x, 1.0 / (2.0 * np.pi), dtype=float)
 
-        norm = self._get_cached_normalizer(
-            lambda: _c_jonespewsey_asym(xi_scalar, kappa_scalar, psi_scalar, nu_scalar),
-            xi_scalar,
+        log_c = self._get_cached_normalizer(
+            lambda: _jp_log_c_asym(kappa_scalar, psi_scalar, nu_scalar),
             kappa_scalar,
             psi_scalar,
             nu_scalar,
         )
-        self._c = norm
-        base = _kernel_jonespewsey_asym(x, xi_scalar, kappa_scalar, psi_scalar, nu_scalar)
-        return norm * base
+        self._c = float(np.exp(log_c))  # legacy attribute (write-only)
+        phi = x - xi_scalar
+        g = phi + nu_scalar * np.cos(phi)
+        h = _jp_score_terms(g, kappa_scalar, psi_scalar, second=False)["h"]
+        return np.exp(h + log_c)
 
     def pdf(self, x, xi, kappa, psi, nu, *args, **kwargs):
         r"""
@@ -7986,26 +7976,25 @@ class jonespewsey_asym_gen(CircularContinuous):
 jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
 
 
-def _kernel_jonespewsey_asym(x, xi, kappa, psi, nu):
-    x = np.asarray(x, dtype=float)
-    phi = x - xi
-    phi = phi + nu * np.cos(phi)
-    return _jp_kernel_base(phi, kappa, psi)
-
-
-def _c_jonespewsey_asym(xi, kappa, psi, nu):
+def _jp_log_c_asym(kappa, psi, nu):
+    """log normalizing constant of the asymmetric-extended JP kernel
+    (ξ-invariant). Same log-space stabilization as ``_jp_log_c`` — the
+    warped kernel's maximum is also exactly e^κ (the warp g(φ) = φ + ν cos φ
+    is a monotone bijection passing through 0) — with the bounded integrand
+    e^{h(g(φ))−κ} ≤ 1 handed to adaptive quadrature. aeJP keeps its
+    no-break-point-ladder status (validation plan §5 hardening note)."""
     if kappa < _JP_KAPPA_TOL:
-        return 1.0 / (2.0 * np.pi)
+        return float(-np.log(2.0 * np.pi))
 
-    integral = quad_vec(
-        _kernel_jonespewsey_asym,
-        a=-np.pi,
-        b=np.pi,
-        args=(xi, kappa, psi, nu),
-        epsabs=1e-10,
-        epsrel=1e-10,
+    def scaled_kernel(t):
+        g = t + nu * np.cos(t)
+        h = _jp_score_terms(np.asarray([g]), kappa, psi, second=False)["h"]
+        return float(np.exp(h[0] - kappa))
+
+    integral = quad(
+        scaled_kernel, -np.pi, np.pi, limit=500, epsabs=1e-12, epsrel=1e-10
     )[0]
-    return 1.0 / integral
+    return float(-(kappa + np.log(integral)))
 
 
 class inverse_batschelet_gen(CircularContinuous):
@@ -8914,7 +8903,7 @@ def _slmbdinv(x, lmbd):
 
 
 def _A1(kappa):
-    return i1(kappa) / i0(kappa)
+    return i1e(kappa) / i0e(kappa)  # scaled: i1/i0 is nan for κ ≥ 713
 
 
 def _c_invbatschelet(kappa, lmbd):
