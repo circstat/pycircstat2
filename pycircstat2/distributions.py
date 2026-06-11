@@ -1,4 +1,5 @@
 import types
+from functools import lru_cache
 
 import numpy as np
 from scipy.integrate import quad, quad_vec
@@ -17,8 +18,11 @@ from scipy.special import (
     betaincinv,
     gammaln,
     digamma,
+    expit,
     log_ndtr,
     logsumexp,
+    polygamma,
+    roots_legendre,
 )
 from hea.family import IdentityLink, Link, LogitLink, LogLink
 from scipy.stats import rv_continuous
@@ -29,6 +33,8 @@ from .utils import A1, A1inv, A1prime, A1prime2, A1prime3, angmod
 
 __all__ = [
     "TanHalfLink",
+    "TanhLink",
+    "LogitHalfLink",
     "get_link",
     "circularuniform",
     "triangular",
@@ -207,15 +213,103 @@ class TanHalfLink(Link):
         return 0.5 * t * (1.0 + t2) * (2.0 + 3.0 * t2)
 
 
-# Names a distribution may declare in ``default_links``. tanhalf is ours; the
-# rest resolve to hea's implementations (log for κ > 0, logit for a (0, 1)-
-# bounded concentration such as the wrapped Cauchy ρ, identity for shape
-# parameters held fixed).
+class TanhLink(Link):
+    r"""Tanh link for a (−1, 1)-bounded shape parameter (the sine-skew λ).
+
+    $$\eta = g(\lambda) = \operatorname{atanh}(\lambda), \qquad
+      \lambda = \tanh(\eta) \in (-1, 1).$$
+
+    Derivatives w.r.t. λ:
+
+    $$g' = \frac{1}{1-\lambda^2},\quad g'' = \frac{2\lambda}{(1-\lambda^2)^2},
+      \quad g''' = \frac{2+6\lambda^2}{(1-\lambda^2)^3},\quad
+      g'''' = \frac{24\lambda(1+\lambda^2)}{(1-\lambda^2)^4}.$$
+    """
+
+    name = "tanh"
+
+    def link(self, mu):
+        return np.arctanh(np.asarray(mu, dtype=float))
+
+    def linkinv(self, eta):
+        # clamped inside the open interval (mgcv convention) — at λ = ±1 a
+        # sine-skewed density touches 0 and its logpdf has no finite limit
+        eps = np.finfo(float).eps
+        return np.clip(np.tanh(np.asarray(eta, dtype=float)),
+                       -1.0 + eps, 1.0 - eps)
+
+    def mu_eta(self, eta):
+        # sech²η = 4e^{-2|η|}/(1+e^{-2|η|})², overflow-safe; floored at eps
+        a = np.exp(-2.0 * np.abs(np.asarray(eta, dtype=float)))
+        return np.maximum(4.0 * a / (1.0 + a) ** 2, np.finfo(float).eps)
+
+    def d2link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return 2.0 * mu / (1.0 - mu * mu) ** 2
+
+    def d3link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return (2.0 + 6.0 * mu * mu) / (1.0 - mu * mu) ** 3
+
+    def d4link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return 24.0 * mu * (1.0 + mu * mu) / (1.0 - mu * mu) ** 4
+
+
+class LogitHalfLink(Link):
+    r"""Scaled logit for a (0, ½)-bounded concentration (the cardioid ρ).
+
+    $$\eta = g(\rho) = \log\frac{\rho}{\tfrac12-\rho}, \qquad
+      \rho = \tfrac12\,\operatorname{expit}(\eta) \in (0, \tfrac12).$$
+
+    The general scaled logit on (0, c): a subclass overriding ``hi`` serves
+    any upper bound c (the link inventory of the regression plan).
+    """
+
+    name = "logit_half"
+    hi = 0.5
+
+    def link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return np.log(mu / (self.hi - mu))
+
+    def linkinv(self, eta):
+        # clamped to (hi·eps, hi·(1−eps)) — at ρ = ½ the cardioid density
+        # touches 0 at the antimode (logpdf → −∞ there)
+        eps = np.finfo(float).eps
+        return self.hi * np.clip(expit(np.asarray(eta, dtype=float)),
+                                 eps, 1.0 - eps)
+
+    def mu_eta(self, eta):
+        # hi·e^{-|η|}/(1+e^{-|η|})², overflow-safe; floored at eps
+        a = np.exp(-np.abs(np.asarray(eta, dtype=float)))
+        return np.maximum(self.hi * a / (1.0 + a) ** 2, np.finfo(float).eps)
+
+    def d2link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return 1.0 / (self.hi - mu) ** 2 - 1.0 / mu**2
+
+    def d3link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return 2.0 / (self.hi - mu) ** 3 + 2.0 / mu**3
+
+    def d4link(self, mu):
+        mu = np.asarray(mu, dtype=float)
+        return 6.0 / (self.hi - mu) ** 4 - 6.0 / mu**4
+
+
+# Names a distribution may declare in ``default_links``. tanhalf, tanh and
+# logit_half are ours (circular/bounded-shape knowledge hea must not learn);
+# the rest resolve to hea's implementations (log for κ > 0, logit for a
+# (0, 1)-bounded concentration such as the wrapped Cauchy ρ, identity for
+# unconstrained shape parameters).
 _LINKS = {
     "tanhalf": TanHalfLink,
     "log": LogLink,
     "logit": LogitLink,
     "identity": IdentityLink,
+    "tanh": TanhLink,
+    "logit_half": LogitHalfLink,
 }
 
 
@@ -1411,7 +1505,7 @@ class triangular_gen(CircularContinuous):
 triangular = triangular_gen(name="triangular")
 
 
-class cardioid_gen(CircularContinuous):
+class cardioid_gen(_RegressionReady, CircularContinuous):
     r"""Cardioid (cosine) Distribution
 
     ![cardioid](../images/circ-mod-cardioid.png)
@@ -1440,6 +1534,63 @@ class cardioid_gen(CircularContinuous):
     -----
     Implementation based on Section 4.3.4 of Pewsey et al. (2014).
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/rho are preserved; ρ is the mean resultant length,
+    # bounded in (0, ½), so its default link is the scaled logit. ---
+    param_roles = {"mu": "location", "rho": "concentration"}
+    default_links = {"location": "tanhalf", "concentration": "logit_half"}
+
+    # The log-density is ℓ = log P − log 2π with P = 1 + 2ρ cos(θ−μ): the
+    # same −log-quadratic pattern as the wrapped Cauchy's −log D, but P is
+    # *linear* in ρ (P_ρρ = 0), so the derivative table below is even
+    # sparser. All pure numpy, broadcasting over per-observation parameter
+    # arrays. Likelihood hazard documented in the regression plan: at
+    # ρ → ½ the density touches 0 at the antimode (θ−μ = π), where ℓ and
+    # every derivative diverge — the logit_half link keeps ρ interior, but
+    # data at the antimode still produce −∞/large scores.
+
+    def dlogpdf(self, x, mu, rho):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        $$\frac{\partial\ell}{\partial\mu} = \frac{2\rho\sin(\theta-\mu)}{P},
+          \qquad
+          \frac{\partial\ell}{\partial\rho} = \frac{2\cos(\theta-\mu)}{P},
+          \qquad P = 1 + 2\rho\cos(\theta-\mu).$$
+
+        Vectorizes over per-observation ``mu``/``rho`` arrays. Returns a
+        book-named dict ``{"mu": …, "rho": …}``.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        w = 1.0 / (1.0 + 2.0 * rho * c)
+        return {"mu": 2.0 * rho * s * w, "rho": 2.0 * c * w}
+
+    def d2logpdf(self, x, mu, rho):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs.
+
+        $$\ell_{\mu\mu} = -\frac{2\rho(cP + 2\rho s^2)}{P^2},\quad
+          \ell_{\mu\rho} = \frac{2s}{P^2},\quad
+          \ell_{\rho\rho} = -\frac{4c^2}{P^2},$$
+
+        with $s = \sin(\theta-\mu)$, $c = \cos(\theta-\mu)$ (the ℓ_{μρ}
+        numerator collapses because $P - 2\rho c = 1$).
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        P = 1.0 + 2.0 * rho * c
+        w2 = 1.0 / (P * P)
+        return {
+            ("mu", "mu"): -2.0 * rho * (c * P + 2.0 * rho * s * s) * w2,
+            ("mu", "rho"): 2.0 * s * w2,
+            ("rho", "rho"): -4.0 * c * c * w2,
+        }
 
     def _argcheck(self, mu, rho):
         try:
@@ -1875,7 +2026,7 @@ class cardioid_gen(CircularContinuous):
 cardioid = cardioid_gen(name="cardioid")
 
 
-class cartwright_gen(CircularContinuous):
+class cartwright_gen(_RegressionReady, CircularContinuous):
     """Cartwright's Power-of-Cosine Distribution
 
     ![cartwright](../images/circ-mod-cartwright.png)
@@ -1902,6 +2053,88 @@ class cartwright_gen(CircularContinuous):
     ----
     Implementation based on Section 4.3.5 of Pewsey et al. (2014)
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/zeta are preserved; ζ > 0 is an inverse
+    # peakedness, so its default link is log. ---
+    param_roles = {"mu": "location", "zeta": "concentration"}
+    default_links = {"location": "tanhalf", "concentration": "log"}
+
+    # The log-density is ℓ = (1/ζ − 1) log 2 + 2 log Γ(1+1/ζ) − log π
+    # − log Γ(1+2/ζ) + (1/ζ) L with L = log(1 + cos(θ−μ)), evaluated as
+    # log 2 + 2 log|cos((θ−μ)/2)| to avoid the 1+cos cancellation near the
+    # antipode. Likelihood hazard documented in the regression plan: the
+    # density is exactly 0 at θ−μ = π for every ζ, where L, tan((θ−μ)/2)
+    # and all derivatives diverge. In practice this makes the tanhalf
+    # likelihood's generic multimodality bite hard — from the intercept-only
+    # null start the fit lands in a wrong basin on roughly half of random
+    # datasets. Mitigation (verified in the dev smoke harness): warm-start
+    # the location LP from a wrapped-normal pilot fit (whose density has no
+    # zeros), ζ from this family's own intercept-only ``fit``.
+
+    def dlogpdf(self, x, mu, zeta):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        $$\frac{\partial\ell}{\partial\mu} = \frac{\tan((\theta-\mu)/2)}{\zeta},
+          \qquad
+          \frac{\partial\ell}{\partial\zeta} = \frac{-\log 2
+          - 2\psi(1+1/\zeta) + 2\psi(1+2/\zeta) - L}{\zeta^2},$$
+
+        with $\psi$ the digamma function (the ζ column matches the analytic
+        gradient used by ``fit``). Vectorizes over per-observation
+        ``mu``/``zeta`` arrays; returns a book-named dict.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        zeta = np.asarray(zeta, dtype=float)
+        d = x - mu
+        t = np.tan(0.5 * d)
+        with np.errstate(divide="ignore"):  # L → −∞ at the antipode
+            L = np.log(2.0) + 2.0 * np.log(np.abs(np.cos(0.5 * d)))
+        inv = 1.0 / zeta
+        B = (
+            -np.log(2.0)
+            - 2.0 * digamma(1.0 + inv)
+            + 2.0 * digamma(1.0 + 2.0 * inv)
+            - L
+        )
+        return {"mu": t * inv, "zeta": B * inv * inv}
+
+    def d2logpdf(self, x, mu, zeta):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs.
+
+        $$\ell_{\mu\mu} = -\frac{1+t^2}{2\zeta},\quad
+          \ell_{\mu\zeta} = -\frac{t}{\zeta^2},\quad
+          \ell_{\zeta\zeta} = \frac{2\psi_1(1+1/\zeta)
+          - 4\psi_1(1+2/\zeta)}{\zeta^4} - \frac{2}{\zeta}\,\ell_\zeta,$$
+
+        with $t = \tan((\theta-\mu)/2)$ and $\psi_1$ the trigamma function.
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        zeta = np.asarray(zeta, dtype=float)
+        d = x - mu
+        t = np.tan(0.5 * d)
+        with np.errstate(divide="ignore"):
+            L = np.log(2.0) + 2.0 * np.log(np.abs(np.cos(0.5 * d)))
+        inv = 1.0 / zeta
+        B = (
+            -np.log(2.0)
+            - 2.0 * digamma(1.0 + inv)
+            + 2.0 * digamma(1.0 + 2.0 * inv)
+            - L
+        )
+        l_zeta = B * inv * inv
+        return {
+            ("mu", "mu"): -0.5 * (1.0 + t * t) * inv,
+            ("mu", "zeta"): -t * inv * inv,
+            ("zeta", "zeta"): (
+                2.0 * polygamma(1, 1.0 + inv)
+                - 4.0 * polygamma(1, 1.0 + 2.0 * inv)
+            )
+            * inv**4
+            - 2.0 * inv * l_zeta,
+        }
 
     def _argcheck(self, mu, zeta):
         try:
@@ -2383,7 +2616,7 @@ class cartwright_gen(CircularContinuous):
 cartwright = cartwright_gen(name="cartwright")
 
 
-class wrapnorm_gen(CircularContinuous):
+class wrapnorm_gen(_RegressionReady, CircularContinuous):
     """Wrapped Normal Distribution
 
     ![wrapnorm](../images/circ-mod-wrapnorm.png)
@@ -2415,6 +2648,12 @@ class wrapnorm_gen(CircularContinuous):
     -----
     Implementation based on Section 4.3.7 of Pewsey et al. (2014)
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/rho are preserved; ρ is the mean resultant length,
+    # bounded in (0, 1), so its default link is logit. ---
+    param_roles = {"mu": "location", "rho": "concentration"}
+    default_links = {"location": "tanhalf", "concentration": "logit"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2496,6 +2735,110 @@ class wrapnorm_gen(CircularContinuous):
             Probability density function evaluated at `x`.
         """
         return super().pdf(x, mu, rho, *args, **kwargs)
+
+    # Derivative methods (the regression contract) reuse the same hybrid
+    # split as ``_pdf``, so l1/l2 differentiate exactly the density that
+    # ``logpdf`` evaluates. Fourier branch: term-wise series ratios. Gaussian
+    # branch: scores of a 5-component wrapped-image mixture as softmax-
+    # weighted moments m_j = Σ w_k z_k^j (the e^{-z²/2} weights are
+    # max-stabilized, so no underflow at high concentration), chained
+    # through σ(ρ) = √(−2 log ρ) with σ' = −1/(ρσ), σ'' = (σ²−1)/(ρ²σ³).
+
+    def _score_terms(self, x, mu, rho, second):
+        x_b, mu_b, rho_b = np.broadcast_arrays(
+            *(np.asarray(v, dtype=float) for v in (x, mu, rho))
+        )
+        shape = x_b.shape
+        xf = x_b.reshape(-1)
+        mf = mu_b.reshape(-1)
+        rf = rho_b.reshape(-1)
+        d1 = {k: np.empty(xf.shape, dtype=float) for k in ("mu", "rho")}
+        d2 = (
+            {k: np.empty(xf.shape, dtype=float)
+             for k in (("mu", "mu"), ("mu", "rho"), ("rho", "rho"))}
+            if second
+            else None
+        )
+
+        lo = rf <= self._FOURIER_RHO_MAX
+        if np.any(lo):
+            p = np.arange(1.0, 30.0)
+            d = xf[lo, None] - mf[lo, None]
+            r = rf[lo, None]
+            rp = r ** (p**2)
+            cs, sn = np.cos(p * d), np.sin(p * d)
+            S0 = 1.0 + 2.0 * np.sum(rp * cs, axis=1)
+            Smu = 2.0 * np.sum(p * rp * sn, axis=1)
+            Srho = 2.0 * np.sum(p**2 * r ** (p**2 - 1.0) * cs, axis=1)
+            lmu, lrho = Smu / S0, Srho / S0
+            d1["mu"][lo], d1["rho"][lo] = lmu, lrho
+            if second:
+                Smm = -2.0 * np.sum(p**2 * rp * cs, axis=1)
+                Smr = 2.0 * np.sum(p**3 * r ** (p**2 - 1.0) * sn, axis=1)
+                # the p = 1 term of S_ρρ has coefficient p²(p²−1) = 0; start
+                # at p = 2 so ρ^{p²−2} never sees a negative exponent
+                p2 = p[1:]
+                Srr = 2.0 * np.sum(
+                    p2**2 * (p2**2 - 1.0) * r ** (p2**2 - 2.0) * cs[:, 1:],
+                    axis=1,
+                )
+                d2[("mu", "mu")][lo] = Smm / S0 - lmu * lmu
+                d2[("mu", "rho")][lo] = Smr / S0 - lmu * lrho
+                d2[("rho", "rho")][lo] = Srr / S0 - lrho * lrho
+
+        hi = ~lo
+        if np.any(hi):
+            rh = np.clip(rf[hi], None, 1.0 - 1e-15)
+            sigma = np.sqrt(-2.0 * np.log(rh))
+            k = np.arange(-2.0, 3.0)
+            z = (xf[hi, None] - mf[hi, None] + 2.0 * np.pi * k) / sigma[:, None]
+            z2 = z * z
+            w = np.exp(-0.5 * (z2 - np.min(z2, axis=1, keepdims=True)))
+            w /= np.sum(w, axis=1, keepdims=True)
+            m1 = np.sum(w * z, axis=1)
+            m2 = np.sum(w * z2, axis=1)
+            l_sig = (m2 - 1.0) / sigma
+            sp = -1.0 / (rh * sigma)  # dσ/dρ
+            d1["mu"][hi] = m1 / sigma
+            d1["rho"][hi] = l_sig * sp
+            if second:
+                m3 = np.sum(w * z2 * z, axis=1)
+                m4 = np.sum(w * z2 * z2, axis=1)
+                s2 = sigma * sigma
+                l_mm = (m2 - 1.0 - m1 * m1) / s2
+                l_ms = (m3 - 3.0 * m1 - m1 * (m2 - 1.0)) / s2
+                l_ss = (m4 - 5.0 * m2 + 2.0 - (m2 - 1.0) ** 2) / s2
+                spp = (s2 - 1.0) / (rh * rh * sigma * s2)  # d²σ/dρ²
+                d2[("mu", "mu")][hi] = l_mm
+                d2[("mu", "rho")][hi] = l_ms * sp
+                d2[("rho", "rho")][hi] = l_ss * sp * sp + l_sig * spp
+
+        d1 = {k: v.reshape(shape) for k, v in d1.items()}
+        if second:
+            d2 = {k: v.reshape(shape) for k, v in d2.items()}
+        return d1, d2
+
+    def dlogpdf(self, x, mu, rho):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        Fourier branch (ρ ≤ 0.8): with $S_0 = 1 + 2\sum_p \rho^{p^2}\cos p\phi$,
+
+        $$\frac{\partial\ell}{\partial\mu} =
+          \frac{2\sum_p p\,\rho^{p^2}\sin p\phi}{S_0},\qquad
+          \frac{\partial\ell}{\partial\rho} =
+          \frac{2\sum_p p^2\rho^{p^2-1}\cos p\phi}{S_0}.$$
+
+        Gaussian-image branch (ρ > 0.8): mixture scores via softmax-weighted
+        moments, chained through σ(ρ). Vectorizes over per-observation
+        ``mu``/``rho`` arrays; returns a book-named dict.
+        """
+        return self._score_terms(x, mu, rho, second=False)[0]
+
+    def d2logpdf(self, x, mu, rho):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs,
+        as ratio forms $f_{ab}/f - (f_a/f)(f_b/f)$ on the same hybrid split
+        as ``_pdf`` (see ``_score_terms``)."""
+        return self._score_terms(x, mu, rho, second=True)[1]
 
     @staticmethod
     def _wrapnorm_cdf_pdf(theta, mu_val, sigma, *, tol=1e-13, max_iter=500):
@@ -5432,7 +5775,7 @@ def _vmft_ensure_scalar(value, name):
     )
 
 
-class jonespewsey_gen(CircularContinuous):
+class jonespewsey_gen(_RegressionReady, CircularContinuous):
     """Jones-Pewsey Distribution
 
     ![jonespewsey](../images/circ-mod-jonespewsey.png)
@@ -5454,6 +5797,64 @@ class jonespewsey_gen(CircularContinuous):
     fallback. Other methods (cdf, rvs, …) remain scalar-only.
     Implementation based on Section 4.3.9 of Pewsey et al. (2014)
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/kappa/psi are preserved; ψ ∈ ℝ indexes the family
+    # shape (−1 wrapped Cauchy, 0 von Mises, +1 cardioid), so it rides an
+    # identity link. l1/l2 split as kernel terms (`_jp_score_terms`, exact
+    # closed forms) minus log-normalizer moments (`_jp_logZ_moments_vec`, one
+    # Gauss–Legendre sweep per unique (κ, ψ) pair). Note the derivatives stay
+    # exact below _JP_KAPPA_TOL while ``logpdf`` flattens to the uniform
+    # value there — the value gap is O(κ) ≤ 1e-3 relative, and live scores in
+    # that corner let the optimizer escape it. ---
+    param_roles = {"mu": "location", "kappa": "concentration", "psi": "shape"}
+    default_links = {
+        "location": "tanhalf",
+        "concentration": "log",
+        "shape": "identity",
+    }
+
+    def dlogpdf(self, x, mu, kappa, psi):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        With ``h`` the log-kernel and ``Z`` the normalizer:
+
+        $$\frac{\partial\ell}{\partial\mu} = -h_\phi,\qquad
+          \frac{\partial\ell}{\partial\kappa} = h_\kappa -
+          \mathbb{E}[h_\kappa],\qquad
+          \frac{\partial\ell}{\partial\psi} = h_\psi - \mathbb{E}[h_\psi],$$
+
+        the expectations under the JP density itself (one quadrature per
+        unique (κ, ψ); see ``_jp_logZ_moments``). Vectorizes over
+        per-observation parameter arrays; returns a book-named dict.
+        """
+        x = np.asarray(x, dtype=float)
+        mu_b, kappa_b, psi_b = (
+            np.asarray(v, dtype=float) for v in (mu, kappa, psi)
+        )
+        t = _jp_score_terms(x - mu_b, kappa_b, psi_b, second=False)
+        dk, dp, *_ = _jp_logZ_moments_vec(kappa_b, psi_b)
+        return {"mu": -t["hphi"], "kappa": t["hk"] - dk, "psi": t["hp"] - dp}
+
+    def d2logpdf(self, x, mu, kappa, psi):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs:
+        kernel terms minus the log-normalizer's covariance-form second
+        moments, ``∂²log Z/∂θ_a∂θ_b = E[h_{ab} + h_a h_b] − E[h_a]E[h_b]``
+        (μ never enters Z)."""
+        x = np.asarray(x, dtype=float)
+        mu_b, kappa_b, psi_b = (
+            np.asarray(v, dtype=float) for v in (mu, kappa, psi)
+        )
+        t = _jp_score_terms(x - mu_b, kappa_b, psi_b, second=True)
+        _, _, dkk, dkp, dpp = _jp_logZ_moments_vec(kappa_b, psi_b)
+        return {
+            ("mu", "mu"): t["hphiphi"],
+            ("mu", "kappa"): -t["hphik"],
+            ("mu", "psi"): -t["hphip"],
+            ("kappa", "kappa"): t["hkk"] - dkk,
+            ("kappa", "psi"): t["hkp"] - dkp,
+            ("psi", "psi"): t["hpp"] - dpp,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -6277,12 +6678,231 @@ def _c_jonespewsey_vec(kappa, psi):
     return out
 
 
+# --- Jones–Pewsey regression derivatives (the l1/l2 contract) ----------------
+# Everything below differentiates the JP log-kernel h(φ; κ, ψ) =
+# (1/ψ) log(cosh κψ + sinh κψ cos φ) and the log-normalizer log Z(κ, ψ); the
+# distribution methods assemble them into per-observation score/Hessian
+# entries. Derivatives are exact down to κ → 0 (no _JP_KAPPA_TOL flat spot:
+# the uniform reduction in ``_pdf`` is a value-only shortcut, and keeping the
+# scores smooth there preserves the gradient signal the optimizer needs to
+# leave the near-uniform corner).
+
+_JP_A_SMALL = 1e-4  # |κψ| below this switches the ψ-direction to series
+_JP_LOG_CAP = 250.0  # cap on log Ṽ; see _jp_score_terms
+
+
+def _jp_score_terms(phi, kappa, psi, second=True):
+    r"""Stable per-observation derivatives of the JP log-kernel
+    ``h(φ; κ, ψ) = (1/ψ) log(cosh κψ + sinh κψ cos φ)``.
+
+    All quantities derive from overflow-safe primitives of the exact
+    decomposition ``g = e^A cos²(φ/2) + e^{−A} sin²(φ/2)`` (A = κψ):
+
+    - ``lg = log g`` via ``logaddexp``;
+    - ``arg = A + ½(lp − lq)`` so that ``T := g_A/g = tanh(arg)`` and
+      ``∂T/∂A = sech²(arg)`` — and, since ``∂arg/∂φ = −1/sin φ``,
+      ``∂T/∂φ = −sech²(arg)/sin φ`` (→ 0 at φ ≡ 0, π);
+    - ``Ṽ := sinh(A)/(ψ g) = κ·sinhc(A)/g ≥ 0`` in log form, so that
+      ``h_φ = −Ṽ sin φ`` and ``h_φφ = −Ṽ cos φ − ψ (Ṽ sin φ)²``.
+
+    The ψ-direction uses the cumulant view: ``log g = K(A)``, the cgf of a
+    ±1 variable with ``P(+1) = cos²(φ/2)`` and cumulants κ₁ = c, κ₂ = s²,
+    κ₃ = −2cs², κ₄ = s²(4−6s²), κ₅ = −8cs²(1−3s²) (c = cos φ, s = sin φ):
+
+    $$h_ψ = κ²\frac{AT − K}{A²},\qquad
+      h_{ψψ} = κ³\frac{A²\,\mathrm{sech}²(arg) − 2AT + 2K}{A³},\qquad
+      h_{φψ} = κ²\frac{A\,T_φ + ψ\,Ṽ\sinφ}{A²}.$$
+
+    These cancel catastrophically as A → 0, so ``|A| < _JP_A_SMALL``
+    switches to the cumulant series (agreement ≲1e-9 at the boundary,
+    checked by the dev harness). log Ṽ is capped at ``_JP_LOG_CAP`` so the
+    0·∞ antipode corner (|κψ| beyond ~350) degrades to large-but-finite
+    scores instead of NaN — far outside any optimizer-recoverable region.
+
+    Returns a dict with the log-kernel ``h`` and first derivatives
+    ``hphi``, ``hk``, ``hp``; with ``second=True`` adds ``hphiphi``,
+    ``hphik``, ``hphip``, ``hkk``, ``hkp``, ``hpp``.
+    """
+    phi_b, kappa_b, psi_b = np.broadcast_arrays(
+        np.asarray(phi, dtype=float),
+        np.asarray(kappa, dtype=float),
+        np.asarray(psi, dtype=float),
+    )
+    A = kappa_b * psi_b
+    absA = np.abs(A)
+    half = 0.5 * phi_b
+    s, c = np.sin(phi_b), np.cos(phi_b)
+    s2 = s * s
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lp = 2.0 * np.log(np.abs(np.cos(half)))
+        lq = 2.0 * np.log(np.abs(np.sin(half)))
+        logk = np.log(kappa_b)  # −inf at κ = 0 (uniform: Ṽ = 0)
+        logabss = np.log(np.abs(s))  # −inf at φ ≡ 0, π
+    lg = np.logaddexp(A + lp, -A + lq)
+    arg = A + 0.5 * (lp - lq)
+    T = np.tanh(arg)
+    a2 = np.exp(-2.0 * np.abs(arg))
+    sech2 = 4.0 * a2 / (1.0 + a2) ** 2
+    small = absA < _JP_A_SMALL
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lsinhc = np.where(
+            small,
+            A * A / 6.0,
+            absA + np.log1p(-np.exp(-2.0 * absA)) - np.log(2.0 * absA),
+        )
+    lVt = np.minimum(logk + lsinhc - lg, _JP_LOG_CAP)
+    Vt = np.exp(lVt)
+    sVt = np.sign(s) * np.exp(logabss + lVt)  # Ṽ·sin φ, 0·∞-safe
+
+    # cumulants of the ±1 cgf K(A) at this φ
+    k3 = -2.0 * c * s2
+    k4 = s2 * (4.0 - 6.0 * s2)
+    k5 = -8.0 * c * s2 * (1.0 - 3.0 * s2)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        h = np.where(
+            small,
+            kappa_b
+            * (c + s2 * A / 2.0 + k3 * A * A / 6.0 + k4 * A**3 / 24.0),
+            lg / psi_b,
+        )
+        W = np.where(
+            small,
+            s2 / 2.0 + k3 * A / 3.0 + k4 * A * A / 8.0 + k5 * A**3 / 30.0,
+            (A * T - lg) / (A * A),
+        )
+    out = {
+        "h": h,
+        "hphi": -sVt,
+        "hk": T,
+        "hp": kappa_b * kappa_b * W,
+    }
+    if not second:
+        return out
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        Tphi = np.where(s == 0.0, 0.0, -sech2 / s)
+        Wp = np.where(
+            small,
+            k3 / 3.0 + k4 * A / 4.0 + k5 * A * A / 10.0,
+            (A * A * sech2 - 2.0 * A * T + 2.0 * lg) / A**3,
+        )
+        Wphi = np.where(
+            small,
+            s * c
+            + 2.0 * s * (1.0 - 3.0 * c * c) * A / 3.0
+            + s * c * (1.0 - 3.0 * s2) * A * A,
+            (A * Tphi + psi_b * sVt) / (A * A),
+        )
+    out.update(
+        {
+            "hphiphi": -c * Vt - psi_b * sVt * sVt,
+            "hphik": Tphi,
+            "hphip": kappa_b * kappa_b * Wphi,
+            "hkk": psi_b * sech2,
+            "hkp": kappa_b * sech2,
+            "hpp": kappa_b**3 * Wp,
+        }
+    )
+    return out
+
+
+_JP_GL_XW = roots_legendre(24)
+
+
+@lru_cache(maxsize=4096)
+def _jp_logZ_moments(kappa: float, psi: float):
+    """First and second (κ, ψ)-derivatives of ``log Z(κ, ψ)`` with
+    ``Z = ∫ kernel dφ``, as kernel-weighted moments:
+
+        ∂log Z/∂θ_a  = E[h_a],
+        ∂²log Z/∂θ_a∂θ_b = E[h_ab + h_a h_b] − E[h_a]E[h_b],
+
+    the expectations taken under the JP density itself. Evaluated by
+    composite 24-point Gauss–Legendre on the geometric break-point ladder of
+    ``_c_jonespewsey`` (every panel spans at most one decade of the peak
+    width, so each is smooth at GL precision); the kernel is even in φ, so
+    nodes live on [0, π]. One node sweep serves all five integrands — the
+    "one numeric expectation per unique parameter tuple" cost of the plan,
+    cached per (κ, ψ) so ``dlogpdf``/``d2logpdf`` within one ``ll()``
+    evaluation share the work.
+
+    Returns ``(dk, dp, dkk, dkp, dpp)``.
+    """
+    A = kappa * psi
+    if abs(A) < 1e-12:
+        keff = max(kappa, 1e-12)
+        width = float(np.clip(1.0 / np.sqrt(keff), 1e-13, 1.0))
+    else:
+        if A >= 0.0:
+            log_keff = np.log(-np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+        else:
+            log_keff = np.log(np.expm1(-2.0 * A)) - np.log(2.0 * abs(psi))
+        width = float(np.clip(np.exp(-0.5 * log_keff), 1e-13, 1.0))
+
+    # Rungs from *both* ends: the peak ladder (φ = 0, curvature scale
+    # 1/√κ_eff) resolves the ψ < 0 spike; for ψ > 0 the hard feature is
+    # instead the near-zero at the antipode — g ≈ e^A cos²(φ/2) + e^{−A}
+    # crosses over at π − φ ≈ 2e^{−|A|}, a √-type near-kink the kernel
+    # *and* the moment integrands (T swings 1 → −1 there) inherit, which
+    # a coarse panel straddles at only ~1e-7 accuracy.
+    w_anti = float(np.clip(2.0 * np.exp(-abs(A)), 1e-13, 1.0))
+    edge_set = {0.0, float(np.pi)}
+    r = width
+    while r < np.pi:
+        edge_set.add(r)
+        r *= 10.0
+    r = w_anti
+    while r < np.pi:
+        edge_set.add(float(np.pi) - r)
+        r *= 10.0
+    edges = sorted(edge_set)
+
+    xi, wgl = _JP_GL_XW
+    nodes, wts = [], []
+    for a, b in zip(edges[:-1], edges[1:]):
+        mid, hw = 0.5 * (a + b), 0.5 * (b - a)
+        nodes.append(mid + hw * xi)
+        wts.append(hw * wgl)
+    nodes = np.concatenate(nodes)
+    wts = np.concatenate(wts)
+
+    t = _jp_score_terms(nodes, kappa, psi, second=True)
+    e = np.exp(t["h"] - float(np.max(t["h"]))) * wts
+    Z = float(np.sum(e))
+
+    def m(v):
+        return float(np.sum(e * v)) / Z
+
+    dk, dp = m(t["hk"]), m(t["hp"])
+    dkk = m(t["hkk"] + t["hk"] * t["hk"]) - dk * dk
+    dkp = m(t["hkp"] + t["hk"] * t["hp"]) - dk * dp
+    dpp = m(t["hpp"] + t["hp"] * t["hp"]) - dp * dp
+    return dk, dp, dkk, dkp, dpp
+
+
+def _jp_logZ_moments_vec(kappa, psi):
+    """Element-wise ``_jp_logZ_moments`` over per-observation (κ_i, ψ_i),
+    evaluated once per unique pair. Returns five arrays broadcast to the
+    common parameter shape: ``(dk, dp, dkk, dkp, dpp)``."""
+    kappa, psi = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(psi, dtype=float)
+    )
+    pairs, inverse = np.unique(
+        np.stack([kappa.ravel(), psi.ravel()], axis=1), axis=0,
+        return_inverse=True,
+    )
+    vals = np.array([_jp_logZ_moments(float(k), float(p)) for k, p in pairs])
+    out = vals[inverse].reshape(kappa.shape + (5,))
+    return tuple(np.moveaxis(out, -1, 0))
+
+
 ###########################
 ## Sine-Skewed Extention ##
 ###########################
 
 
-class jonespewsey_sineskewed_gen(CircularContinuous):
+class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
     r"""Sine-Skewed Jones-Pewsey Distribution
 
     The Sine-Skewed Jones-Pewsey distribution is a circular distribution defined on $[0, 2\pi)$
@@ -6306,6 +6926,89 @@ class jonespewsey_sineskewed_gen(CircularContinuous):
     methods (cdf, rvs, …) remain scalar-only.
     Implementation based on Section 4.3.11 of Pewsey et al. (2014)
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names xi/kappa/psi/lmbd are preserved. The sine-skew factor
+    # 1 + λ sin(θ−ξ) leaves the JP normalizer c(κ, ψ) untouched, so a λ
+    # linear predictor costs nothing beyond its trivial derivative terms —
+    # this is the recommended asymmetric response family of the regression
+    # plan. λ ∈ (−1, 1) rides the tanh link. Caveat (book §4.3.11): once
+    # λ ≠ 0, ξ is the *mode anchor*, not the mean direction — the engine's
+    # fitted-direction report inherits that reading. At |λ| → 1 the density
+    # touches 0 where λ sin(θ−ξ) = −1 (logpdf → −∞; the link keeps λ
+    # interior). ---
+    param_roles = {
+        "xi": "location",
+        "kappa": "concentration",
+        "psi": "shape",
+        "lmbd": "skewness",
+    }
+    default_links = {
+        "location": "tanhalf",
+        "concentration": "log",
+        "shape": "identity",
+        "skewness": "tanh",
+    }
+
+    def dlogpdf(self, x, xi, kappa, psi, lmbd):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        The log-density is ``log Q + h − log Z`` with ``Q = 1 + λ sin φ``,
+        ``φ = θ − ξ`` and ``h``/``Z`` the Jones–Pewsey kernel/normalizer:
+
+        $$\ell_\xi = -\frac{\lambda\cos\phi}{Q} - h_\phi,\quad
+          \ell_\kappa = h_\kappa - \mathbb{E}[h_\kappa],\quad
+          \ell_\psi = h_\psi - \mathbb{E}[h_\psi],\quad
+          \ell_\lambda = \frac{\sin\phi}{Q}.$$
+
+        Vectorizes over per-observation parameter arrays; returns a
+        book-named dict.
+        """
+        x = np.asarray(x, dtype=float)
+        xi_b, kappa_b, psi_b, lmbd_b = (
+            np.asarray(v, dtype=float) for v in (xi, kappa, psi, lmbd)
+        )
+        phi = x - xi_b
+        s, c = np.sin(phi), np.cos(phi)
+        Q = 1.0 + lmbd_b * s
+        t = _jp_score_terms(phi, kappa_b, psi_b, second=False)
+        dk, dp, *_ = _jp_logZ_moments_vec(kappa_b, psi_b)
+        return {
+            "xi": -lmbd_b * c / Q - t["hphi"],
+            "kappa": t["hk"] - dk,
+            "psi": t["hp"] - dp,
+            "lmbd": s / Q,
+        }
+
+    def d2logpdf(self, x, xi, kappa, psi, lmbd):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs.
+        The skew factor contributes only to the (ξ, λ) block (its normalizer
+        is λ- and ξ-free), so the κ/ψ entries are exactly the Jones–Pewsey
+        ones and the (κ, λ), (ψ, λ) cross terms vanish identically."""
+        x = np.asarray(x, dtype=float)
+        xi_b, kappa_b, psi_b, lmbd_b = (
+            np.asarray(v, dtype=float) for v in (xi, kappa, psi, lmbd)
+        )
+        phi = x - xi_b
+        s, c = np.sin(phi), np.cos(phi)
+        Q = 1.0 + lmbd_b * s
+        Q2 = Q * Q
+        t = _jp_score_terms(phi, kappa_b, psi_b, second=True)
+        _, _, dkk, dkp, dpp = _jp_logZ_moments_vec(kappa_b, psi_b)
+        zero = np.zeros(np.broadcast_shapes(phi.shape, Q.shape))
+        return {
+            ("xi", "xi"): -lmbd_b * (s * Q + lmbd_b * c * c) / Q2
+            + t["hphiphi"],
+            ("xi", "kappa"): -t["hphik"],
+            ("xi", "psi"): -t["hphip"],
+            ("xi", "lmbd"): -c / Q2,
+            ("kappa", "kappa"): t["hkk"] - dkk,
+            ("kappa", "psi"): t["hkp"] - dkp,
+            ("kappa", "lmbd"): zero,
+            ("psi", "psi"): t["hpp"] - dpp,
+            ("psi", "lmbd"): zero,
+            ("lmbd", "lmbd"): -s * s / Q2,
+        }
 
     def _validate_params(self, xi, kappa, psi, lmbd):
         xi_arr, kappa_arr, psi_arr, lmbd_arr = np.broadcast_arrays(xi, kappa, psi, lmbd)
@@ -8920,7 +9623,89 @@ def _wrapstable_sample_linear(alpha, beta, gamma, delta, *, size, rng):
 
     return x
 
-class katojones_gen(CircularContinuous):
+def _kj_cart_scores(x, mu, gamma, a, b, second=True):
+    r"""Derivatives of the Kato–Jones log-density in Cartesian shape
+    coordinates ``(a, b) = (ρ cos λ, ρ sin λ)`` (regression plan §3.4).
+
+    In these coordinates the log-density is elementary:
+
+    $$\ell = \log N - \log 2\pi,\qquad
+      N = 1 + \frac{2\gamma(c - a)}{D},\qquad
+      D = 1 + a^2 + b^2 - 2ac - 2bs,$$
+
+    with ``c = cos(θ−μ)``, ``s = sin(θ−μ)``. All partials follow from the
+    quotient rule on ``F = (c−a)/D`` (``N = 1 + 2γF``); the only nonzero
+    second partials of the numerator/denominator are ``E_{μμ} = −c`` and
+    ``D_{aa} = D_{bb} = 2``, ``D_{μa} = −2s``, ``D_{μb} = 2c``,
+    ``D_{μμ} = 2(bs + ac)``. ``N`` is floored at a tiny positive value for
+    the same reason ``_pdf`` clips: strictly inside the Theorem-1 disc the
+    density is positive, but boundary-hugging parameters can round it to 0.
+
+    Returns ``(l1, l2)`` dicts keyed by ``mu``/``gamma``/``a``/``b`` and
+    their unordered pairs (``l2 = None`` when ``second=False``).
+    """
+    x_b, mu_b, g_b, a_b, b_b = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (x, mu, gamma, a, b))
+    )
+    delta = x_b - mu_b
+    c, s = np.cos(delta), np.sin(delta)
+    D = 1.0 + a_b * a_b + b_b * b_b - 2.0 * a_b * c - 2.0 * b_b * s
+    D = np.maximum(D, 1e-300)
+    E = c - a_b
+    F = E / D
+    N = np.maximum(1.0 + 2.0 * g_b * F, 1e-300)
+
+    E1 = {"mu": s, "a": -np.ones_like(s), "b": np.zeros_like(s)}
+    D1 = {
+        "mu": 2.0 * (b_b * c - a_b * s),
+        "a": 2.0 * (a_b - c),
+        "b": 2.0 * (b_b - s),
+    }
+    names = ("mu", "a", "b")
+    F1 = {k: (E1[k] * D - E * D1[k]) / (D * D) for k in names}
+
+    l1 = {
+        "mu": 2.0 * g_b * F1["mu"] / N,
+        "gamma": 2.0 * F / N,
+        "a": 2.0 * g_b * F1["a"] / N,
+        "b": 2.0 * g_b * F1["b"] / N,
+    }
+    if not second:
+        return l1, None
+
+    zero = np.zeros_like(s)
+    E2 = {("mu", "mu"): -c}
+    D2 = {
+        ("mu", "mu"): 2.0 * (b_b * s + a_b * c),
+        ("mu", "a"): -2.0 * s,
+        ("mu", "b"): 2.0 * c,
+        ("a", "a"): 2.0 * np.ones_like(s),
+        ("a", "b"): zero,
+        ("b", "b"): 2.0 * np.ones_like(s),
+    }
+    l2 = {}
+    for i, xn in enumerate(names):
+        for yn in names[i:]:
+            Exy = E2.get((xn, yn), zero)
+            Dxy = D2[(xn, yn)]
+            Fxy = (
+                Exy / D
+                - (E1[xn] * D1[yn] + E1[yn] * D1[xn] + E * Dxy) / (D * D)
+                + 2.0 * E * D1[xn] * D1[yn] / (D * D * D)
+            )
+            l2[(xn, yn)] = (
+                2.0 * g_b * Fxy / N
+                - 4.0 * g_b * g_b * F1[xn] * F1[yn] / (N * N)
+            )
+    l2[("gamma", "gamma")] = -4.0 * F * F / (N * N)
+    for xn in names:
+        l2[("gamma", xn)] = (
+            2.0 * F1[xn] / N - 4.0 * g_b * F * F1[xn] / (N * N)
+        )
+    return l1, l2
+
+
+class katojones_gen(_RegressionReady, CircularContinuous):
     """
     Kato--Jones (2015) Distribution
 
@@ -8956,6 +9741,182 @@ class katojones_gen(CircularContinuous):
       four-parameter family of unimodal distributions on the circle*. Biometrika,
       102(1), 181-190.
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only — descriptive use keeps the book parameterization (mu, gamma, rho,
+    # lam)). The regression coordinates are the **disc chart** of plan §3.4:
+    # the Theorem-1 feasible set for the Cartesian shape pair
+    # (a, b) = (ρ cos λ, ρ sin λ) is the closed disc of center (γ, 0) and
+    # radius 1−γ, and the chart
+    #
+    #     (a, b) = (γ, 0) + (1−γ)·u/√(1+‖u‖²),   u ∈ ℝ²,
+    #
+    # maps an unconstrained u to its open interior — every (μ, γ, u₁, u₂)
+    # with γ ∈ (0, 1) is feasible, so univariate links suffice and no
+    # constraint ever reaches the optimizer. u = 0 is exactly the wrapped
+    # Cauchy WC(μ, γ) (the nesting test point). ``dlogpdf``/``d2logpdf``
+    # therefore take (mu, gamma, u1, u2); the ``KatoJonesLL`` family in
+    # ``regression.py`` owns the (γ, u) → (ρ, λ) translation for ``logpdf``
+    # and ``fit``. ---
+    param_roles = {
+        "mu": "location",
+        "gamma": "concentration",
+        "u1": "shape",
+        "u2": "shape",
+    }
+    default_links = {
+        "location": "tanhalf",
+        "concentration": "logit",
+        "shape": "identity",
+    }
+
+    @staticmethod
+    def disc_chart(gamma, u1, u2):
+        """Map unconstrained chart coordinates ``u`` to the Cartesian shape
+        pair ``(a, b)`` strictly inside the Theorem-1 disc (plan §3.4)."""
+        gamma, u1, u2 = (np.asarray(v, dtype=float) for v in (gamma, u1, u2))
+        r = np.sqrt(1.0 + u1 * u1 + u2 * u2)
+        om = 1.0 - gamma
+        return gamma + om * u1 / r, om * u2 / r
+
+    @staticmethod
+    def disc_chart_inverse(gamma, rho, lam, *, vmax=1.0 - 1e-9):
+        """Closed-form chart inverse: book shape parameters ``(ρ, λ)`` →
+        chart coordinates ``(u₁, u₂)``. Boundary or infeasible (ρ, λ) — a
+        moments fit can land exactly on the Theorem-1 circle — are first
+        pulled radially to ``vmax`` times the disc radius so the inverse
+        stays finite."""
+        gamma, rho, lam = (np.asarray(v, dtype=float) for v in (gamma, rho, lam))
+        om = np.maximum(1.0 - gamma, 1e-12)
+        v1 = (rho * np.cos(lam) - gamma) / om
+        v2 = rho * np.sin(lam) / om
+        n = np.hypot(v1, v2)
+        scale = np.where(n > vmax, vmax / np.maximum(n, 1e-300), 1.0)
+        v1, v2 = v1 * scale, v2 * scale
+        den = np.sqrt(np.maximum(1.0 - (v1 * v1 + v2 * v2), 1e-18))
+        return v1 / den, v2 / den
+
+    @staticmethod
+    def _chart_pieces(gamma, u1, u2, second):
+        """Chart value plus the Jacobian/Hessian pieces the chain rule
+        needs: ``(a, b)``, ``∂(a,b)/∂γ``, ``∂(a,b)/∂u_j`` and, for l2, the
+        ``∂²(a,b)`` blocks (the chart is linear in γ, so only the mixed
+        γ–u and u–u second derivatives survive)."""
+        r2 = 1.0 + u1 * u1 + u2 * u2
+        r = np.sqrt(r2)
+        r3 = r2 * r
+        v1, v2 = u1 / r, u2 / r
+        om = 1.0 - gamma
+        a = gamma + om * v1
+        b = om * v2
+        J11 = 1.0 / r - u1 * u1 / r3
+        J12 = -u1 * u2 / r3
+        J22 = 1.0 / r - u2 * u2 / r3
+        first = {
+            "a": a, "b": b,
+            "a_g": 1.0 - v1, "b_g": -v2,
+            "a_u": (om * J11, om * J12),
+            "b_u": (om * J12, om * J22),
+        }
+        if not second:
+            return first, None
+        r5 = r3 * r2
+        H1 = (
+            -3.0 * u1 / r3 + 3.0 * u1**3 / r5,        # ∂²v₁/∂u₁²
+            -u2 / r3 + 3.0 * u1 * u1 * u2 / r5,       # ∂²v₁/∂u₁∂u₂
+            -u1 / r3 + 3.0 * u1 * u2 * u2 / r5,       # ∂²v₁/∂u₂²
+        )
+        H2 = (
+            -u2 / r3 + 3.0 * u1 * u1 * u2 / r5,       # ∂²v₂/∂u₁²
+            -u1 / r3 + 3.0 * u1 * u2 * u2 / r5,       # ∂²v₂/∂u₁∂u₂
+            -3.0 * u2 / r3 + 3.0 * u2**3 / r5,        # ∂²v₂/∂u₂²
+        )
+        return first, {"J": (J11, J12, J22), "H1": H1, "H2": H2}
+
+    def dlogpdf(self, x, mu, gamma, u1, u2):
+        r"""First derivatives of ``logpdf`` w.r.t. the **chart parameters**
+        ``(μ, γ, u₁, u₂)`` (l1) — the Cartesian scores of
+        ``_kj_cart_scores`` pushed through the disc chart; the γ column
+        picks up the chart's own γ-dependence:
+
+        $$\frac{\partial\ell}{\partial\gamma}\Big|_{\text{chart}} =
+          \ell_\gamma + \ell_a(1 - v_1) - \ell_b v_2 .$$
+
+        Vectorizes over per-observation parameter arrays; returns a dict
+        keyed by the declared parameter names.
+        """
+        mu_b, g_b, u1_b, u2_b = np.broadcast_arrays(
+            *(np.asarray(v, dtype=float) for v in (mu, gamma, u1, u2))
+        )
+        ch, _ = self._chart_pieces(g_b, u1_b, u2_b, second=False)
+        l1, _ = _kj_cart_scores(x, mu_b, g_b, ch["a"], ch["b"], second=False)
+        la, lb = l1["a"], l1["b"]
+        return {
+            "mu": l1["mu"],
+            "gamma": l1["gamma"] + la * ch["a_g"] + lb * ch["b_g"],
+            "u1": la * ch["a_u"][0] + lb * ch["b_u"][0],
+            "u2": la * ch["a_u"][1] + lb * ch["b_u"][1],
+        }
+
+    def d2logpdf(self, x, mu, gamma, u1, u2):
+        r"""Second derivatives of ``logpdf`` w.r.t. the chart parameters
+        (l2) — the full second-order chain rule through the disc chart:
+        quadratic forms of the Cartesian Hessian in the chart Jacobian,
+        plus first-order Cartesian scores times the chart's curvature
+        (``∂²(a,b)/∂γ∂u`` and ``∂²(a,b)/∂u∂u``; the chart is linear in γ).
+        """
+        mu_b, g_b, u1_b, u2_b = np.broadcast_arrays(
+            *(np.asarray(v, dtype=float) for v in (mu, gamma, u1, u2))
+        )
+        ch, ch2 = self._chart_pieces(g_b, u1_b, u2_b, second=True)
+        l1, l2 = _kj_cart_scores(x, mu_b, g_b, ch["a"], ch["b"], second=True)
+        la, lb = l1["a"], l1["b"]
+        ag, bg = ch["a_g"], ch["b_g"]
+        au, bu = ch["a_u"], ch["b_u"]
+        J11, J12, J22 = ch2["J"]
+        Jrow = ((J11, J12), (J12, J22))  # J[k][j] = ∂v_k/∂u_j
+        H1, H2 = ch2["H1"], ch2["H2"]
+        Hidx = {(0, 0): 0, (0, 1): 1, (1, 1): 2}
+        om = 1.0 - g_b
+
+        lmm = l2[("mu", "mu")]
+        lma, lmb = l2[("mu", "a")], l2[("mu", "b")]
+        lgg = l2[("gamma", "gamma")]
+        lgm = l2[("gamma", "mu")]
+        lga, lgb = l2[("gamma", "a")], l2[("gamma", "b")]
+        laa, lab, lbb = l2[("a", "a")], l2[("a", "b")], l2[("b", "b")]
+
+        out = {
+            ("mu", "mu"): lmm,
+            ("mu", "gamma"): lgm + lma * ag + lmb * bg,
+            ("mu", "u1"): lma * au[0] + lmb * bu[0],
+            ("mu", "u2"): lma * au[1] + lmb * bu[1],
+            ("gamma", "gamma"): lgg
+            + 2.0 * (lga * ag + lgb * bg)
+            + laa * ag * ag
+            + 2.0 * lab * ag * bg
+            + lbb * bg * bg,
+        }
+        for j, name in enumerate(("u1", "u2")):
+            out[("gamma", name)] = (
+                lga * au[j]
+                + lgb * bu[j]
+                + (laa * ag + lab * bg) * au[j]
+                + (lab * ag + lbb * bg) * bu[j]
+                - la * Jrow[0][j]
+                - lb * Jrow[1][j]
+            )
+        for key, i, j in ((("u1", "u1"), 0, 0), (("u1", "u2"), 0, 1),
+                          (("u2", "u2"), 1, 1)):
+            k = Hidx[(i, j)]
+            out[key] = (
+                laa * au[i] * au[j]
+                + lab * (au[i] * bu[j] + bu[i] * au[j])
+                + lbb * bu[i] * bu[j]
+                + la * om * H1[k]
+                + lb * om * H2[k]
+            )
+        return out
 
     _moment_tolerance = 1e-12
 

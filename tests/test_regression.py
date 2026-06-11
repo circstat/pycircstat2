@@ -925,10 +925,39 @@ from pycircstat2.regression import CircularLL  # noqa: E402
 
 
 def test_circularll_requires_regression_ready():
-    from pycircstat2.distributions import cardioid
+    # triangular stays off the regression contract (no location parameter,
+    # non-smooth density — see the regression plan's "not worth promoting")
+    from pycircstat2.distributions import triangular
 
     with pytest.raises(TypeError, match="regression-ready"):
-        CircularLL(cardioid)
+        CircularLL(triangular)
+
+
+def test_katojones_family_dispatch():
+    """katojones regresses in disc-chart coordinates (u1/u2 are not logpdf
+    parameters): the bare distribution must auto-route to KatoJonesLL in
+    CLRegression, and base CircularLL must refuse it with guidance."""
+    from pycircstat2.distributions import katojones
+    from pycircstat2.regression import KatoJonesLL
+
+    with pytest.raises(TypeError, match="KatoJonesLL"):
+        CircularLL(katojones)
+
+    rng = np.random.default_rng(3)
+    theta = np.array([
+        float(katojones.rvs(mu=2.0, gamma=0.4, rho=0.3, lam=0.5,
+                            size=1, random_state=rng)[0])
+        for _ in range(80)
+    ])
+    df = pl.DataFrame({"theta": theta})
+    m = CLRegression(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=katojones)
+    assert isinstance(m.family, KatoJonesLL)
+    assert np.isfinite(m.result["log_likelihood"])
+    # the auto-route fits the same model as an explicit KatoJonesLL()
+    m2 = CLRegression(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df,
+                      family=KatoJonesLL())
+    assert np.isclose(m.result["log_likelihood"],
+                      m2.result["log_likelihood"], rtol=1e-8)
 
 
 def test_circularll_vonmises_intercept_only_matches_mle():
