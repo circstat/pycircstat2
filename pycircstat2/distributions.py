@@ -1192,7 +1192,7 @@ class triangular_gen(CircularContinuous):
     rvs(rho, size=None, random_state=None)
         Random variates via inverse-transform using the closed-form quantile.
 
-    fit(data)
+    fit(data, *, weights=None, method="mle" | "moments", ...)
         Fit the distribution to the data and return the parameter (rho).
 
     Notes
@@ -1494,14 +1494,15 @@ class triangular_gen(CircularContinuous):
             raise ValueError("'rho' must be provided.")
         return self._rvs(rho_val, size=size, random_state=random_state)
 
-    def fit(self, data, *, weights=None, method="mle", return_info=False):
+    def fit(self, data, *, weights=None, method="mle", return_info=False,
+            optimizer=None):
         r"""
         Estimate the concentration parameter $\rho$ of the circular triangular law on $[0,2\pi)$.
 
         Methods
         -------
 
-        mle (default): 
+        mle (default):
             maximize the log-likelihood. This solves the 1-D score equation
             $\sum_i \frac{c_i}{4+\rho\,c_i}=0$ with $c_i = 2\pi\,|\,\pi-x_i\,| - \pi^2$.
             Unique solution in $[0, 4/\pi^2)$ or at a boundary.
@@ -1518,6 +1519,11 @@ class triangular_gen(CircularContinuous):
             Estimation method (see above).
         return_info : bool, optional
             If True, also return a dict with diagnostics (loglik, se, n_effective, method).
+        optimizer : str, optional
+            Accepted for cross-family ``fit`` signature uniformity and
+            ignored: the MLE is the exact root of a strictly monotone 1-D
+            score equation (bracketed Brent), so there is no optimizer to
+            choose.
 
         Returns
         -------
@@ -1534,6 +1540,7 @@ class triangular_gen(CircularContinuous):
         The MLE solves a strictly monotone score equation, so bracketing root-finding
         is robust and $O(n)$ per evaluation.
         """
+        del optimizer  # signature uniformity only — exact 1-D root inside
         x = np.asarray(data, dtype=float)
         x = np.mod(x, 2*np.pi)
 
@@ -1602,7 +1609,7 @@ class triangular_gen(CircularContinuous):
         se = (1.0 / np.sqrt(info_obs)) if info_obs > 0 else np.nan
 
         if return_info:
-            return rho_hat, {"loglik": ll, "se": se, "n_effective": n_eff, "method": "mle", "converged": converged}
+            return rho_hat, {"loglik": ll, "se": se, "n_effective": n_eff, "method": "mle", "converged": converged, "optimizer": "brentq"}
         return rho_hat
 
 
@@ -3659,6 +3666,9 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
     pdf(x, mu, rho)
         Probability density function.
 
+    logpdf(x, mu, rho)
+        Logarithm of the probability density function (exact log1p form).
+
     cdf(x, mu, rho)
         Cumulative distribution function.
 
@@ -4261,6 +4271,10 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
     -------
     pdf(x, mu, kappa)
         Probability density function.
+
+    logpdf(x, mu, kappa)
+        Logarithm of the probability density function (scaled-Bessel
+        form, exact at every κ).
 
     cdf(x, mu, kappa)
         Cumulative distribution function.
@@ -5040,6 +5054,9 @@ class projectednormal_gen(_RegressionReady, CircularContinuous):
     -------
     pdf(x, mu1, mu2)
         Probability density function (closed form).
+
+    logpdf(x, mu1, mu2)
+        Logarithm of the probability density function (closed form).
 
     cdf(x, mu1, mu2)
         Cumulative distribution function (closed form: bivariate-normal
@@ -8646,8 +8663,9 @@ class jonespewsey_asym_gen(CircularContinuous):
         Random variates (kernel-table proposals in u = g(φ) with the
         bounded warp-weight acceptance).
 
-    fit(data, *, weights=None, ...)
-        Estimate ``(xi, kappa, psi, nu)`` by maximum likelihood.
+    fit(data, *, weights=None, method="mle" | "moments", ...)
+        Estimate ``(xi, kappa, psi, nu)`` by maximum likelihood, or
+        return the analytic seed with ``method="moments"``.
 
     Note
     ----
@@ -9078,6 +9096,7 @@ class jonespewsey_asym_gen(CircularContinuous):
         data,
         *,
         weights=None,
+        method="mle",
         return_info=False,
         optimizer="L-BFGS-B",
         psi_bounds=(-4.0, 4.0),
@@ -9087,12 +9106,43 @@ class jonespewsey_asym_gen(CircularContinuous):
         **kwargs,
     ):
         r"""
-        Estimate asymmetric JP parameters by maximum likelihood.
+        Estimate asymmetric JP parameters ``(xi, kappa, psi, nu)``.
 
-        The symmetric JP fit supplies starting values for (xi, kappa, psi) with
-        nu initialised at zero.  The full four-parameter log-likelihood is then
-        optimised under simple bounds, re-using the cached normalising constant
-        and envelope machinery developed for the JP core.
+        The symmetric JP fit supplies starting values for (xi, kappa, psi)
+        with nu initialised at zero.  With ``method="mle"`` the full
+        four-parameter log-likelihood is then optimised under simple
+        bounds, re-using the cached normalising constant machinery of the
+        JP core; ``method="moments"`` skips all optimisation and returns
+        the analytic seed (the symmetric base's moment estimates with
+        ``nu = 0``).
+
+        Parameters
+        ----------
+        data : array_like
+            Sample angles (radians), wrapped internally.
+        weights : array_like, optional
+            Non-negative weights broadcastable to ``data``.
+        method : {"mle", "moments"}, optional
+            Full four-parameter MLE (default; aliases: "numerical") or
+            the analytic seed (alias: "analytical").
+        return_info : bool, optional
+            If True, also return a diagnostics dictionary.
+        optimizer : str, optional
+            Name of the ``scipy.optimize.minimize`` method.
+        psi_bounds, kappa_bounds, nu_bounds : tuple, optional
+            Parameter bounds used by the optimiser.
+        base_kwargs : dict, optional
+            Extra keyword arguments forwarded to the symmetric
+            ``jonespewsey.fit`` seeding call.
+        **kwargs :
+            Additional keyword arguments forwarded to the optimiser
+            (ignored under ``method="moments"``).
+
+        Returns
+        -------
+        tuple or (tuple, dict)
+            Estimated parameters ``(xi, kappa, psi, nu)`` and, optionally,
+            fit diagnostics when ``return_info`` is True.
         """
         kwargs = self._clean_loc_scale_kwargs(kwargs, caller="fit")
         x = self._wrap_angles(np.asarray(data, dtype=float)).ravel()
@@ -9112,7 +9162,40 @@ class jonespewsey_asym_gen(CircularContinuous):
             raise ValueError("Sum of weights must be positive.")
         n_eff = w_sum**2 / np.sum(w**2)
 
+        method_key = method.lower()
+        alias = {"analytical": "moments", "numerical": "mle"}
+        method_key = alias.get(method_key, method_key)
+        if method_key not in {"moments", "mle"}:
+            raise ValueError("`method` must be either 'moments' or 'mle'.")
+
         base_kwargs = {} if base_kwargs is None else dict(base_kwargs)
+
+        if method_key == "moments":
+            seed_estimates, base_info = jonespewsey.fit(
+                x,
+                weights=w,
+                method="moments",
+                psi_bounds=psi_bounds,
+                kappa_bounds=kappa_bounds,
+                optimizer=optimizer,
+                return_info=True,
+                **base_kwargs,
+            )
+            xi_hat, kappa_hat, psi_hat = seed_estimates
+            nu_hat = 0.0
+            seed_pdf = self.pdf(x, xi_hat, kappa_hat, psi_hat, nu_hat)
+            estimates = (xi_hat, kappa_hat, psi_hat, nu_hat)
+            if return_info:
+                info = {
+                    "method": "moments",
+                    "base": base_info,
+                    "loglik": float(np.sum(w * np.log(seed_pdf))),
+                    "n_effective": float(n_eff),
+                    "converged": True,
+                }
+                return estimates, info
+            return estimates
+
         init_estimates, base_info = jonespewsey.fit(
             x,
             weights=w,
@@ -9172,6 +9255,7 @@ class jonespewsey_asym_gen(CircularContinuous):
         estimates = (xi_hat, kappa_hat, psi_hat, nu_hat)
         if return_info:
             info = {
+                "method": "mle",
                 "base": base_info,
                 "loglik": loglik,
                 "converged": bool(result.success),
@@ -11321,6 +11405,8 @@ class katojones_gen(_RegressionReady, CircularContinuous):
     -------
     pdf(x, mu, gamma, rho, lam)
         Probability density function.
+    logpdf(x, mu, gamma, rho, lam)
+        Logarithm of the probability density function.
     cdf(x, mu, gamma, rho, lam)
         Cumulative distribution function via adaptive Fourier series.
     ppf(q, mu, gamma, rho, lam)
@@ -11830,6 +11916,36 @@ class katojones_gen(_RegressionReady, CircularContinuous):
         if scalar_input:
             return float(result[0])
         return result.reshape(q_arr.shape)
+
+    def ppf(self, q, mu, gamma, rho, lam, *args, **kwargs):
+        """
+        Percent-point function (inverse CDF) of the Kato--Jones (2015)
+        distribution.
+
+        Quantiles invert the analytic Fourier-series CDF with a vectorized
+        bracket-safeguarded Newton iteration (closed-form PDF as the
+        slope) and a bracket-width certificate, so ``ppf`` stays in exact
+        sync with ``cdf``.
+
+        Parameters
+        ----------
+        q : array_like
+            Quantiles to evaluate (values in ``[0, 1]``).
+        mu : float
+            Mean direction, ``0 <= mu < 2*pi``.
+        gamma : float
+            Mean resultant length, ``0 <= gamma < 1``.
+        rho : float
+            Second-order magnitude, ``0 <= rho < 1``.
+        lam : float
+            Second-order phase, ``0 <= lam < 2*pi``.
+
+        Returns
+        -------
+        ppf_values : array_like
+            Angles in ``[0, 2π)`` such that ``cdf(angle) = q``.
+        """
+        return super().ppf(q, mu, gamma, rho, lam, *args, **kwargs)
 
     def _rvs(self, mu, gamma, rho, lam, size=None, random_state=None):
         rng = self._init_rng(random_state)
