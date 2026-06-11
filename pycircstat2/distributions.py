@@ -6463,6 +6463,33 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         """
         return super().logpdf(x, mu, kappa, psi, *args, **kwargs)
 
+    def trig_moment(self, p: int = 1, *args, **kwargs) -> complex:
+        """Trigonometric moment via the exact ladder cosine moments: the
+        centered JP law is even, so m_p = ᾱ_p·e^{ipμ} with ᾱ_p from
+        ``_jp_cos_moment`` — our own evaluation of the off-cut Legendre
+        ratio P_{1/ψ}-type/(2π P_{1/ψ})(cosh κψ) through its
+        Mehler–Dirichlet integral representation on the feature-scale
+        ladder (scipy's ``lpmv`` is the on-cut Ferrers function and
+        silently fails off the cut; see ``_jp_log_c``). Exact at any
+        concentration; vM and uniform limits closed-form."""
+        shape_args, non_shape_kwargs = self._separate_shape_parameters(
+            args, kwargs, "trig_moment"
+        )
+        call_kwargs = self._prepare_call_kwargs(non_shape_kwargs, "trig_moment")
+        mu, kappa, psi = (float(np.asarray(v, dtype=float))
+                          for v in self._parse_args(*shape_args, **call_kwargs)[0])
+
+        if not np.isscalar(p):
+            raise ValueError("`p` must be an integer scalar.")
+        if int(round(p)) != p:
+            raise ValueError("`p` must be an integer.")
+        k = int(round(p))
+        if k == 0:
+            return complex(1.0, 0.0)
+        ak = abs(k)
+        value = _jp_cos_moment(kappa, psi, ak) * np.exp(1j * ak * mu)
+        return complex(np.conjugate(value)) if k < 0 else complex(value)
+
     def _cdf(self, x, mu, kappa, psi):
         wrapped = self._wrap_angles(x)
         arr = np.asarray(wrapped, dtype=float)
@@ -7302,9 +7329,17 @@ def _jp_log_c(kappa: float, psi: float) -> float:
 
     Same preference order as the historical linear-space normalizer
     (uniform and von Mises reductions first; the Legendre closed form
-    ``1/(2π P_{1/ψ}(cosh κψ))`` stays banned — scipy's ``lpmv`` silently
-    returns garbage for arguments > 1), but evaluated **entirely in log
-    space** with the kernel's peak value e^κ factored out: the raw kernel
+    ``1/(2π P_{1/ψ}(cosh κψ))`` stays banned — scipy's ``lpmv`` is the
+    *Ferrers* function, domain |x| ≤ 1, and off the cut it silently
+    returns garbage for non-integer degree: plausible near z = 1, −1e63
+    by z ≈ 10, nan beyond. The off-cut route via
+    ``hyp2f1(−ν, ν+1; 1; (1−z)/2)`` was probed 2026-06-11: ~1e-13 in the
+    moderate band but linear-space — overflows at the e^709 wall for
+    ψ > 0 and internally from κψ ≈ −30 for ψ < 0. This GL ladder *is*
+    the same function — the kernel integral is its Mehler–Dirichlet-type
+    representation — evaluated in log space at any depth), but evaluated
+    **entirely in log space** with the kernel's peak value e^κ factored
+    out: the raw kernel
     maximum is exp(κ) for every ψ, so any linear-space evaluation turns
     the whole JP clan's pdf into nan for κ ≳ 709 (methods-parity P1).
     The general branch integrates e^{h−κ} ≤ 1 by composite Gauss–Legendre
