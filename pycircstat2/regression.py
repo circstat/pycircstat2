@@ -16,10 +16,18 @@ from .distributions import (
     CircularLL,
     KatoJonesLL,
     _circular_family,
+    cardlss,
+    cartlss,
     get_link,
+    jplss,
     katojones,
+    kjlss,
+    pnlss,
+    ssjplss,
     vmlss,
     vonmises,
+    wclss,
+    wnlss,
 )
 from .utils import A1, A1inv, A1prime, significance_code
 
@@ -2992,3 +3000,144 @@ class LCRegression:
 
         fig.tight_layout()
         return fig
+
+
+# --- unified front doors --------------------------------------------------
+# circ_gam = the distributional grammar (hea.models.gam + circular defaults);
+# circ_lm = the classical Fisher-Lee/Pewsey-era fitters under one entry.
+# Design + sequencing: dev/plans/circ_gam_unified_api.md.
+
+
+def _lss_catalog() -> dict:
+    """Lowercased name → ``*lss`` family instance, under both the alias
+    (``"vmlss"`` — shared with the circlss R package) and the distribution
+    name (``"vonmises"``)."""
+    cat: dict = {}
+    for fam in (vmlss, wclss, pnlss, cardlss, cartlss, wnlss,
+                jplss, ssjplss, kjlss):
+        cat[fam.name.lower()] = fam
+        cat[fam.dist.name.lower()] = fam
+    return cat
+
+
+def _resolve_gam_family(family):
+    """``circ_gam``'s family resolution — permissive by design: circular
+    names/objects get the CircularLL treatment, anything else passes
+    through for hea to validate (gaussian and every other hea family ride
+    untouched)."""
+    if family is None:
+        return vmlss
+    if isinstance(family, str):
+        key = family.strip().lower()
+        cat = _lss_catalog()
+        if key in cat:
+            return cat[key]
+        import hea.family as _hea_family
+
+        obj = getattr(_hea_family, key, None)
+        if obj is None:
+            obj = getattr(_hea_family, key.capitalize(), None)
+        if obj is not None:
+            return obj
+        lss = ", ".join(sorted({f.name for f in cat.values()}))
+        raise ValueError(
+            f"unknown family {family!r}: not a circular family ({lss}, or "
+            "their distribution names) and not an hea family name. Pass an "
+            "hea family object for non-circular responses."
+        )
+    if isinstance(family, CircularLL):
+        return family
+    if getattr(family, "param_roles", None):
+        # a regression-ready circular distribution: wrap in its family
+        # class (katojones auto-routes to KatoJonesLL)
+        return _circular_family(family)
+    return family
+
+
+def circ_gam(formula, data, family=None, knots=None, method="REML",
+             **gam_kwargs):
+    """Circular GAM — ``hea.models.gam`` with circular defaults.
+
+    A deliberately thin front door: everything forwards to
+    ``hea.models.gam`` verbatim; what this function adds is defaults and
+    family resolution, nothing else.
+
+    - ``family=vmlss`` (distributional von Mises) and ``method="REML"``
+      unless overridden.
+    - Cyclic smooths (``bs='cc'``/``'cp'``) default their boundary knots to
+      the full period ``[0, 2π]``; explicit ``knots=`` wins per variable —
+      mgcv's ``knots=list(phi=c(-pi, pi))`` semantics.
+    - ``family`` may be a ``*lss`` instance, a regression-ready circular
+      distribution (auto-wrapped; ``katojones`` → :class:`KatoJonesLL`), a
+      string (``"vmlss"``/``"vonmises"``, … or any hea family name such as
+      ``"gaussian"``), or any hea family object — non-circular responses
+      pass through untouched, so the old LC-smooth case is simply
+      ``circ_gam("y ~ s(phi, bs='cc')", df, family="gaussian")``.
+    - A single formula auto-expands to ``[formula, "~ 1"]`` for 2-LP
+      circular families (constant second parameter).
+
+    The circlss/mgcv twin call::
+
+        # R:  b2 <- gam(list(theta ~ s(phi, bs="cc"), ~ s(phi, bs="cc")),
+        #               family = vmlss(), data = dat, method = "REML",
+        #               knots = list(phi = c(-pi, pi)))
+        b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
+                      data=dat, knots={"phi": [-np.pi, np.pi]})
+
+    Returns the fitted ``hea`` gam object (``summary()``, ``predict()``,
+    ``AIC``, ``gam_check()`` are hea's own).
+
+    .. warning:: tanhalf-linked families (``vmlss``, ``wclss``, and the
+       shape families) place μ in an open 2π-window: a mean that must sweep
+       *through the antipode* — common when the covariate is itself
+       circular — is unrepresentable. Use ``pnlss`` (projected normal, two
+       identity-linked location LPs) for full-circle mean sweeps. Same
+       convention as circlss documents on the R side.
+    """
+    fam = _resolve_gam_family(family)
+    formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
+    if isinstance(fam, CircularLL):
+        if len(formulas) == 1 and fam.n_lp == 2:
+            formulas.append("~ 1")
+        if len(formulas) != fam.n_lp:
+            raise ValueError(
+                f"{fam.name} has {fam.n_lp} linear predictors; got "
+                f"{len(formulas)} formulas."
+            )
+    merged: dict = {}
+    for f in formulas:
+        merged.update(_resolve_cyclic_knots(f, None) or {})
+    if knots:
+        merged.update(knots)
+    payload = formulas if len(formulas) > 1 else formulas[0]
+    return _hea_gam(payload, _to_polars(data), family=fam,
+                    knots=merged or None, method=method, **gam_kwargs)
+
+
+def circ_lm(mode, *args, **kwargs):
+    """One entry to the classical circular regression fitters — the Python
+    analog of R ``circular::lm.circular(type=)``, extended to the third
+    leg (R does linear-response-on-circular via plain ``lm``).
+
+    ``mode`` selects the estimator (hyphenated R-style spellings accepted):
+
+    - ``"cl"`` / ``"c-l"`` — circular response ~ linear covariates:
+      Fisher–Lee von Mises regression (:class:`CLRegression`).
+    - ``"cc"`` / ``"c-c"`` — circular ~ circular:
+      Jammalamadaka–SenGupta embedding OLS (:class:`CCRegression`).
+    - ``"lc"`` / ``"l-c"`` — linear ~ circular:
+      harmonic OLS (:class:`LCRegression`).
+
+    All remaining arguments forward verbatim to the selected class, and
+    the fitted instance is returned. For penalized smooths or any other
+    response distribution, see :func:`circ_gam`.
+    """
+    key = str(mode).strip().lower().replace("-", "")
+    trio = {"cl": CLRegression, "cc": CCRegression, "lc": LCRegression}
+    if key not in trio:
+        raise ValueError(
+            "mode must be one of 'cl'/'c-l' (circular ~ linear), "
+            "'cc'/'c-c' (circular ~ circular), 'lc'/'l-c' "
+            f"(linear ~ circular); got {mode!r}"
+        )
+    return trio[key](*args, **kwargs)

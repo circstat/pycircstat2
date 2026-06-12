@@ -1363,3 +1363,116 @@ def test_cl_predict_accepts_array_and_dataframe_both_backends():
     m = CLRegression(["θ ~ X", "~ X"], d, backend="gam")
     with pytest.raises(ValueError, match="predictor column"):
         m.predict(np.zeros((5, 2)))
+
+
+# --- circ_gam / circ_lm front doors (dev/plans/circ_gam_unified_api.md) ----
+
+from pycircstat2.distributions import vmlss  # noqa: E402
+from pycircstat2.regression import circ_gam, circ_lm  # noqa: E402
+
+
+def test_circ_gam_b2_twin_and_knot_defaults():
+    """The circlss §4 twin call fits through circ_gam with family/method
+    defaulted; with knots omitted, cyclic boundaries default to the full
+    period; a single formula auto-expands to a constant second LP."""
+    rng = np.random.default_rng(8)
+    n = 400
+    phi = rng.uniform(-np.pi, np.pi, n)
+    mu_true = np.pi / 2 + 1.2 * np.sin(phi)
+    theta = np.mod(mu_true + rng.vonmises(0.0, 4.0, n), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta, "phi": phi})
+
+    b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"], df,
+                  knots={"phi": [-np.pi, np.pi]})
+    assert b2.converged
+    fv = np.asarray(b2.fitted_values)
+    err = np.abs(np.angle(np.exp(1j * (np.mod(fv[:, 0], 2 * np.pi) - mu_true))))
+    assert err.mean() < 0.15
+
+    df2 = pl.DataFrame({"theta": theta, "phi": np.mod(phi, 2 * np.pi)})
+    m = circ_gam("theta ~ s(phi, bs='cc')", df2)
+    assert m.converged
+
+
+def test_circ_gam_matches_clregression_gam_backend():
+    """Phase-1 DoD pin: circ_gam reproduces CLRegression's gam backend
+    exactly while both entries exist (same engine call underneath)."""
+    df, _ = _cl_gam_sim(n=500, seed=3)
+    g = circ_gam(["theta ~ s(x)", "~ s(z)"], df)
+    m = CLRegression(["theta ~ s(x)", "~ s(z)"], df)
+    assert float(g.logLik) == pytest.approx(
+        m.result["log_likelihood"], rel=1e-10
+    )
+    got = dict(zip(g.bhat.columns, g.bhat.row(0)))
+    assert got == pytest.approx(m.result["coefficients"], rel=1e-10)
+
+
+def test_circ_gam_family_resolution():
+    """Strings resolve through the circular catalog (alias or distribution
+    name); unknown names raise with guidance."""
+    df, _ = _cl_gam_sim(n=300, seed=11)
+    a = circ_gam(["theta ~ s(x)", "~ 1"], df, family="vonmises")
+    b = circ_gam(["theta ~ s(x)", "~ 1"], df, family=vmlss)
+    assert float(a.logLik) == pytest.approx(float(b.logLik), rel=1e-10)
+    with pytest.raises(ValueError, match="unknown family"):
+        circ_gam("theta ~ s(x)", df, family="nope")
+
+
+def test_circ_gam_gaussian_passthrough():
+    """No gatekeeping: a linear response rides through to hea untouched
+    (the old LC-smooth case), with the period-knot default still applied."""
+    import hea.family as hea_family
+
+    rng = np.random.default_rng(21)
+    n = 300
+    phi = rng.uniform(0, 2 * np.pi, n)
+    y = 2.0 + np.sin(phi) + rng.normal(0, 0.3, n)
+    df = pl.DataFrame({"y": y, "phi": phi})
+    g = circ_gam("y ~ s(phi, bs='cc')", df, family="gaussian")
+    direct = hea_gam("y ~ s(phi, bs='cc')", df, family=hea_family.gaussian,
+                     knots={"phi": [0.0, 2 * np.pi]}, method="REML")
+    assert float(g.AIC) == pytest.approx(float(direct.AIC), rel=1e-12)
+
+
+def test_circ_gam_k3_k4_families_post_gate():
+    """jplss (3-LP) and kjlss (4-LP) ride hea's efsud K=3/4 paths — now
+    R-pinned hea-side (twlss/shash landed) — through circ_gam by name."""
+    rng = np.random.default_rng(5)
+    theta = np.mod(rng.vonmises(1.0, 3.0, 80), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta})
+    j = circ_gam(["theta ~ 1", "~ 1", "~ 1"], df, family="jplss")
+    assert np.isfinite(float(j.logLik))
+    k = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family="kjlss")
+    assert np.isfinite(float(k.logLik))
+
+
+def test_circ_lm_modes_and_equivalence():
+    """circ_lm is a pure dispatcher: every spelling (plain and R-style
+    hyphenated) reaches the right class and reproduces its fit exactly."""
+    X, theta, _, _, _ = _simulate_cl()
+    lung = _lung_dataframe(drop_feb_outliers=True)
+    rng = np.random.default_rng(2)
+    x = rng.uniform(0, 2 * np.pi, 60)
+    th = np.mod(x + 0.4 * np.sin(x) + rng.vonmises(0.0, 5.0, 60), 2 * np.pi)
+
+    ref_cl = CLRegression(theta=theta, X=X, model_type="mean")
+    for mode in ("cl", "c-l"):
+        m = circ_lm(mode, theta=theta, X=X, model_type="mean")
+        assert isinstance(m, CLRegression)
+        np.testing.assert_allclose(m.result["beta"], ref_cl.result["beta"],
+                                   atol=1e-12)
+    ref_cc = CCRegression(theta=th, x=x, order=2)
+    for mode in ("cc", "c-c"):
+        m = circ_lm(mode, theta=th, x=x, order=2)
+        assert isinstance(m, CCRegression)
+        np.testing.assert_allclose(m.result["fitted"], ref_cc.result["fitted"],
+                                   atol=1e-12)
+    ref_lc = LCRegression("y ~ harmonic(theta, k=2)", lung)
+    for mode in ("lc", "l-c"):
+        m = circ_lm(mode, "y ~ harmonic(theta, k=2)", lung)
+        assert isinstance(m, LCRegression)
+        np.testing.assert_allclose(
+            list(m.result["coefficients"].values()),
+            list(ref_lc.result["coefficients"].values()), atol=1e-12)
+    with pytest.raises(ValueError, match="mode must be"):
+        circ_lm("xy")
