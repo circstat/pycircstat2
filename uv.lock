@@ -585,8 +585,8 @@ wheels = [
 
 [[package]]
 name = "hea"
-version = "0.1.4"
-source = { git = "https://github.com/huangziwei/hea?branch=gam-parity#47eff0fbee644f649e6bc0fe97987c9ed4beb4cb" }
+version = "0.1.5"
+source = { git = "https://github.com/huangziwei/hea?branch=gam-parity#2e8fcc7d2f26e62168dd3f39c659d2fe8ef69490" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
