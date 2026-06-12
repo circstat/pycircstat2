@@ -1476,3 +1476,22 @@ def test_circ_lm_modes_and_equivalence():
             list(ref_lc.result["coefficients"].values()), atol=1e-12)
     with pytest.raises(ValueError, match="mode must be"):
         circ_lm("xy")
+
+
+def test_circ_gam_cyclic_summary_general_family(capsys):
+    """summary() on a fully-penalized smooth (bs='cc' → penalty null space
+    0 → hea's reTest/_recov path) under a general family. Crashed with
+    AttributeError('_fisher_w') before hea@97a244b; fixed by consuming the
+    stored gam.fit5.post.proc R factor (R'R = −lbb, mgcv's object$R) in
+    _recov — see hea/.claude/plans/fit5-recov-summary-fix.md."""
+    rng = np.random.default_rng(8)
+    n = 150
+    phi = rng.uniform(0, 2 * np.pi, n)
+    theta = np.mod(np.pi / 2 + np.sin(phi) + rng.vonmises(0.0, 4.0, n),
+                   2 * np.pi)
+    df = pl.DataFrame({"theta": theta, "phi": phi})
+    m = circ_gam("theta ~ s(phi, bs='cc')", df)
+    assert m.converged
+    m.summary()
+    out = capsys.readouterr().out
+    assert "Approximate significance of smooth terms:" in out
