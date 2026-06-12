@@ -1161,6 +1161,44 @@ def test_circularll_projectednormal_fits_full_circle_sweep():
     assert err.mean() < 0.05
 
 
+def test_circularll_postproc_binds_both_hea_conventions():
+    """The seam moved under us once (hea unified postproc on mgcv's 6-arg
+    hook) — pin that our signature binds BOTH calling conventions: hea
+    0.1.4's positional ``(y, fitted)`` and the keyword form of the mgcv
+    hook later hea uses. Only ``y`` enters the null refit, so the two
+    must agree exactly."""
+    rng = np.random.default_rng(5)
+    n = 200
+    theta = np.mod(rng.vonmises(1.0, 2.0, n), 2 * np.pi)
+    fam = CircularLL(vonmises)
+    fitted = np.column_stack([np.full(n, 1.0), np.full(n, 2.0)])
+    old = fam.postproc(theta, fitted)  # hea 0.1.4 call shape
+    new = fam.postproc(                # hea > 0.1.4 (mgcv 6-arg hook)
+        theta, prior_weights=np.ones(n), fitted=fitted,
+        linear_predictors=fitted, offset=None, intercept=True,
+    )
+    assert np.isfinite(old["null_deviance"])
+    assert old["null_deviance"] == pytest.approx(new["null_deviance"])
+
+
+def test_circularll_rejects_prior_weights():
+    """gam(weights=) must fail loudly: no mgcv gamlss family uses prior
+    weights in its ll, so a weighted circular fit would have no R
+    reference to pin against — refusing beats silently fitting
+    unweighted. Unit weights (hea's default when the caller passes
+    nothing) must keep fitting."""
+    rng = np.random.default_rng(9)
+    n = 120
+    theta = np.mod(rng.vonmises(1.0, 3.0, n), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta})
+    with pytest.raises(NotImplementedError, match="prior weights"):
+        hea_gam(["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises),
+                method="REML", weights=np.full(n, 2.0))
+    m = hea_gam(["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises),
+                method="REML")
+    assert m.converged
+
+
 def _cl_gam_sim(n=900, seed=7):
     rng = np.random.default_rng(seed)
     x = rng.uniform(0, 1, n)

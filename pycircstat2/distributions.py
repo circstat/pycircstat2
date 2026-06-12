@@ -542,6 +542,16 @@ class CircularLL(GeneralFamily):
 
     def ll(self, y, X, coef, wt=None, *, lpi, offset=None, deriv: int = 0,
            d1b=None, d2b=None, fh=None, D=None) -> dict:
+        # mgcv's gamlss lls receive prior weights but none uses them as a
+        # likelihood weight (gaulss/gammals/shash all drop wt), so a
+        # weighted circular fit would have no R reference to pin against.
+        # hea passes ones when the user gave no gam(weights=); anything
+        # else must fail loudly rather than silently fit unweighted.
+        if wt is not None and np.any(np.asarray(wt, dtype=float) != 1.0):
+            raise NotImplementedError(
+                f"{self.name}: prior weights (gam(weights=)) are not "
+                "supported by circular general families."
+            )
         y = np.asarray(y, dtype=float)
         X = np.asarray(X, dtype=float)
         coef = np.asarray(coef, dtype=float)
@@ -649,11 +659,19 @@ class CircularLL(GeneralFamily):
             f"parameters {loc!r}"
         )
 
-    def postproc(self, y, fitted) -> dict:
+    def postproc(self, y, fitted=None, prior_weights=None,
+                 linear_predictors=None, offset=None, intercept=True) -> dict:
         """Null deviance for the summary's "deviance explained": the
         distribution's own intercept-only fit pushed through the same
         deviance-residual convention as :meth:`residuals` (twice the
-        log-likelihood gap to the fitted-mode saturated reference)."""
+        log-likelihood gap to the fitted-mode saturated reference).
+
+        The signature binds both hea calling conventions: 0.1.4 passes
+        ``(y, fitted)`` positionally; later hea passes mgcv's full hook —
+        ``postproc(y, prior_weights=, fitted=, linear_predictors=,
+        offset=, intercept=)`` — by keyword. Only ``y`` enters the
+        computation (the null model is refit from scratch), so the
+        remaining arguments are accepted and ignored."""
         y = np.asarray(y, dtype=float)
         par0 = self._null_params(y)
         fitted0 = np.broadcast_to(par0, (y.shape[0], self.n_lp))
