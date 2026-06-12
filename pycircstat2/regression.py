@@ -1,16 +1,26 @@
 import re
 import warnings
-from itertools import combinations_with_replacement
 from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
-from hea.family import GeneralFamily, gamlss_etamu, gamlss_gH, trind_generator
 from hea.models import gam as _hea_gam, lm as _hea_lm
 from scipy.special import expit, i0e
 from scipy.stats import chi2, norm, t as student_t
 
-from .distributions import get_link, katojones, vonmises
+# CircularLL / KatoJonesLL and the *lss aliases live in distributions.py
+# (the §3.5 move of dev/plans/distribution-validation.md: the Phase-1
+# contract and its Phase-2 reader belong together); the classes are
+# re-exported here via __all__ for compatibility.
+from .distributions import (
+    CircularLL,
+    KatoJonesLL,
+    _circular_family,
+    get_link,
+    katojones,
+    vmlss,
+    vonmises,
+)
 from .utils import A1, A1inv, A1prime, significance_code
 
 __all__ = ["CircularLL", "KatoJonesLL", "CLRegression", "CCRegression",
@@ -171,339 +181,6 @@ def _two_panel_axes(plt, figsize, polar: bool, axes):
     return axes[0].figure, axes[0], axes[1]
 
 
-# --- the hea bridge: a circular distribution as an mgcv-style general family --
-
-
-class CircularLL(GeneralFamily):
-    """A regression-ready circular distribution as a hea/mgcv **general
-    family** — the Phase-2 bridge of ``dev/plans/circular_gam_integration.md``.
-
-    Mirrors ``hea.family.gaulss``: one linear predictor per modelable
-    distribution parameter, in the order the distribution declares them
-    (von Mises: μ via ``tanhalf``, log κ via ``log``; wrapped Cauchy: μ, logit
-    ρ; projected normal: identity μ₁, μ₂). ``ll()`` fills the packed
-    per-datum derivative arrays ``l1..l4`` from the distribution's contract
-    methods (``dlogpdf``..``d4logpdf`` — derivatives w.r.t. the *distribution
-    parameters*, never pre-chained through links) and delegates the link
-    chain rule and gradient/Hessian assembly to ``gamlss_etamu`` /
-    ``gamlss_gH``. hea never learns "circular"; pycircstat2 never learns
-    penalties or REML.
-
-        gam(["theta ~ s(x, bs='cc')",   # LP1 → μ      (tanhalf)
-             "      ~ s(z)"],           # LP2 → log κ  (log)
-            data, family=CircularLL(vonmises), method="REML")
-
-    Note the mgcv parameterization: every LP's intercept lives *inside* the
-    link — μ = 2·atan(β₀ + …) — unlike the fisher-lee ``CLRegression``'s
-    Fisher–Lee offset ``μ₀ + 2·atan(Xβ)``. The two coincide for
-    intercept-only models; with covariates they are different (both valid)
-    parameterizations, so compare fitted curves, not coefficients.
-    """
-
-    scale_known = True
-    n_theta = 0
-
-    def __init__(self, dist, links=None):
-        roles = getattr(dist, "param_roles", None)
-        if not roles:
-            raise TypeError(
-                f"{getattr(dist, 'name', dist)!r} is not regression-ready: it "
-                "declares no `param_roles` overlay (see the Phase 1 contract)."
-            )
-        self.dist = dist
-        self.params = list(roles)  # book-named, declaration order = LP order
-        self.n_lp = len(self.params)
-        # The base class assumes the LP coordinates *are* the distribution's
-        # own logpdf parameters (its ll/fit seams pass them straight
-        # through). A family that regresses in transformed coordinates —
-        # katojones declares the §3.4 chart pair u1/u2, which logpdf does
-        # not accept — needs its dedicated subclass; fail fast here instead
-        # of deep in scipy's argument parsing on the first ll() call.
-        if type(self) is CircularLL:
-            shapes = getattr(dist, "shapes", None) or ""
-            shape_names = {s.strip() for s in shapes.split(",") if s.strip()}
-            missing = [p for p in self.params if p not in shape_names]
-            if shape_names and missing:
-                hint = _LL_BY_DIST.get(getattr(dist, "name", None))
-                raise TypeError(
-                    f"{getattr(dist, 'name', dist)!r} declares LP "
-                    f"coordinates {missing} that are not parameters of its "
-                    "logpdf — it regresses in transformed coordinates"
-                    + (f"; use {hint.__name__}() instead of CircularLL"
-                       if hint else "")
-                    + "."
-                )
-        if links is None:
-            links = [get_link(dist.link_for(p)) for p in self.params]
-        else:
-            if len(links) != self.n_lp:
-                raise ValueError(
-                    f"expected {self.n_lp} links (one per LP), got {len(links)}"
-                )
-            links = [get_link(lnk) for lnk in links]
-        # Contract depth gates the outer-Newton mode hea may use:
-        # l4 → full Newton (2), l3 → gradient-only outer (1), l2 → EFS (0).
-        self.available_derivs = (
-            2 if hasattr(dist, "d4logpdf")
-            else 1 if hasattr(dist, "d3logpdf")
-            else 0
-        )
-        self.tri = trind_generator(self.n_lp)
-        self.name = f"CircularLL({getattr(dist, 'name', 'dist')})"
-        super().__init__(links)
-
-    def _etas(self, X, coef, jj, offset):
-        etas = []
-        for j in range(self.n_lp):
-            eta = X[:, jj[j]] @ coef[jj[j]]
-            if offset is not None and len(offset) > j and offset[j] is not None:
-                eta = eta + offset[j]
-            etas.append(eta)
-        return etas
-
-    def _param_values(self, etas):
-        """Inverse-link each LP into a book-named parameter dict. A tanhalf
-        LP is a principal-branch angle in (−π, π); wrap it to [0, 2π) so the
-        distribution's own domain checks pass (every tanhalf consumer is
-        2π-periodic in that parameter, so this changes nothing else)."""
-        out = {}
-        for name, link, eta in zip(self.params, self.links, etas):
-            val = link.linkinv(eta)
-            if link.name == "tanhalf":
-                val = np.mod(val, 2.0 * np.pi)
-            out[name] = val
-        return out
-
-    def _loglik_values(self, y, params):
-        """Per-datum log-likelihood at LP-named parameter values. The seam a
-        subclass overrides when its LP coordinates are not the
-        distribution's own (KatoJonesLL: chart → book translation)."""
-        return np.asarray(self.dist.logpdf(y, **params), dtype=float)
-
-    def _null_params(self, y):
-        """Intercept-only parameter estimates in LP coordinates,
-        declaration-ordered — the distribution's own ``fit`` for every
-        family whose LP coordinates are the book parameters."""
-        return np.atleast_1d(self.dist.fit(y)).astype(float)
-
-    def ll(self, y, X, coef, wt=None, *, lpi, offset=None, deriv: int = 0,
-           d1b=None, d2b=None, fh=None, D=None) -> dict:
-        y = np.asarray(y, dtype=float)
-        X = np.asarray(X, dtype=float)
-        coef = np.asarray(coef, dtype=float)
-        jj = [np.asarray(ix, dtype=int) for ix in lpi]
-        etas = self._etas(X, coef, jj, offset)
-        params = self._param_values(etas)
-
-        l0 = self._loglik_values(y, params)
-        ret: dict = {"l": float(np.sum(l0)), "l0": l0}
-        if deriv == 0:
-            return ret
-
-        names = self.params
-        shape = y.shape
-        d1 = self.dist.dlogpdf(y, **params)
-        d2 = self.dist.d2logpdf(y, **params)
-        l1 = np.column_stack([np.broadcast_to(d1[p], shape) for p in names])
-        l2 = np.column_stack(
-            [np.broadcast_to(d2[k], shape)
-             for k in combinations_with_replacement(names, 2)]
-        )
-        ig1 = np.column_stack(
-            [link.mu_eta(eta) for link, eta in zip(self.links, etas)]
-        )
-        g2 = np.column_stack(
-            [link.d2link(params[name])
-             for link, name in zip(self.links, names)]
-        )
-        l3 = l4 = g3 = g4 = None
-        if deriv > 1:
-            d3 = self.dist.d3logpdf(y, **params)
-            l3 = np.column_stack(
-                [np.broadcast_to(d3[k], shape)
-                 for k in combinations_with_replacement(names, 3)]
-            )
-            g3 = np.column_stack(
-                [link.d3link(params[name])
-                 for link, name in zip(self.links, names)]
-            )
-        if deriv > 3:
-            d4 = self.dist.d4logpdf(y, **params)
-            l4 = np.column_stack(
-                [np.broadcast_to(d4[k], shape)
-                 for k in combinations_with_replacement(names, 4)]
-            )
-            g4 = np.column_stack(
-                [link.d4link(params[name])
-                 for link, name in zip(self.links, names)]
-            )
-
-        tri = self.tri
-        de = gamlss_etamu(l1, l2, l3, l4, ig1, g2, g3, g4,
-                          tri["i2"], tri["i3"], tri["i4"], deriv - 1)
-        gh = gamlss_gH(X, jj, de["l1"], de["l2"], tri["i2"],
-                       l3=de["l3"], i3=tri["i3"], l4=de["l4"], i4=tri["i4"],
-                       d1b=d1b, d2b=d2b, deriv=deriv - 1, fh=fh, D=D)
-        ret.update(gh)
-        return ret
-
-    def initialize_coef(self, y, X, lpi, E=None, offset=None,
-                        use_unscaled: bool = False) -> np.ndarray:
-        """Null-model start, mgcv-flavoured but circular-safe: fit the
-        *distribution itself* to ``y`` (its own ``fit`` — analytic or
-        moment-seeded MLE), then least-squares each LP onto the constant
-        target ``link(param̂)`` with the penalty root ``E`` stacked as a
-        regularizer. gaulss regresses transformed *data* per LP and needs
-        pen.reg's edf search; a constant target has no df to overfit, so the
-        plain stacked solve serves both ``use_unscaled`` branches.
-        """
-        y = np.asarray(y, dtype=float)
-        X = np.asarray(X, dtype=float)
-        jj = [np.asarray(ix, dtype=int) for ix in lpi]
-        n, p = X.shape
-        if E is None:
-            E = np.zeros((0, p))
-        param_hat = self._null_params(y)
-        start = np.zeros(p)
-        for j, (link, par0) in enumerate(zip(self.links, param_hat)):
-            # clip guards the tanhalf pole at μ̂ ≡ π (η → ∞)
-            eta0 = float(np.clip(link.link(float(par0)), -1e6, 1e6))
-            target = np.full(n, eta0)
-            if offset is not None and len(offset) > j and offset[j] is not None:
-                target = target - offset[j]
-            cols = jj[j]
-            xa = np.vstack([X[:, cols], E[:, cols]])
-            ta = np.concatenate([target, np.zeros(E.shape[0])])
-            b, *_ = np.linalg.lstsq(xa, ta, rcond=None)
-            b[~np.isfinite(b)] = 0.0
-            start[cols] = b
-        return start
-
-    def _fitted_direction(self, fitted):
-        """Fitted mean direction from the (n, n_lp) parameter matrix —
-        role-aware: a single location parameter *is* the angle; the projected
-        normal's two Cartesian location components combine via atan2."""
-        loc = self.dist.params_by_role().get("location", [])
-        idx = [self.params.index(nm) for nm in loc]
-        if len(idx) == 1:
-            return np.asarray(fitted)[:, idx[0]]
-        if len(idx) == 2:
-            f = np.asarray(fitted)
-            return np.arctan2(f[:, idx[1]], f[:, idx[0]])
-        raise NotImplementedError(
-            f"{self.name}: cannot derive a direction from location "
-            f"parameters {loc!r}"
-        )
-
-    def postproc(self, y, fitted) -> dict:
-        """Null deviance for the summary's "deviance explained": the
-        distribution's own intercept-only fit pushed through the same
-        deviance-residual convention as :meth:`residuals` (twice the
-        log-likelihood gap to the fitted-mode saturated reference)."""
-        y = np.asarray(y, dtype=float)
-        par0 = self._null_params(y)
-        fitted0 = np.broadcast_to(par0, (y.shape[0], self.n_lp))
-        r0 = self.residuals(y, fitted0, type="deviance")
-        return {"null_deviance": float(np.sum(r0 * r0))}
-
-    def residuals(self, y, fitted, type: str = "deviance") -> np.ndarray:
-        """Angular residuals. ``response`` = the wrapped difference
-        ``y − μ̂(x)`` in (−π, π]; ``deviance``/``pearson`` =
-        ``sign·√(2·max(ℓ_mode − ℓ, 0))`` with the saturated value taken at
-        the fitted direction — the density mode for every symmetric family;
-        for the skewed ones (sine-skewed JP, Kato–Jones) the fitted
-        direction is a mode *anchor* rather than the argmax, so the inner
-        clip at 0 keeps the convention well-defined there.
-        ``fitted`` is the (n, n_lp) matrix of inverse-linked parameters."""
-        y = np.asarray(y, dtype=float)
-        fitted = np.asarray(fitted, dtype=float)
-        mu_hat = self._fitted_direction(fitted)
-        rsd = np.angle(np.exp(1j * (y - mu_hat)))
-        if type == "response":
-            return rsd
-        params = {
-            name: (np.mod(fitted[:, j], 2.0 * np.pi)
-                   if self.links[j].name == "tanhalf" else fitted[:, j])
-            for j, name in enumerate(self.params)
-        }
-        l_obs = self._loglik_values(y, params)
-        l_sat = self._loglik_values(np.mod(mu_hat, 2.0 * np.pi), params)
-        return np.sign(rsd) * np.sqrt(2.0 * np.clip(l_sat - l_obs, 0.0, None))
-
-    def __repr__(self):
-        links = ", ".join(repr(lnk.name) for lnk in self.links)
-        return f"{self.name} (links: {links})"
-
-
-class KatoJonesLL(CircularLL):
-    """Kato–Jones (2015) as a general family in **disc-chart coordinates**
-    (μ, γ, u₁, u₂) — the §3.4 design of ``dev/plans/
-    distribution-validation.md``.
-
-    The four LPs are μ (tanhalf), γ (logit) and the unconstrained chart pair
-    u₁, u₂ (identity); the chart ``(a, b) = (γ, 0) + (1−γ)·u/√(1+‖u‖²)``
-    keeps the Cartesian shape pair (a, b) = (ρ cos λ, ρ sin λ) strictly
-    inside the Theorem-1 feasible disc for *every* coefficient vector, so
-    the coupled constraint never reaches hea. ``u ≡ 0`` recovers the wrapped
-    Cauchy WC(μ, γ) exactly — an intercept-only model for both u-LPs is the
-    natural reduced model.
-
-    The distribution's contract derivatives are already chart-coordinate
-    (``katojones.dlogpdf``/``d2logpdf`` chain the Cartesian scores through
-    the chart), so this subclass only owns the two seams where book
-    parameters appear: per-datum log-likelihood values (γ, u → ρ, λ
-    translation) and the null start (moments fit + closed-form chart
-    inverse).
-
-        gam(["theta ~ s(x, bs='cc')",   # LP1 → μ        (tanhalf)
-             "      ~ z",               # LP2 → logit γ  (logit)
-             "      ~ 1",               # LP3 → u₁       (identity)
-             "      ~ 1"],              # LP4 → u₂       (identity)
-            data, family=KatoJonesLL(), method="REML")
-    """
-
-    def __init__(self, links=None):
-        super().__init__(katojones, links)
-
-    @staticmethod
-    def _book_params(params):
-        """Chart-named LP values → the distribution's book parameters."""
-        a, b = katojones.disc_chart(params["gamma"], params["u1"],
-                                    params["u2"])
-        return {
-            "mu": params["mu"],
-            "gamma": params["gamma"],
-            "rho": np.hypot(a, b),
-            "lam": np.mod(np.arctan2(b, a), 2.0 * np.pi),
-        }
-
-    def _loglik_values(self, y, params):
-        return np.asarray(
-            self.dist.logpdf(y, **self._book_params(params)), dtype=float
-        )
-
-    def _null_params(self, y):
-        mu0, g0, rho0, lam0 = self.dist.fit(y, method="moments")
-        u1, u2 = self.dist.disc_chart_inverse(g0, rho0, lam0)
-        return np.array([mu0, g0, float(u1), float(u2)])
-
-
-# Distributions whose regression (LP) coordinates are not their own logpdf
-# parameters, keyed by distribution name → the dedicated family class.
-# Consulted by `_circular_family` (the `CLRegression` auto-route) and by the
-# `CircularLL.__init__` fail-fast guard's error hint.
-_LL_BY_DIST = {"katojones": KatoJonesLL}
-
-
-def _circular_family(dist) -> CircularLL:
-    """Wrap a regression-ready distribution in its general-family class:
-    plain :class:`CircularLL` for every family whose LP coordinates are its
-    own parameters, the dedicated subclass otherwise (``katojones`` →
-    :class:`KatoJonesLL`, which owns the disc-chart translation)."""
-    cls = _LL_BY_DIST.get(getattr(dist, "name", None))
-    return cls() if cls is not None else CircularLL(dist)
-
-
 class CLRegression:
     """
     Circular-Linear Regression.
@@ -512,10 +189,13 @@ class CLRegression:
 
     - **"gam"** (default): ``hea.gam`` with a :class:`CircularLL` general
       family — one formula per linear predictor in the mgcv parameterization
-      (intercept *inside* the link). Handles any regression-ready ``family=``,
-      penalized smooths (``s()``/``te()``), REML, and **different covariates
-      per LP**. ``CLRegression(["θ ~ s(x)", "~ s(z)"], data)`` smooths μ(x)
-      and log κ(z) jointly. Use ``family=projectednormal`` when μ(x) must
+      (intercept *inside* the link). Handles any regression-ready ``family=``
+      — a ``*lss`` alias (``vmlss`` the default, ``wclss``, … ``kjlss``), a
+      bare regression-ready distribution (auto-wrapped), or a constructed
+      ``CircularLL(dist, links=...)`` — plus penalized smooths
+      (``s()``/``te()``), REML, and **different covariates per LP**.
+      ``CLRegression(["θ ~ s(x)", "~ s(z)"], data)`` smooths μ(x)
+      and log κ(z) jointly. Use ``family=pnlss`` when μ(x) must
       sweep the full circle (the tanhalf link cannot cross ±π).
     - **"fisher-lee"**: the von Mises MLE — ``μ_i = μ₀ + 2·atan(x_iᵀβ)``
       (offset *outside* the link; Fisher & Lee 1992 / Fisher 1993 §6.4),
@@ -604,7 +284,7 @@ class CLRegression:
     shape_inference(data=None, level=0.95, cov="Vp")
         Delta-method SEs/CIs for the Kato–Jones shape parameters
         (γ, a, b, ρ, λ, u) through the disc chart (gam backend,
-        ``family=KatoJonesLL``).
+        ``family=kjlss``).
     plot(figsize=None, n_curve=200, axes=None)
         Two-panel diagnostic figure (fit overlay / κ curve / residuals,
         depending on ``model_type`` and dimensionality).
@@ -799,11 +479,14 @@ class CLRegression:
 
     def _init_gam(self, formula, data, family, knots, method, gam_kwargs):
         """Fit the distributional gam backend: one formula per linear
-        predictor, ``hea.gam`` + a :class:`CircularLL` family, REML by
-        default. A single formula gets a constant second LP (``"~ 1"``) —
-        smooth μ(x), constant concentration."""
+        predictor, ``hea.gam`` + a :class:`CircularLL` family (default
+        ``vmlss``), REML by default. A single formula gets a constant second
+        LP (``"~ 1"``) — smooth μ(x), constant concentration."""
         if family is None:
-            family = CircularLL(vonmises)
+            # the vmlss alias (≡ CircularLL(vonmises)): stateless across
+            # fits (n_theta = 0; §3.5 item 2), and summaries print the
+            # cross-language family name.
+            family = vmlss
         elif not isinstance(family, CircularLL):
             # a regression-ready distribution: wrap in its family class
             # (katojones auto-routes to KatoJonesLL via _circular_family)
@@ -900,7 +583,7 @@ class CLRegression:
 
     def shape_inference(self, data=None, *, level=0.95, cov="Vp"):
         r"""Delta-method SEs and CIs for the Kato–Jones shape parameters
-        (gam backend, ``family=KatoJonesLL`` — plan §3.4's deferred item).
+        (gam backend, ``family=kjlss`` — plan §3.4's deferred item).
 
         The fitted shape lives in η-space as ``(logit γ, u₁, u₂)`` with
         joint coefficient covariance ``V`` from the gam fit; this pushes
@@ -953,7 +636,8 @@ class CLRegression:
         if not isinstance(self.family, KatoJonesLL):
             raise ValueError(
                 "shape_inference() reports the Kato–Jones disc-chart shape "
-                "parameters; fit with family=katojones / KatoJonesLL()."
+                "parameters; fit with family=kjlss (KatoJonesLL — or bare "
+                "family=katojones)."
             )
         if not (0.0 < level < 1.0):
             raise ValueError("`level` must be in (0, 1).")

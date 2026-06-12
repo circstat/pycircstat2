@@ -960,6 +960,66 @@ def test_katojones_family_dispatch():
                       m2.result["log_likelihood"], rtol=1e-8)
 
 
+def test_lss_alias_surface():
+    """The *lss instance aliases (validation plan §3.5): module-level
+    pre-built families sharing the circlss names — ``family=vmlss`` is the
+    primary explicit-gam spelling. Checks identity wiring, name parity,
+    the ``__call__`` re-configurator (fresh instance, alias untouched),
+    chart-coordinate subclass routing, and the regression.py re-export."""
+    from pycircstat2 import distributions as D
+    from pycircstat2.regression import KatoJonesLL
+
+    aliases = {
+        "cardlss": D.cardioid, "cartlss": D.cartwright, "wnlss": D.wrapnorm,
+        "wclss": D.wrapcauchy, "vmlss": D.vonmises,
+        "pnlss": D.projectednormal, "jplss": D.jonespewsey,
+        "ssjplss": D.jonespewsey_sineskewed, "kjlss": D.katojones,
+    }
+    for name, dist in aliases.items():
+        fam = getattr(D, name)
+        assert isinstance(fam, D.CircularLL)
+        assert fam.dist is dist
+        assert fam.name == name           # circlss family$family parity
+        assert fam.n_theta == 0           # the shared-instance safety condition
+        assert fam.n_lp == len(dist.param_roles)
+    assert isinstance(D.kjlss, D.KatoJonesLL)  # disc-chart routing baked in
+
+    # __call__ is the family-side freeze idiom: a fresh configured family,
+    # the module-level alias stays pristine, the alias name propagates.
+    clone = D.vmlss(links=["identity", "log"])
+    assert clone is not D.vmlss and type(clone) is D.CircularLL
+    assert [lnk.name for lnk in clone.links] == ["identity", "log"]
+    assert [lnk.name for lnk in D.vmlss.links] == ["tanhalf", "log"]
+    assert clone.name == "vmlss"
+    fresh = D.vmlss()                     # the R parens spelling, verbatim
+    assert fresh is not D.vmlss
+    assert [lnk.name for lnk in fresh.links] == ["tanhalf", "log"]
+    kj = D.kjlss()
+    assert type(kj) is D.KatoJonesLL and kj.name == "kjlss"
+
+    # the moved classes re-export unchanged from regression.py
+    assert CircularLL is D.CircularLL and KatoJonesLL is D.KatoJonesLL
+
+
+def test_lss_alias_is_clregression_default():
+    """``family=None``, ``family=vmlss`` and ``family=CircularLL(vonmises)``
+    fit the same model; the default *is* the shared vmlss alias, so fitted
+    summaries print the cross-language family name."""
+    from pycircstat2.distributions import vmlss
+
+    rng = np.random.default_rng(7)
+    theta = np.mod(rng.vonmises(1.0, 2.0, size=60), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta})
+    m0 = CLRegression("theta ~ 1", df)
+    assert m0.family is vmlss
+    m1 = CLRegression("theta ~ 1", df, family=vmlss)
+    m2 = CLRegression("theta ~ 1", df, family=CircularLL(vonmises))
+    assert np.isclose(m0.result["log_likelihood"],
+                      m1.result["log_likelihood"], rtol=1e-10)
+    assert np.isclose(m1.result["log_likelihood"],
+                      m2.result["log_likelihood"], rtol=1e-10)
+
+
 def test_katojones_shape_inference():
     """Delta-method SEs/CIs for the KJ shape parameters through the disc
     chart (validation plan §3.4's deferred item): finite, ordered, inside
