@@ -2179,6 +2179,163 @@ def test_wrapcauchy_derivatives_vectorize_over_per_obs_params():
         assert gi["rho"] == pytest.approx(grad["rho"][i])
 
 
+@pytest.mark.parametrize("rho", [0.1, 0.3, 0.49])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_cardioid_d3_d4logpdf_match_finite_difference(mu, rho):
+    """l3 against FD of l2, l4 against FD of l3 — every unique key (the new
+    Tier-2→full-Newton lift; cardioid is the +log P twin of wrapped Cauchy)."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    h = 1e-5
+    third, fourth = cardioid.d3logpdf(x, mu, rho), cardioid.d4logpdf(x, mu, rho)
+
+    def l2(m, r):
+        return cardioid.d2logpdf(x, m, r)
+
+    def l3(m, r):
+        return cardioid.d3logpdf(x, m, r)
+
+    chain3 = [
+        (("mu", "mu", "mu"), ("mu", "mu"), "mu"),
+        (("mu", "mu", "rho"), ("mu", "mu"), "rho"),
+        (("mu", "rho", "rho"), ("mu", "rho"), "rho"),
+        (("rho", "rho", "rho"), ("rho", "rho"), "rho"),
+    ]
+    for key3, key2, wrt in chain3:
+        fd = ((l2(mu + h, rho)[key2] - l2(mu - h, rho)[key2]) / (2 * h)
+              if wrt == "mu"
+              else (l2(mu, rho + h)[key2] - l2(mu, rho - h)[key2]) / (2 * h))
+        np.testing.assert_allclose(third[key3], fd, rtol=1e-4, atol=1e-4,
+                                   err_msg=str(key3))
+
+    chain4 = [
+        (("mu", "mu", "mu", "mu"), ("mu", "mu", "mu"), "mu"),
+        (("mu", "mu", "mu", "rho"), ("mu", "mu", "mu"), "rho"),
+        (("mu", "mu", "rho", "rho"), ("mu", "mu", "rho"), "rho"),
+        (("mu", "rho", "rho", "rho"), ("mu", "rho", "rho"), "rho"),
+        (("rho", "rho", "rho", "rho"), ("rho", "rho", "rho"), "rho"),
+    ]
+    for key4, key3, wrt in chain4:
+        fd = ((l3(mu + h, rho)[key3] - l3(mu - h, rho)[key3]) / (2 * h)
+              if wrt == "mu"
+              else (l3(mu, rho + h)[key3] - l3(mu, rho - h)[key3]) / (2 * h))
+        np.testing.assert_allclose(fourth[key4], fd, rtol=1e-4, atol=1e-4,
+                                   err_msg=str(key4))
+
+
+@pytest.mark.parametrize("zeta", [0.4, 1.0, 1.6])
+@pytest.mark.parametrize("mu", [0.4, 2.5, 5.0])
+def test_cartwright_d3_d4logpdf_match_finite_difference(mu, zeta):
+    """l3 against FD of l2, l4 against FD of l3 — the separable
+    ℓ = N(ζ) + (2/ζ)log|cos((θ−μ)/2)| lift (N‴/N⁗ via polygamma)."""
+    x = np.linspace(0.1, 2 * np.pi - 0.1, 23)
+    h = 1e-5
+    third, fourth = cartwright.d3logpdf(x, mu, zeta), cartwright.d4logpdf(x, mu, zeta)
+
+    def l2(m, z):
+        return cartwright.d2logpdf(x, m, z)
+
+    def l3(m, z):
+        return cartwright.d3logpdf(x, m, z)
+
+    chain3 = [
+        (("mu", "mu", "mu"), ("mu", "mu"), "mu"),
+        (("mu", "mu", "zeta"), ("mu", "mu"), "zeta"),
+        (("mu", "zeta", "zeta"), ("mu", "zeta"), "zeta"),
+        (("zeta", "zeta", "zeta"), ("zeta", "zeta"), "zeta"),
+    ]
+    for key3, key2, wrt in chain3:
+        fd = ((l2(mu + h, zeta)[key2] - l2(mu - h, zeta)[key2]) / (2 * h)
+              if wrt == "mu"
+              else (l2(mu, zeta + h)[key2] - l2(mu, zeta - h)[key2]) / (2 * h))
+        np.testing.assert_allclose(third[key3], fd, rtol=1e-4, atol=1e-4,
+                                   err_msg=str(key3))
+
+    chain4 = [
+        (("mu", "mu", "mu", "mu"), ("mu", "mu", "mu"), "mu"),
+        (("mu", "mu", "mu", "zeta"), ("mu", "mu", "mu"), "zeta"),
+        (("mu", "mu", "zeta", "zeta"), ("mu", "mu", "zeta"), "zeta"),
+        (("mu", "zeta", "zeta", "zeta"), ("mu", "zeta", "zeta"), "zeta"),
+        (("zeta", "zeta", "zeta", "zeta"), ("zeta", "zeta", "zeta"), "zeta"),
+    ]
+    for key4, key3, wrt in chain4:
+        fd = ((l3(mu + h, zeta)[key3] - l3(mu - h, zeta)[key3]) / (2 * h)
+              if wrt == "mu"
+              else (l3(mu, zeta + h)[key3] - l3(mu, zeta - h)[key3]) / (2 * h))
+        np.testing.assert_allclose(fourth[key4], fd, rtol=1e-4, atol=1e-4,
+                                   err_msg=str(key4))
+
+
+@pytest.mark.parametrize("dist,pname,lo,hi", [
+    (cardioid, "rho", 0.05, 0.49),
+    (cartwright, "zeta", 0.3, 2.0),
+])
+def test_cardioid_cartwright_l3_l4_vectorize_over_per_obs_params(dist, pname, lo, hi):
+    """l3/l4 broadcast over per-observation (μ, ·) arrays — the hard
+    requirement for the smoothing path that now drives outer Newton."""
+    rng = np.random.default_rng(0)
+    n = 40
+    x = rng.uniform(0, 2 * np.pi, n)
+    kw = {"mu": rng.uniform(0, 2 * np.pi, n), pname: rng.uniform(lo, hi, n)}
+    d3 = dist.d3logpdf(x, **kw)
+    d4 = dist.d4logpdf(x, **kw)
+    assert all(np.asarray(v).shape == (n,) for v in d3.values())
+    assert all(np.asarray(v).shape == (n,) for v in d4.values())
+
+
+# ---------------------------------------------------------------------------
+# Family nesting / limiting identities (circlss "choosing a family" spine).
+# Cheap density-grid checks that double as living documentation of how the
+# circular families relate; they lock normalizer/parameterization regressions.
+# ---------------------------------------------------------------------------
+
+def test_cardioid_equals_jonespewsey_psi1():
+    """JP(ψ=1) normalizes to (1 + tanh κ · cos)/2π = cardioid(ρ = ½ tanh κ)."""
+    theta = np.linspace(0.0, 2 * np.pi, 401)
+    for mu, kappa in [(0.7, 0.3), (2.0, 1.0), (4.5, 2.5)]:
+        rho = 0.5 * np.tanh(kappa)
+        np.testing.assert_allclose(
+            jonespewsey.pdf(theta, mu=mu, kappa=kappa, psi=1.0),
+            cardioid.pdf(theta, mu=mu, rho=rho),
+            rtol=1e-9, atol=1e-12,
+        )
+
+
+def test_cartwright_zeta1_equals_cardioid_half():
+    """Cartwright(ζ=1) = (1+cos)/2π = cardioid(ρ=½) (densities equal to ~1e-16)."""
+    theta = np.linspace(0.0, 2 * np.pi, 401)
+    for mu in [0.0, 1.3, 4.0]:
+        np.testing.assert_allclose(
+            cartwright.pdf(theta, mu=mu, zeta=1.0),
+            cardioid.pdf(theta, mu=mu, rho=0.5),
+            rtol=1e-10, atol=1e-13,
+        )
+
+
+def test_cartwright_is_jonespewsey_kappa_limit():
+    """Cartwright(ζ) = lim_{κ→∞} JP(κ, ψ=ζ) — the tanh→1 boundary (Cartwright
+    is *not* an interior JP member). Assert the approach: the density gap
+    shrinks as κ grows and is already negligible by κ=20."""
+    theta = np.linspace(0.0, 2 * np.pi, 401)
+    for mu, zeta in [(0.0, 0.6), (2.0, 1.0), (4.0, 1.5)]:
+        cw = cartwright.pdf(theta, mu=mu, zeta=zeta)
+        g10 = np.max(np.abs(jonespewsey.pdf(theta, mu=mu, kappa=10.0, psi=zeta) - cw))
+        g20 = np.max(np.abs(jonespewsey.pdf(theta, mu=mu, kappa=20.0, psi=zeta) - cw))
+        assert g20 < g10                 # approaching the limit
+        assert g20 < 1e-6                 # already negligible
+
+
+def test_vonmises_approx_wrapnorm_matched_moment():
+    """vM(κ) ≈ wrapped normal at matched first moment ρ = A₁(κ): a loose
+    sanity bound (≤ ~9%, worst near κ≈1.5), not equality — distinct families."""
+    from pycircstat2.utils import A1
+
+    theta = np.linspace(0.0, 2 * np.pi, 401)
+    for mu, kappa in [(1.0, 0.5), (2.0, 1.5), (3.0, 3.0), (2.0, 5.0)]:
+        vm = vonmises.pdf(theta, mu=mu, kappa=kappa)
+        wn = wrapnorm.pdf(theta, mu=mu, rho=A1(kappa))
+        assert np.max(np.abs(vm - wn)) / np.max(vm) < 0.10
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 regression contract: per-obs param vectorization (Tier-1/2 audit)
 # ---------------------------------------------------------------------------

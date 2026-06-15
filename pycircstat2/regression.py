@@ -3087,6 +3087,16 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
     Returns the fitted ``hea`` gam object (``summary()``, ``predict()``,
     ``AIC``, ``gam_check()`` are hea's own).
 
+    .. note:: **Reproducibility / parity.** ``hea`` inherits mgcv's loose
+       default ``efs_tol=0.1`` for the EFS optimizer, which can leave ~1e-3
+       run-to-run gaps in the coefficients and smoothing parameters. For
+       reproducible, cross-engine-parity, or benchmarking fits, tighten the
+       control knobs (they forward straight through ``**gam_kwargs``)::
+
+           circ_gam(..., control={"efs_tol": 1e-8, "epsilon": 1e-10})
+
+       which collapses that disagreement to machine precision.
+
     .. warning:: tanhalf-linked families (``vmlss``, ``wclss``, and the
        shape families) place μ in an open 2π-window: a mean that must sweep
        *through the antipode* — common when the covariate is itself

@@ -2158,6 +2158,68 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
             ("rho", "rho"): -4.0 * c * c * w2,
         }
 
+    def d3logpdf(self, x, mu, rho):
+        r"""Third derivatives of ``logpdf`` (l3) — unique unordered triples,
+        via ``(\log P)_{abc} = P_{abc}/P − (P_{ab}P_c + P_{ac}P_b + P_{bc}P_a)
+        /P² + 2P_aP_bP_c/P³`` (the ``+log P`` twin of the wrapped Cauchy's
+        ``−log D`` block, hence the flipped structural signs). ``P = 1 + 2ρ
+        cos`` is *linear* in ρ, so every ``P``-partial with two or more
+        ρ-derivatives vanishes (``P_{ρρ} = 0``).
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        P = 1.0 + 2.0 * rho * c
+        w, w2, w3 = 1.0 / P, 1.0 / P**2, 1.0 / P**3
+        Pm, Pr = 2.0 * rho * s, 2.0 * c
+        Pmm, Pmr = -2.0 * rho * c, 2.0 * s        # Prr = 0
+        Pmmm, Pmmr = -2.0 * rho * s, -2.0 * c     # Pmrr = Prrr = 0
+        return {
+            ("mu", "mu", "mu"): Pmmm * w - 3.0 * Pmm * Pm * w2 + 2.0 * Pm**3 * w3,
+            ("mu", "mu", "rho"): Pmmr * w
+            - (Pmm * Pr + 2.0 * Pmr * Pm) * w2
+            + 2.0 * Pm * Pm * Pr * w3,
+            ("mu", "rho", "rho"): -2.0 * Pmr * Pr * w2 + 2.0 * Pm * Pr * Pr * w3,
+            ("rho", "rho", "rho"): 2.0 * Pr**3 * w3,
+        }
+
+    def d4logpdf(self, x, mu, rho):
+        r"""Fourth derivatives of ``logpdf`` (l4) — unique unordered
+        quadruples, from the order-4 ``log P`` partition formula; ``P``'s only
+        nonzero quartic-relevant partials are ``P_{μμμμ}`` and ``P_{μμμρ}``
+        (linear in ρ). Completes the contract to full-Newton depth (hea
+        ``available_derivs = 2``).
+        """
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        rho = np.asarray(rho, dtype=float)
+        d = x - mu
+        s, c = np.sin(d), np.cos(d)
+        P = 1.0 + 2.0 * rho * c
+        w, w2, w3, w4 = 1.0 / P, 1.0 / P**2, 1.0 / P**3, 1.0 / P**4
+        Pm, Pr = 2.0 * rho * s, 2.0 * c
+        Pmm, Pmr = -2.0 * rho * c, 2.0 * s
+        Pmmm, Pmmr = -2.0 * rho * s, -2.0 * c
+        Pmmmm, Pmmmr = 2.0 * rho * c, -2.0 * s
+        return {
+            ("mu", "mu", "mu", "mu"): Pmmmm * w
+            - (4.0 * Pmmm * Pm + 3.0 * Pmm * Pmm) * w2
+            + 12.0 * Pmm * Pm * Pm * w3
+            - 6.0 * Pm**4 * w4,
+            ("mu", "mu", "mu", "rho"): Pmmmr * w
+            - (Pmmm * Pr + 3.0 * Pmmr * Pm + 3.0 * Pmm * Pmr) * w2
+            + 6.0 * (Pmm * Pm * Pr + Pmr * Pm * Pm) * w3
+            - 6.0 * Pm**3 * Pr * w4,
+            ("mu", "mu", "rho", "rho"): -(2.0 * Pmmr * Pr + 2.0 * Pmr * Pmr) * w2
+            + 2.0 * (Pmm * Pr * Pr + 4.0 * Pmr * Pm * Pr) * w3
+            - 6.0 * Pm * Pm * Pr * Pr * w4,
+            ("mu", "rho", "rho", "rho"): 6.0 * Pmr * Pr * Pr * w3
+            - 6.0 * Pm * Pr**3 * w4,
+            ("rho", "rho", "rho", "rho"): -6.0 * Pr**4 * w4,
+        }
+
     def _argcheck(self, mu, rho):
         try:
             mu_arr, rho_arr = np.broadcast_arrays(mu, rho)
@@ -2760,6 +2822,83 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
             )
             * inv**4
             - 2.0 * inv * l_zeta,
+        }
+
+    @staticmethod
+    def _logZ_zeta_deriv(zeta, order):
+        r"""``∂^order/∂ζ^order`` of the Cartwright log-normalizer
+        ``N(ζ) = (2/ζ−1)log2 + 2 logΓ(1+1/ζ) − logΓ(1+2/ζ) − log π`` for
+        ``order ∈ {3, 4}``. The log-Γ terms are ``logΓ(1+a/ζ)`` (``a = 1, 2``);
+        Faà di Bruno through ``s = a/ζ`` turns their ζ-derivatives into
+        ``polygamma(0..order−1, 1+a/ζ)`` weighted by the ``s``-derivatives, and
+        ``∂^k_ζ(2/ζ) = 2(−1)^k k!/ζ^{k+1}``. Verified term-by-term against
+        ``d2logpdf`` at order 2."""
+        z = np.asarray(zeta, dtype=float)
+        fact = {3: -6.0, 4: 24.0}[order]          # (−1)^order · order!
+        Pb = 2.0 * fact / z ** (order + 1)        # ∂^order_ζ (2/ζ)
+
+        def F(a):
+            s1 = -a / z**2
+            s2 = 2.0 * a / z**3
+            s3 = -6.0 * a / z**4
+            arg = 1.0 + a / z
+            g0, g1, g2 = digamma(arg), polygamma(1, arg), polygamma(2, arg)
+            if order == 3:
+                return g2 * s1**3 + 3.0 * g1 * s1 * s2 + g0 * s3
+            s4 = 24.0 * a / z**5
+            g3 = polygamma(3, arg)
+            return (g3 * s1**4 + 6.0 * g2 * s1 * s1 * s2
+                    + g1 * (3.0 * s2 * s2 + 4.0 * s1 * s3) + g0 * s4)
+
+        return np.log(2.0) * Pb + 2.0 * F(1.0) - F(2.0)
+
+    def d3logpdf(self, x, mu, zeta):
+        r"""Third derivatives of ``logpdf`` (l3). The log-density separates as
+        ``ℓ(μ,ζ) = N(ζ) + (2/ζ)·K`` with ``K = log|cos((θ−μ)/2)|`` carrying all
+        the μ-dependence, so ``∂^a_μ∂^b_ζ ℓ = [N^{(b)} if a=0] + P_b·M_a`` with
+        ``P_b = ∂^b_ζ(2/ζ)`` and ``M_a = ∂^a_μ K`` (``M_1 = t/2``,
+        ``M_2 = −(1+t²)/4``, ``M_3 = t(1+t²)/4``; ``t = tan((θ−μ)/2)``). Only the
+        all-ζ corner needs ``N‴`` (``polygamma`` up to order 2)."""
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        zeta = np.asarray(zeta, dtype=float)
+        d = x - mu
+        t = np.tan(0.5 * d)
+        t2 = t * t
+        with np.errstate(divide="ignore"):        # K → −∞ at the antipode
+            K = np.log(np.abs(np.cos(0.5 * d)))
+        M1, M2, M3 = 0.5 * t, -0.25 * (1.0 + t2), 0.25 * t * (1.0 + t2)
+        return {
+            ("mu", "mu", "mu"): (2.0 / zeta) * M3,
+            ("mu", "mu", "zeta"): (-2.0 / zeta**2) * M2,
+            ("mu", "zeta", "zeta"): (4.0 / zeta**3) * M1,
+            ("zeta", "zeta", "zeta"): self._logZ_zeta_deriv(zeta, 3)
+            + (-12.0 / zeta**4) * K,
+        }
+
+    def d4logpdf(self, x, mu, zeta):
+        r"""Fourth derivatives of ``logpdf`` (l4), from the same separable
+        ``ℓ = N(ζ) + (2/ζ)K`` (see ``d3logpdf``): ``M_4 = −(1+3t²)(1+t²)/8`` and
+        ``∂^b_ζ(2/ζ) = 2(−1)^b b!/ζ^{b+1}``; the all-ζ corner adds ``N⁗``
+        (``polygamma`` up to order 3). Completes the contract to full-Newton
+        depth (hea ``available_derivs = 2``)."""
+        x = np.asarray(x, dtype=float)
+        mu = np.asarray(mu, dtype=float)
+        zeta = np.asarray(zeta, dtype=float)
+        d = x - mu
+        t = np.tan(0.5 * d)
+        t2 = t * t
+        with np.errstate(divide="ignore"):
+            K = np.log(np.abs(np.cos(0.5 * d)))
+        M1, M2 = 0.5 * t, -0.25 * (1.0 + t2)
+        M3, M4 = 0.25 * t * (1.0 + t2), -0.125 * (1.0 + 3.0 * t2) * (1.0 + t2)
+        return {
+            ("mu", "mu", "mu", "mu"): (2.0 / zeta) * M4,
+            ("mu", "mu", "mu", "zeta"): (-2.0 / zeta**2) * M3,
+            ("mu", "mu", "zeta", "zeta"): (4.0 / zeta**3) * M2,
+            ("mu", "zeta", "zeta", "zeta"): (-12.0 / zeta**4) * M1,
+            ("zeta", "zeta", "zeta", "zeta"): self._logZ_zeta_deriv(zeta, 4)
+            + (48.0 / zeta**5) * K,
         }
 
     def _argcheck(self, mu, zeta):
