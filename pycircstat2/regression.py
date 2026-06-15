@@ -32,7 +32,7 @@ from .distributions import (
 from .utils import A1, A1inv, A1prime, significance_code
 
 __all__ = ["CircularLL", "KatoJonesLL", "CLRegression", "CCRegression",
-           "LCRegression"]
+           "LCRegression", "circ_gam"]
 
 
 def _to_polars(data) -> "pl.DataFrame":

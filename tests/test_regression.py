@@ -1446,6 +1446,40 @@ def test_circ_gam_k3_k4_families_post_gate():
     assert np.isfinite(float(k.logLik))
 
 
+def test_circ_gam_cartlss_location_warm_start_recovers_wiggly_mu():
+    """Role-aware location warm start in ``CircularLL.initialize_coef``.
+
+    Cartwright's density is exactly 0 at the antipode for every ζ, so a
+    flat-μ start strands antipodal observations on the log-likelihood cliffs
+    and EFS collapses μ to a constant (a coupled bad basin: μ̂ flat, ρ̂ → 0).
+    The projected pilot starts the location LP near the data and escapes it.
+    On wiggly-μ, moderate-ζ data (ρ ≈ 0.67) the flat start gave mean angular
+    error ≈ 1.0 rad — no recovery; the pilot recovers μ to < 0.1 rad with the
+    fitted location's circular spread matching the truth's (not collapsed).
+    """
+    from pycircstat2.distributions import cartwright
+
+    rng = np.random.default_rng(4)
+    n = 600
+    x = rng.uniform(0.0, 1.0, n)
+    mu_true = np.mod(2.0 * np.arctan(np.sin(2.0 * np.pi * x)), 2 * np.pi)
+    theta = np.mod(np.array([
+        float(cartwright.rvs(mu=float(m), zeta=0.5, size=1, random_state=rng)[0])
+        for m in mu_true
+    ]), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta, "x": x})
+
+    g = circ_gam(["theta ~ s(x)", "~ 1"], df, family="cartlss")
+    assert g.converged
+    mu_fit = np.mod(np.asarray(g.fitted_values)[:, 0], 2 * np.pi)
+    err = np.abs(np.angle(np.exp(1j * (mu_fit - mu_true))))
+    assert err.mean() < 0.3                      # ≈ 1.0 without the pilot
+    # fitted μ is not collapsed to a constant: its circular dispersion
+    # (1 − R̄) tracks the truth's (≈ 0.58) instead of falling toward 0
+    fit_disp = 1.0 - np.abs(np.mean(np.exp(1j * mu_fit)))
+    assert fit_disp > 0.4
+
+
 def test_circ_lm_modes_and_equivalence():
     """circ_lm is a pure dispatcher: every spelling (plain and R-style
     hyphenated) reaches the right class and reproduces its fit exactly."""

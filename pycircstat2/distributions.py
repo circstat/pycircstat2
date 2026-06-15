@@ -613,13 +613,28 @@ class CircularLL(GeneralFamily):
 
     def initialize_coef(self, y, X, lpi, E=None, offset=None,
                         use_unscaled: bool = False) -> np.ndarray:
-        """Null-model start, mgcv-flavoured but circular-safe: fit the
-        *distribution itself* to ``y`` (its own ``fit`` — analytic or
-        moment-seeded MLE), then least-squares each LP onto the constant
-        target ``link(param̂)`` with the penalty root ``E`` stacked as a
-        regularizer. gaulss regresses transformed *data* per LP and needs
-        pen.reg's edf search; a constant target has no df to overfit, so the
-        plain stacked solve serves both ``use_unscaled`` branches.
+        """Null-model start, mgcv-flavoured but circular-safe, **role-aware**.
+
+        Every concentration/shape LP is least-squares fit onto the *constant*
+        target ``link(param̂)`` — the distribution's own intercept-only ``fit``
+        — with the penalty root ``E`` stacked as a regularizer. A constant has
+        no df to overfit, so the plain stacked solve serves both
+        ``use_unscaled`` branches.
+
+        A **single circular location** LP (every tan-half family: vM/WC/WN/
+        cardioid/Cartwright/JP/ssJP) instead gets a *data-following* projected
+        pilot: penalized-smooth ``cos y`` and ``sin y`` over that LP's design
+        columns, recombine ``μ̂ = atan2(ŝ, ĉ)``, and start from ``link(μ̂)``.
+        A flat-μ start strands antipodal observations on the log-likelihood
+        cliffs of any density with a zero on the circle — Cartwright's
+        ``(1+cos)^{1/ζ}`` is exactly 0 at the antipode for every ζ, where
+        ``∂ℓ/∂μ = tan(d/2)/ζ → ∞`` — so EFS oversmooths μ to a constant and
+        inflates the scale to absorb the apparent diffuseness, a coupled bad
+        basin (μ̂ flat, ρ̂ → 0). The projected pilot starts near the data and
+        sidesteps it; it strictly improves the start for the other tan-half
+        families too. The projected normal's two identity-linked Cartesian
+        location components have no antipode zero, so a 2-component location
+        falls through to the constant start (unchanged).
         """
         y = np.asarray(y, dtype=float)
         X = np.asarray(X, dtype=float)
@@ -627,20 +642,44 @@ class CircularLL(GeneralFamily):
         n, p = X.shape
         if E is None:
             E = np.zeros((0, p))
-        param_hat = self._null_params(y)
+
+        def stacked_solve(cols, target):
+            xa = np.vstack([X[:, cols], E[:, cols]])
+            ta = np.concatenate([target, np.zeros(E.shape[0])])
+            b, *_ = np.linalg.lstsq(xa, ta, rcond=None)
+            b[~np.isfinite(b)] = 0.0
+            return b
+
+        loc = self.dist.params_by_role().get("location", [])
+        loc_idx = [self.params.index(nm) for nm in loc]
+        # projected pilot only for a SINGLE circular location (tanhalf); the
+        # 2-component projected normal keeps the constant start (no antipode
+        # zero), so it is left out and behaves exactly as before
+        single_loc = loc_idx[0] if len(loc_idx) == 1 else None
+
         start = np.zeros(p)
+        if single_loc is not None:
+            cols = jj[single_loc]
+            chat = X[:, cols] @ stacked_solve(cols, np.cos(y))
+            shat = X[:, cols] @ stacked_solve(cols, np.sin(y))
+            muhat = np.arctan2(shat, chat)
+            # clip guards the tanhalf pole at μ̂ ≡ π (η → ∞)
+            target = np.clip(self.links[single_loc].link(muhat), -1e6, 1e6)
+            if (offset is not None and len(offset) > single_loc
+                    and offset[single_loc] is not None):
+                target = target - offset[single_loc]
+            start[cols] = stacked_solve(cols, target)
+
+        param_hat = self._null_params(y)
         for j, (link, par0) in enumerate(zip(self.links, param_hat)):
+            if j == single_loc:
+                continue
             # clip guards the tanhalf pole at μ̂ ≡ π (η → ∞)
             eta0 = float(np.clip(link.link(float(par0)), -1e6, 1e6))
             target = np.full(n, eta0)
             if offset is not None and len(offset) > j and offset[j] is not None:
                 target = target - offset[j]
-            cols = jj[j]
-            xa = np.vstack([X[:, cols], E[:, cols]])
-            ta = np.concatenate([target, np.zeros(E.shape[0])])
-            b, *_ = np.linalg.lstsq(xa, ta, rcond=None)
-            b[~np.isfinite(b)] = 0.0
-            start[cols] = b
+            start[jj[j]] = stacked_solve(jj[j], target)
         return start
 
     def _fitted_direction(self, fitted):
