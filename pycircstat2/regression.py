@@ -3097,6 +3097,15 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
 
        which collapses that disagreement to machine precision.
 
+    .. note:: **Multi-LP convergence.** The EFS optimizer (used for the
+       Tier-2 families, ``available_derivs == 0``) caps its outer loop at
+       ``efs_maxit=200`` to match mgcv. A 3-/4-LP shape family with two flat
+       shape directions (``jplss``, ``ssjplss``) can need more than that to
+       satisfy ``efs_tol`` and otherwise stops at "iteration limit reached";
+       raise the cap for such hea-native fits with
+       ``circ_gam(..., control={"efs_maxit": 500})``. Keep it at 200 for mgcv
+       cross-engine parity.
+
     .. warning:: tanhalf-linked families (``vmlss``, ``wclss``, and the
        shape families) place μ in an open 2π-window: a mean that must sweep
        *through the antipode* — common when the covariate is itself
