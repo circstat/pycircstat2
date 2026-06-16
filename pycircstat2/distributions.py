@@ -75,8 +75,11 @@ __all__ = [
     "wclss",
     "vmlss",
     "pnlss",
+    "vmftlss",
     "jplss",
     "ssjplss",
+    "ajplss",
+    "ibslss",
     "kjlss",
 ]
 
