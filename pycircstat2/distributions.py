@@ -10138,7 +10138,7 @@ def _jp_ppf_ladder_asym(q, xi, kappa, psi, nu):
     return np.mod(xi + _jp_warp_inv(u_root, nu), two_pi)
 
 
-class inverse_batschelet_gen(CircularContinuous):
+class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
     r"""Inverse Batschelet Distribution
 
     ![inverse-batschelet](../images/circ-mod-inverse-batschelet.png)
@@ -10182,6 +10182,82 @@ class inverse_batschelet_gen(CircularContinuous):
     fit(data, *, method='mle', ...)
         Moments or maximum-likelihood parameter estimation.
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names ξ/κ/ν/λ preserved. The density warps θ *forward* into
+    # the von-Mises kernel via the two inverse maps t_ν⁻¹, s_λ⁻¹ (the vectorized
+    # `_solve_monotone_increasing` solver), so the per-observation score is
+    # closed-form by implicit differentiation, reusing the solved roots and
+    # their slopes. ν (skewness) and λ (peakedness) both ride the tanh link;
+    # ξ = tanhalf, κ = log. Reduction member ν=λ=0 is the von Mises (vmlss).
+    # The normalizer c(κ,λ) = (1−λ)/[(1+λ)·2π·I0(κ) − 2λ·∫e^{κcos B}] is numeric;
+    # its κ,λ gradient is finite-differenced off the tested `_c_invbatschelet`
+    # (see `dev/plans/vectorize-distributions-and-ibslss.md` §5.2). The *lss
+    # alias is the module-level `ibslss`. ---
+    param_roles = {
+        "xi": "location",
+        "kappa": "concentration",
+        "nu": "skewness",
+        "lmbd": "shape",
+    }
+    default_links = {
+        "location": "tanhalf",
+        "concentration": "log",
+        "skewness": "tanh",     # ν ∈ (−1, 1)
+        "shape": "tanh",        # λ ∈ (−1, 1)
+    }
+
+    def _concentration_start(self, Rbar):
+        """Closed-form κ start from the mean resultant ``Rbar`` for the
+        regression null model: the von Mises A1-inverse (the ν→0, λ→0 reduction
+        member), clamped — the circlss ``initialize`` convention (see
+        CircularLL._null_params)."""
+        return float(np.clip(A1inv(Rbar), 0.01, 500.0))
+
+    def dlogpdf(self, x, xi, kappa, nu, lmbd):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        With `φ⋆ = t_ν⁻¹(φ)`, `u⋆ = s_λ⁻¹(φ⋆)`, the kernel argument
+        `A = u⋆ − ½(1−λ) sin u⋆ = B(u⋆)`, `S = κ sin A`, and the solver
+        slopes `Tν = 1 + ν sin φ⋆`, `Sλ = 1 − ½(1+λ) cos u⋆`,
+        `B′ = 1 − ½(1−λ) cos u⋆`:
+
+        $$\ell_\xi = S\,B'/(T_\nu S_\lambda),\quad
+          \ell_\nu = -S\,B'\,(1+\cos\varphi^\star)/(T_\nu S_\lambda),\quad
+          \ell_\kappa = \cos A + \partial_\kappa\log c,\quad
+          \ell_\lambda = -S\,\tfrac12\sin u^\star\,(1+B'/S_\lambda)
+                          + \partial_\lambda\log c.$$
+
+        The kernel terms are fully analytic (implicit differentiation of the
+        two warps); the normalizer gradient `∂log c/∂{κ,λ}` is finite-differenced
+        off `_c_invbatschelet`, once per unique (κ,λ). Vectorizes over
+        per-observation parameter arrays; returns a book-named dict.
+        """
+        x, xi, kappa, nu, lmbd = np.broadcast_arrays(
+            *(np.asarray(v, dtype=float) for v in (x, xi, kappa, nu, lmbd))
+        )
+        phi_star, u_star = _invbat_warp_vec(x, xi, nu, lmbd)
+        half = 0.5 * (1.0 - lmbd)
+        A = u_star - half * np.sin(u_star)
+        Bp = 1.0 - half * np.cos(u_star)                 # B'(u⋆)
+        Tnu = 1.0 + nu * np.sin(phi_star)
+        Slam = 1.0 - 0.5 * (1.0 + lmbd) * np.cos(u_star)
+        S = kappa * np.sin(A)
+
+        chain = Bp / (Tnu * Slam)
+        d_xi = S * chain                                 # = −S·B′·∂u⋆/∂ξ
+        d_nu = -S * chain * (1.0 + np.cos(phi_star))
+        dA_dl = 0.5 * np.sin(u_star) * (1.0 + Bp / Slam)  # ∂A/∂λ (kernel)
+        d_lmbd_kernel = -S * dA_dl
+        d_kappa_kernel = np.cos(A)
+
+        dlogc_dk, dlogc_dl = _invbat_logc_grad_vec(kappa, lmbd)
+        return {
+            "xi": d_xi,
+            "kappa": d_kappa_kernel + dlogc_dk,
+            "nu": d_nu,
+            "lmbd": d_lmbd_kernel + dlogc_dl,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -11054,6 +11130,7 @@ class inverse_batschelet_gen(CircularContinuous):
 
 
 inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
+ibslss = CircularLL(inverse_batschelet, name="ibslss")
 
 
 ##########################################
@@ -11141,6 +11218,67 @@ def _slmbdinv(x, lmbd):
     if scalar_input:
         return float(result[0])
     return result.reshape(x_arr.shape)
+
+
+def _invbat_warp_vec(x, xi, nu, lmbd):
+    """Vectorized per-observation inverse warps for the regression path:
+    `φ⋆ = t_ν⁻¹(φ)` then `u⋆ = s_λ⁻¹(φ⋆)`, with `φ = (θ−ξ)` wrapped and every
+    parameter an array (each datum its own ν_i, λ_i). The scalar `_tnu`/
+    `_slmbdinv` can't take array warp parameters; this calls the shared
+    monotone solver with array-valued closures. Returns `(φ⋆, u⋆)`, both
+    wrapped to [−π, π)."""
+    x, xi, nu, lmbd = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (x, xi, nu, lmbd))
+    )
+    phi = np.mod(x - xi + np.pi, 2.0 * np.pi) - np.pi
+    phi_star, _ = _solve_monotone_increasing(
+        phi,
+        lambda y: y - nu * (1.0 + np.cos(y)),
+        lambda y: 1.0 + nu * np.sin(y),
+        x0=phi,
+    )
+    phi_star = (phi_star + np.pi) % (2.0 * np.pi) - np.pi
+    c = 0.5 * (1.0 + lmbd)
+    u_star, _ = _solve_monotone_increasing(
+        phi_star,
+        lambda u: u - c * np.sin(u),
+        lambda u: 1.0 - c * np.cos(u),
+        x0=phi_star,
+    )
+    u_star = (u_star + np.pi) % (2.0 * np.pi) - np.pi
+    return phi_star, u_star
+
+
+def _invbat_logc_grad_vec(kappa, lmbd, h=1e-6):
+    """``(∂log c/∂κ, ∂log c/∂λ)`` for the inverse-Batschelet normalizer
+    ``c(κ,λ) = (1−λ)/[(1+λ)·2π·I0(κ) − 2λ·∫e^{κ cos B}]``, by central
+    finite-difference of the tested ``_c_invbatschelet`` — once per *unique*
+    (κ,λ) pair (the ``_jp_logZ_moments_vec`` np.unique pattern). The analytic
+    gradient is closed-form but its overflow-safe assembly duplicates
+    ``_c_invbatschelet_numeric``; FD reuses that exact normalizer, so it stays
+    consistent with the logpdf the derivative tests difference, and is
+    O(unique pairs). The λ step shrinks near ±1 to stay inside (−1,1) (the
+    tanh link keeps λ interior regardless)."""
+    kappa, lmbd = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(lmbd, dtype=float)
+    )
+    pairs, inverse = np.unique(
+        np.stack([kappa.ravel(), lmbd.ravel()], axis=1), axis=0,
+        return_inverse=True,
+    )
+
+    def _logc(k, l):
+        return np.log(_c_invbatschelet(k, l))
+
+    grad = np.empty((pairs.shape[0], 2), dtype=float)
+    for i, (k, l) in enumerate(pairs):
+        hk = h * max(1.0, abs(k))
+        gk = (_logc(k + hk, l) - _logc(k - hk, l)) / (2.0 * hk)
+        hl = min(h, 0.25 * (1.0 - abs(l)))
+        gl = (_logc(k, l + hl) - _logc(k, l - hl)) / (2.0 * hl)
+        grad[i] = (gk, gl)
+    out = grad[inverse].reshape(kappa.shape + (2,))
+    return out[..., 0], out[..., 1]
 
 
 def _A1(kappa):

@@ -1521,6 +1521,36 @@ def test_inverse_batschelet_warps_match_brentq():
     assert isinstance(_slmbdinv(0.7, 0.5), float)
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        dict(xi=2.0, kappa=2.0, nu=0.2, lmbd=0.2),
+        dict(xi=1.0, kappa=6.0, nu=-0.5, lmbd=0.5),
+        dict(xi=3.5, kappa=1.0, nu=0.4, lmbd=-0.6),
+        dict(xi=0.7, kappa=10.0, nu=-0.3, lmbd=-0.3),
+    ],
+)
+def test_inverse_batschelet_dlogpdf_matches_finite_difference(params):
+    """l1: the regression-overlay score (`ibslss`) vs central differences of
+    `logpdf`, w.r.t. each parameter. The ξ/ν entries are fully analytic
+    (implicit differentiation of the two warps); κ/λ carry the FD'd normalizer
+    gradient (dev/plans/vectorize-distributions-and-ibslss.md §5.2)."""
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 12))
+    ana = inverse_batschelet.dlogpdf(x, **params)
+
+    def fd(name, h):
+        hi, lo = dict(params), dict(params)
+        hi[name] += h
+        lo[name] -= h
+        return (inverse_batschelet.logpdf(x, **hi)
+                - inverse_batschelet.logpdf(x, **lo)) / (2.0 * h)
+
+    for name in ("xi", "kappa", "nu", "lmbd"):
+        h = 1e-5 if name == "kappa" else 1e-6
+        np.testing.assert_allclose(ana[name], fd(name, h), atol=1e-5, rtol=0.0)
+
+
 def test_inverse_batschelet_fit_moments():
     samples = inverse_batschelet.rvs(
         xi=1.1, kappa=3.0, nu=0.2, lmbd=-0.3, size=600, random_state=123
