@@ -6657,44 +6657,44 @@ class vonmises_flattopped_gen(CircularContinuous):
                 else np.interp(targets, cdf_grid, phi_grid, left=phi_grid[0], right=phi_grid[-1])
             )
 
-            theta = np.empty_like(q_valid)
-            for idx, (q_val, target, phi0) in enumerate(zip(q_valid, targets, phi_guess)):
-                if close_zero[idx]:
-                    theta[idx] = 0.0
-                    continue
-                if close_one[idx]:
-                    theta[idx] = two_pi
-                    continue
+            # Vectorized safeguarded Newton on the monotone cdf (mirrors the
+            # inverse-Batschelet ppf): every quantile refined together, each
+            # with its own grid bracket, converged points frozen. The pdf
+            # derivative is the closed-form flat-topped vM kernel, so no
+            # interpolator call is needed inside the loop.
+            i_hi = np.clip(np.searchsorted(cdf_grid, targets, side="right"),
+                           1, len(phi_grid) - 1)
+            phi_lo = phi_grid[i_hi - 1].astype(float, copy=True)
+            phi_hi = phi_grid[i_hi].astype(float, copy=True)
+            phi = np.clip(phi_guess, phi_lo, phi_hi)
 
-                i_hi = int(np.clip(np.searchsorted(cdf_grid, target, side="right"), 1, len(phi_grid) - 1))
-                phi_lo = float(phi_grid[i_hi - 1])
-                phi_hi = float(phi_grid[i_hi])
-                phi = float(np.clip(phi0, phi_lo, phi_hi))
+            done = np.zeros(q_valid.shape, dtype=bool)
+            tiny = np.finfo(float).tiny
+            log_norm = table["log_normalizer"]
+            for _ in range(_VMFT_NEWTON_MAXITER):
+                H_phi = np.asarray(cdf_interp(phi), dtype=float)
+                residual = H_phi - targets
+                derivative = np.maximum(
+                    np.exp(kappa_val * np.cos(phi + nu_val * np.sin(phi)) + log_norm),
+                    tiny)
 
-                for _ in range(_VMFT_NEWTON_MAXITER):
-                    H_phi = float(cdf_interp(phi))
-                    residual = H_phi - target
-                    derivative = np.exp(
-                        kappa_val * np.cos(phi + nu_val * np.sin(phi)) + table["log_normalizer"]
-                    )
-                    derivative = max(derivative, np.finfo(float).tiny)
+                done |= (np.abs(residual) <= _VMFT_NEWTON_TOL) & (
+                    (phi_hi - phi_lo) <= _VMFT_NEWTON_WIDTH_TOL)
+                if np.all(done):
+                    break
 
-                    if abs(residual) <= _VMFT_NEWTON_TOL and (phi_hi - phi_lo) <= _VMFT_NEWTON_WIDTH_TOL:
-                        break
+                hi_upd = residual > 0.0
+                phi_hi = np.where(hi_upd, np.minimum(phi_hi, phi), phi_hi)
+                phi_lo = np.where(~hi_upd, np.maximum(phi_lo, phi), phi_lo)
 
-                    if residual > 0.0:
-                        phi_hi = min(phi_hi, phi)
-                    else:
-                        phi_lo = max(phi_lo, phi)
+                cand = phi - residual / derivative
+                fallback = ~np.isfinite(cand) | (cand <= phi_lo) | (cand >= phi_hi)
+                cand = np.where(fallback, 0.5 * (phi_lo + phi_hi), cand)
+                phi = np.where(done, phi, np.clip(cand, phi_lo, phi_hi))
 
-                    step = residual / derivative
-                    phi_candidate = phi - step
-                    if not np.isfinite(phi_candidate) or phi_candidate <= phi_lo or phi_candidate >= phi_hi:
-                        phi_candidate = 0.5 * (phi_lo + phi_hi)
-                    phi = float(np.clip(phi_candidate, phi_lo, phi_hi))
-
-                theta[idx] = (mu_val + phi) % two_pi
-
+            theta = (mu_val + phi) % two_pi
+            theta[close_zero] = 0.0
+            theta[close_one] = two_pi
             result[valid] = theta
 
         shaped = result.reshape(q_arr.shape)
@@ -10516,42 +10516,41 @@ class inverse_batschelet_gen(CircularContinuous):
                 else np.interp(targets, cdf_grid, phi_grid, left=phi_grid[0], right=phi_grid[-1])
             )
 
-            theta_vals = np.empty_like(q_valid)
-            for idx, (target, phi0) in enumerate(zip(targets, phi_candidates)):
-                if close_zero[idx]:
-                    theta_vals[idx] = 0.0
-                    continue
-                if close_one[idx]:
-                    theta_vals[idx] = two_pi
-                    continue
+            # Vectorized safeguarded Newton on the monotone cdf: all targets
+            # at once, each point's [phi_lo, phi_hi] bracket from the grid,
+            # converged points frozen. Replaces the per-point loop that called
+            # the Pchip interpolators ~30k times scalar (one call/iteration);
+            # now ≤ _INVBAT_NEWTON_MAXITER array evaluations total.
+            i_hi = np.clip(np.searchsorted(cdf_grid, targets, side="right"),
+                           1, len(phi_grid) - 1)
+            phi_lo = phi_grid[i_hi - 1].astype(float, copy=True)
+            phi_hi = phi_grid[i_hi].astype(float, copy=True)
+            phi = np.clip(phi_candidates, phi_lo, phi_hi)
 
-                i_hi = int(np.clip(np.searchsorted(cdf_grid, target, side="right"), 1, len(phi_grid) - 1))
-                phi_lo = float(phi_grid[i_hi - 1])
-                phi_hi = float(phi_grid[i_hi])
-                phi = float(np.clip(phi0, phi_lo, phi_hi))
+            done = np.zeros(q_valid.shape, dtype=bool)
+            tiny = np.finfo(float).tiny
+            for _ in range(_INVBAT_NEWTON_MAXITER):
+                H_phi = np.asarray(cdf_interp(phi), dtype=float)
+                residual = H_phi - targets
+                pdf_val = np.maximum(np.asarray(pdf_interp(phi), dtype=float), tiny)
 
-                for _ in range(_INVBAT_NEWTON_MAXITER):
-                    H_phi = float(cdf_interp(phi))
-                    residual = H_phi - target
-                    pdf_val = float(pdf_interp(phi))
-                    pdf_val = max(pdf_val, np.finfo(float).tiny)
+                done |= (np.abs(residual) <= _INVBAT_NEWTON_TOL) & (
+                    (phi_hi - phi_lo) <= _INVBAT_NEWTON_WIDTH_TOL)
+                if np.all(done):
+                    break
 
-                    if abs(residual) <= _INVBAT_NEWTON_TOL and (phi_hi - phi_lo) <= _INVBAT_NEWTON_WIDTH_TOL:
-                        break
+                hi_upd = residual > 0.0
+                phi_hi = np.where(hi_upd, np.minimum(phi_hi, phi), phi_hi)
+                phi_lo = np.where(~hi_upd, np.maximum(phi_lo, phi), phi_lo)
 
-                    if residual > 0.0:
-                        phi_hi = min(phi_hi, phi)
-                    else:
-                        phi_lo = max(phi_lo, phi)
+                cand = phi - residual / pdf_val
+                fallback = ~np.isfinite(cand) | (cand <= phi_lo) | (cand >= phi_hi)
+                cand = np.where(fallback, 0.5 * (phi_lo + phi_hi), cand)
+                phi = np.where(done, phi, np.clip(cand, phi_lo, phi_hi))
 
-                    step = residual / pdf_val
-                    phi_candidate = phi - step
-                    if not np.isfinite(phi_candidate) or phi_candidate <= phi_lo or phi_candidate >= phi_hi:
-                        phi_candidate = 0.5 * (phi_lo + phi_hi)
-                    phi = float(np.clip(phi_candidate, phi_lo, phi_hi))
-
-                theta_vals[idx] = (xi_val + phi) % two_pi
-
+            theta_vals = (xi_val + phi) % two_pi
+            theta_vals[close_zero] = 0.0
+            theta_vals[close_one] = two_pi
             result[valid] = theta_vals
 
         shaped = result.reshape(q_arr.shape)
@@ -11062,34 +11061,64 @@ inverse_batschelet = inverse_batschelet_gen(name="inverse_batschelet")
 ##########################################
 
 
+def _solve_monotone_increasing(rhs, g, gprime, *, lo=-np.pi, hi=np.pi,
+                               x0=None, tol=1e-14, max_iter=20):
+    """Vectorized root of a smooth, monotone-increasing ``g(y) = rhs`` on
+    ``[lo, hi]``, with ``g(lo) <= rhs <= g(hi)`` (the caller's bracket).
+
+    Newton from ``x0`` (default ``rhs``), each step clamped into the bracket,
+    then a vectorized bisection mop-up for any point Newton leaves with a
+    residual above ``1e-12`` — the near-boundary cases where ``gprime`` → 0
+    (ν, λ → ±1). Replaces the per-point ``brentq`` loop the inverse-Batschelet
+    warps used to run (≈10⁵ scalar root-finds per ``fit``): one warp call is
+    now a handful of array ops. Returns ``(y, gprime(y))`` — the root and its
+    local slope, the latter being the Jacobian factor the ``ibslss`` score
+    reuses (see ``dev/plans/vectorize-distributions-and-ibslss.md`` §5)."""
+    rhs = np.asarray(rhs, dtype=float)
+    y = (np.clip(rhs, lo, hi).copy() if x0 is None
+         else np.clip(np.broadcast_to(x0, rhs.shape).astype(float), lo, hi))
+    if y.size:
+        for _ in range(max_iter):
+            gp = gprime(y)
+            step = np.divide(g(y) - rhs, gp, out=np.zeros_like(y),
+                             where=np.abs(gp) > 1e-15)
+            y_new = np.clip(y - step, lo, hi)
+            if np.max(np.abs(y_new - y)) < tol:
+                y = y_new
+                break
+            y = y_new
+        bad = np.abs(g(y) - rhs) > 1e-12
+        if np.any(bad):
+            a = np.full(y.shape, lo, dtype=float)
+            b = np.full(y.shape, hi, dtype=float)
+            for _ in range(60):
+                m = 0.5 * (a + b)
+                left = g(m) <= rhs          # g increasing → root at/above m
+                a = np.where(left, m, a)
+                b = np.where(left, b, m)
+            y = np.where(bad, 0.5 * (a + b), y)
+    return y, gprime(y)
+
+
 def _tnu(x, nu, xi):
     x_arr = np.asarray(x, dtype=float)
     scalar_input = x_arr.ndim == 0
     phi = np.mod(x_arr - xi + np.pi, 2.0 * np.pi) - np.pi
-    phi_flat = np.atleast_1d(phi).astype(float, copy=False)
-    results = np.empty_like(phi_flat)
 
     if abs(nu) <= _INVBAT_NU_TOL:
-        results[:] = phi_flat
+        results = phi
     else:
-        for idx, phi_val in enumerate(phi_flat):
-            def _equation(y):
-                return y - nu * (1.0 + np.cos(y)) - phi_val
-
-            solution = root_scalar(
-                _equation,
-                bracket=(-np.pi, np.pi),
-                method="brentq",
-            )
-            if solution.converged:
-                y_val = solution.root
-            else:  # pragma: no cover - defensive fallback
-                y_val = phi_val
-            results[idx] = (y_val + np.pi) % (2.0 * np.pi) - np.pi
+        root, _ = _solve_monotone_increasing(
+            phi,
+            lambda y: y - nu * (1.0 + np.cos(y)),
+            lambda y: 1.0 + nu * np.sin(y),
+            x0=phi,
+        )
+        results = (root + np.pi) % (2.0 * np.pi) - np.pi
 
     if scalar_input:
-        return float(results[0])
-    return results.reshape(phi.shape)
+        return float(np.asarray(results).reshape(-1)[0])
+    return np.asarray(results).reshape(phi.shape)
 
 
 def _slmbdinv(x, lmbd):
@@ -11100,21 +11129,14 @@ def _slmbdinv(x, lmbd):
     if np.isclose(lmbd, -1.0, atol=_INVBAT_LMBDA_TOL):
         result = x_flat.copy()
     else:
-        result = np.empty_like(x_flat)
-        for idx, val in enumerate(x_flat):
-            def _equation(u):
-                return u - 0.5 * (1.0 + lmbd) * np.sin(u) - val
-
-            solution = root_scalar(
-                _equation,
-                bracket=(-np.pi, np.pi),
-                method="brentq",
-            )
-            if solution.converged:
-                u_val = solution.root
-            else:  # pragma: no cover - defensive fallback
-                u_val = val
-            result[idx] = (u_val + np.pi) % (2.0 * np.pi) - np.pi
+        c = 0.5 * (1.0 + lmbd)
+        root, _ = _solve_monotone_increasing(
+            x_flat,
+            lambda u: u - c * np.sin(u),
+            lambda u: 1.0 - c * np.cos(u),
+            x0=x_flat,
+        )
+        result = (root + np.pi) % (2.0 * np.pi) - np.pi
 
     if scalar_input:
         return float(result[0])

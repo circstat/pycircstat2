@@ -1481,6 +1481,46 @@ def test_inverse_batschelet_pdf_scalar_consistency():
     np.testing.assert_allclose(array_vals, scalar_vals, atol=5e-12, rtol=0.0)
 
 
+def test_inverse_batschelet_warps_match_brentq():
+    """The vectorized monotone solver (`_tnu`/`_slmbdinv`) must reproduce the
+    original per-point `brentq` inversion to ~machine precision, including the
+    ν→±1 / λ→±1 near-boundary regime where the warp slope → 0. This pins the
+    performance rewrite to the algorithm it replaced (≈10⁵ scalar root-finds
+    per `fit`); see dev/plans/vectorize-distributions-and-ibslss.md §A1."""
+    from scipy.optimize import root_scalar
+
+    from pycircstat2.distributions import _slmbdinv, _tnu
+
+    phi = np.linspace(-np.pi, np.pi, 257)[:-1]
+
+    def ref_tnu(x, nu):
+        out = np.empty_like(x)
+        for i, p in enumerate(x):
+            s = root_scalar(lambda y: y - nu * (1.0 + np.cos(y)) - p,
+                            bracket=(-np.pi, np.pi), method="brentq")
+            out[i] = (s.root + np.pi) % (2.0 * np.pi) - np.pi
+        return out
+
+    def ref_slmbd(x, lmbd):
+        out = np.empty_like(x)
+        for i, v in enumerate(x):
+            s = root_scalar(lambda u: u - 0.5 * (1.0 + lmbd) * np.sin(u) - v,
+                            bracket=(-np.pi, np.pi), method="brentq")
+            out[i] = (s.root + np.pi) % (2.0 * np.pi) - np.pi
+        return out
+
+    for nu in (-0.97, -0.5, -1e-3, 0.3, 0.97):
+        np.testing.assert_allclose(_tnu(phi, nu, 0.0), ref_tnu(phi, nu),
+                                   atol=1e-10, rtol=0.0)
+    for lmbd in (-0.97, -0.5, 0.0, 0.5, 0.97):
+        np.testing.assert_allclose(_slmbdinv(phi, lmbd), ref_slmbd(phi, lmbd),
+                                   atol=1e-10, rtol=0.0)
+
+    # scalar inputs return floats (the descriptive contract)
+    assert isinstance(_tnu(1.3, 0.4, 0.2), float)
+    assert isinstance(_slmbdinv(0.7, 0.5), float)
+
+
 def test_inverse_batschelet_fit_moments():
     samples = inverse_batschelet.rvs(
         xi=1.1, kappa=3.0, nu=0.2, lmbd=-0.3, size=600, random_state=123
