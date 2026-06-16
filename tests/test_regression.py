@@ -974,6 +974,7 @@ def test_lss_alias_surface():
         "wclss": D.wrapcauchy, "vmlss": D.vonmises,
         "pnlss": D.projectednormal, "jplss": D.jonespewsey,
         "ssjplss": D.jonespewsey_sineskewed, "kjlss": D.katojones,
+        "ibslss": D.inverse_batschelet,
     }
     for name, dist in aliases.items():
         fam = getattr(D, name)
@@ -999,6 +1000,68 @@ def test_lss_alias_surface():
 
     # the moved classes re-export unchanged from regression.py
     assert CircularLL is D.CircularLL and KatoJonesLL is D.KatoJonesLL
+
+
+def test_ibslss_intercept_only_matches_marginal_mle():
+    """The M3 end-to-end gate for the inverse-Batschelet *lss family: an
+    intercept-only ``ibslss`` fit must reproduce ``inverse_batschelet.fit``
+    (the trusted marginal MLE) — both maximize the same likelihood, and for
+    intercept-only the mgcv-inside-link and the marginal parameterizations
+    coincide. This pins the whole bridge at once: ll, dlogpdf, the FD-grade
+    d2logpdf Hessian, the closed-form null start, the EFS optimizer, and the
+    per-observation normalizer (dev/plans/vectorize-distributions-and-ibslss.md
+    §7)."""
+    from pycircstat2.distributions import ibslss, inverse_batschelet
+    from pycircstat2.regression import circ_gam
+
+    data = inverse_batschelet.rvs(
+        xi=2.3, kappa=2.5, nu=0.35, lmbd=-0.3, size=4000, random_state=7
+    )
+    df = pl.DataFrame({"theta": data})
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=ibslss,
+                 method="REML")
+    pred = np.asarray(
+        g.predict(pl.DataFrame({"_dummy": [0.0]}), type="response")
+    )[0]
+    xi_g, kappa_g, nu_g, lmbd_g = pred
+    xi_m, kappa_m, nu_m, lmbd_m = inverse_batschelet.fit(data)
+
+    ang = (xi_g - xi_m + np.pi) % (2.0 * np.pi) - np.pi
+    assert abs(ang) < 1e-3
+    np.testing.assert_allclose([kappa_g, nu_g, lmbd_g],
+                               [kappa_m, nu_m, lmbd_m], atol=1e-3, rtol=0.0)
+
+
+def test_ibslss_recovers_covariate_location():
+    """M4: an ``ibslss`` GAM with a covariate-driven location exercises the
+    per-observation (array) parameter path — the one intercept-only parity
+    cannot reach (constant params collapse to the scalar path). Simulate
+    ξ(x) = 1.5·sin x with κ,ν,λ fixed (rotate a base sample), fit a location
+    smooth, and confirm the recovered direction tracks the truth."""
+    from pycircstat2.distributions import ibslss, inverse_batschelet
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(11)
+    n = 1500
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, n))
+    xi_true = 1.5 * np.sin(x)
+    base = inverse_batschelet.rvs(xi=0.0, kappa=4.0, nu=0.3, lmbd=-0.2,
+                                  size=n, random_state=rng)
+    theta = np.mod(base + xi_true, 2.0 * np.pi)
+    df = pl.DataFrame({"theta": theta, "x": x})
+
+    g = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family=ibslss,
+                 method="REML")
+    assert g.converged
+    grid = np.linspace(x.min(), x.max(), 200)
+    mu = np.angle(np.exp(1j * np.asarray(
+        g.predict(pl.DataFrame({"x": grid}), type="response"))[:, 0]))
+    truth = 1.5 * np.sin(grid)
+    a = mu - np.angle(np.mean(np.exp(1j * mu)))
+    b = truth - np.angle(np.mean(np.exp(1j * truth)))
+    corr = (np.sum(np.sin(a) * np.sin(b))
+            / np.sqrt(np.sum(np.sin(a) ** 2) * np.sum(np.sin(b) ** 2)))
+    assert corr > 0.95
 
 
 def test_lss_alias_is_clregression_default():

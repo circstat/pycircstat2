@@ -1551,6 +1551,40 @@ def test_inverse_batschelet_dlogpdf_matches_finite_difference(params):
         np.testing.assert_allclose(ana[name], fd(name, h), atol=1e-5, rtol=0.0)
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        dict(xi=2.0, kappa=2.0, nu=0.2, lmbd=0.2),
+        dict(xi=1.0, kappa=6.0, nu=-0.5, lmbd=0.5),
+        dict(xi=3.5, kappa=1.0, nu=0.4, lmbd=-0.6),
+    ],
+)
+def test_inverse_batschelet_d2logpdf_kernel_block_matches_fd(params):
+    """l2 kernel block (`ibslss`): the seven second partials that do *not*
+    touch the normalizer (every pair except κκ/κλ/λλ, since c ⊥ ξ,ν) vs
+    central differences of `dlogpdf`. These are FD of the analytic kernel
+    gradient, so they match tightly; the κ,λ normalizer block is EFS-grade
+    (direct second differences) and is gated end-to-end by intercept-only
+    parity in test_regression.py, not here."""
+    rng = np.random.default_rng(1)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 10))
+    H = inverse_batschelet.d2logpdf(x, **params)
+
+    def fd(a, b, h):
+        hi, lo = dict(params), dict(params)
+        hi[b] += h
+        lo[b] -= h
+        return (inverse_batschelet.dlogpdf(x, **hi)[a]
+                - inverse_batschelet.dlogpdf(x, **lo)[a]) / (2.0 * h)
+
+    kernel_pairs = [("xi", "xi"), ("xi", "kappa"), ("xi", "nu"),
+                    ("xi", "lmbd"), ("kappa", "nu"), ("nu", "nu"),
+                    ("nu", "lmbd")]
+    for a, b in kernel_pairs:
+        h = 1e-5 if b == "kappa" else 1e-6
+        np.testing.assert_allclose(H[(a, b)], fd(a, b, h), atol=1e-4, rtol=0.0)
+
+
 def test_inverse_batschelet_fit_moments():
     samples = inverse_batschelet.rvs(
         xi=1.1, kappa=3.0, nu=0.2, lmbd=-0.3, size=600, random_state=123

@@ -10159,8 +10159,15 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
     $b = \tfrac{2\lambda}{1 + \lambda}$, and the normalising constant
     $c(\kappa, \lambda)$ depends only on $\kappa$ and $\lambda$.
     Setting $\nu = \lambda = 0$ recovers the von Mises distribution, while
-    $\kappa \to 0$ yields the circular uniform law. Parameters must be scalar;
-    cached normalisation tables are built per parameter set.
+    $\kappa \to 0$ yields the circular uniform law.
+
+    This law is regression-ready: the module-level ``ibslss`` is its
+    location-scale-shape family (``CircularLL(inverse_batschelet)``), with
+    ξ via tanhalf, log κ, and ν (skewness) / λ (peakedness) via tanh — e.g.
+    ``circ_gam(["theta ~ s(x)", "~1", "~1", "~1"], data, family=ibslss)``.
+    Accordingly ``pdf``/``logpdf``/``dlogpdf``/``d2logpdf`` accept
+    per-observation parameter arrays (the regression contract); ``cdf``,
+    ``ppf``, ``rvs`` and the cached normalisation tables remain scalar-only.
 
     Methods
     -------
@@ -10233,31 +10240,59 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
         off `_c_invbatschelet`, once per unique (κ,λ). Vectorizes over
         per-observation parameter arrays; returns a book-named dict.
         """
+        kappa = np.asarray(kappa, dtype=float)
+        lmbd = np.asarray(lmbd, dtype=float)
+        g = _invbat_dlogkernel(x, xi, kappa, nu, lmbd)   # (..., 4): ξ, κ, ν, λ
+        dlogc_dk, dlogc_dl = _invbat_logc_grad_vec(kappa, lmbd)
+        return {
+            "xi": g[..., 0],
+            "kappa": g[..., 1] + dlogc_dk,
+            "nu": g[..., 2],
+            "lmbd": g[..., 3] + dlogc_dl,
+        }
+
+    def d2logpdf(self, x, xi, kappa, nu, lmbd):
+        r"""Second derivatives of ``logpdf`` (l2) — the 10 unique unordered
+        pairs of the 4-LP family. Two blocks:
+
+        - **kernel** (every pair): central finite-difference of the *analytic*
+          kernel gradient :func:`_invbat_dlogkernel` (FD of a closed-form
+          gradient, not FD-of-FD), symmetrized;
+        - **normalizer** (only the κ,κ / κ,λ / λ,λ pairs, since c⊥ξ,ν):
+          :func:`_invbat_logc_hess_vec`, direct second differences of log c.
+
+        EFS-grade Hessian; the end-to-end gate is intercept-only parity vs
+        ``inverse_batschelet.fit`` (dev/plans §7). Returns a book-named dict
+        keyed by unordered parameter pairs.
+        """
         x, xi, kappa, nu, lmbd = np.broadcast_arrays(
             *(np.asarray(v, dtype=float) for v in (x, xi, kappa, nu, lmbd))
         )
-        phi_star, u_star = _invbat_warp_vec(x, xi, nu, lmbd)
-        half = 0.5 * (1.0 - lmbd)
-        A = u_star - half * np.sin(u_star)
-        Bp = 1.0 - half * np.cos(u_star)                 # B'(u⋆)
-        Tnu = 1.0 + nu * np.sin(phi_star)
-        Slam = 1.0 - 0.5 * (1.0 + lmbd) * np.cos(u_star)
-        S = kappa * np.sin(A)
+        base = [xi, kappa, nu, lmbd]
+        steps = [1e-6, 1e-5 * np.maximum(1.0, np.abs(kappa)), 1e-6, 1e-6]
+        # kernel Hessian: H[..., a, b] = ∂(kernel grad)_a / ∂param_b
+        H = np.empty(x.shape + (4, 4), dtype=float)
+        for b in range(4):
+            hb = steps[b]
+            pp = list(base); pm = list(base)
+            pp[b] = base[b] + hb
+            pm[b] = base[b] - hb
+            gp = _invbat_dlogkernel(x, *pp)
+            gm = _invbat_dlogkernel(x, *pm)
+            H[..., :, b] = (gp - gm) / (2.0 * np.asarray(hb)[..., None])
+        H = 0.5 * (H + np.swapaxes(H, -1, -2))           # symmetrize
 
-        chain = Bp / (Tnu * Slam)
-        d_xi = S * chain                                 # = −S·B′·∂u⋆/∂ξ
-        d_nu = -S * chain * (1.0 + np.cos(phi_star))
-        dA_dl = 0.5 * np.sin(u_star) * (1.0 + Bp / Slam)  # ∂A/∂λ (kernel)
-        d_lmbd_kernel = -S * dA_dl
-        d_kappa_kernel = np.cos(A)
-
-        dlogc_dk, dlogc_dl = _invbat_logc_grad_vec(kappa, lmbd)
-        return {
-            "xi": d_xi,
-            "kappa": d_kappa_kernel + dlogc_dk,
-            "nu": d_nu,
-            "lmbd": d_lmbd_kernel + dlogc_dl,
-        }
+        hkk, hkl, hll = _invbat_logc_hess_vec(kappa, lmbd)
+        i = {"xi": 0, "kappa": 1, "nu": 2, "lmbd": 3}
+        norm = {("kappa", "kappa"): hkk, ("kappa", "lmbd"): hkl,
+                ("lmbd", "lmbd"): hll}
+        out = {}
+        for a, b in combinations_with_replacement(("xi", "kappa", "nu", "lmbd"), 2):
+            val = H[..., i[a], i[b]]
+            if (a, b) in norm:
+                val = val + norm[(a, b)]
+            out[(a, b)] = val
+        return out
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -10391,6 +10426,21 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
         x_arr = np.asarray([x], dtype=float) if scalar_input else np.asarray(x, dtype=float)
         if x_arr.size == 0:
             return x_arr.astype(float)
+
+        # Regression path: per-observation parameter arrays (each datum its own
+        # κ_i, λ_i → a per-observation normalizer). The scalar descriptive path
+        # below can't take array warp/normalizer params; this is what
+        # CircularLL.ll()/fit drive. Mirrors jonespewsey._logpdf's branch.
+        if any(_invbat_as_scalar(v) is None for v in (xi, kappa, nu, lmbd)):
+            xb, xib, kb, nb, lb = np.broadcast_arrays(
+                *(np.asarray(v, dtype=float) for v in (x, xi, kappa, nu, lmbd))
+            )
+            kb = np.clip(kb, 0.0, _INVBAT_KAPPA_UPPER)
+            phi_star, u_star = _invbat_warp_vec(xb, xib, nb, lb)
+            A = u_star - 0.5 * (1.0 - lb) * np.sin(u_star)
+            log_kernel = kb * np.cos(A)
+            return np.where(kb <= _INVBAT_KAPPA_TOL, -np.log(2.0 * np.pi),
+                            log_kernel + _invbat_log_c_vec(kb, lb))
 
         xi_val = _invbat_ensure_scalar(xi, "xi")
         kappa_val = float(np.clip(_invbat_ensure_scalar(kappa, "kappa"), 0.0, _INVBAT_KAPPA_UPPER))
@@ -11279,6 +11329,95 @@ def _invbat_logc_grad_vec(kappa, lmbd, h=1e-6):
         grad[i] = (gk, gl)
     out = grad[inverse].reshape(kappa.shape + (2,))
     return out[..., 0], out[..., 1]
+
+
+def _invbat_logc_hess_vec(kappa, lmbd, h=1e-4):
+    """``(∂²log c/∂κ², ∂²log c/∂κ∂λ, ∂²log c/∂λ²)`` by direct second central
+    differences of ``log _c_invbatschelet``, once per unique (κ,λ) — the
+    normalizer block of `d2logpdf`. Direct second differences (one FD level on
+    the smooth scalar log c) avoid the FD-of-FD noise of differencing the
+    already-FD'd gradient."""
+    kappa, lmbd = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(lmbd, dtype=float)
+    )
+    pairs, inverse = np.unique(
+        np.stack([kappa.ravel(), lmbd.ravel()], axis=1), axis=0,
+        return_inverse=True,
+    )
+
+    def _logc(k, l):
+        return np.log(_c_invbatschelet(k, l))
+
+    hess = np.empty((pairs.shape[0], 3), dtype=float)
+    for i, (k, l) in enumerate(pairs):
+        hk = h * max(1.0, abs(k))
+        hl = min(h, 0.25 * (1.0 - abs(l)))
+        f0 = _logc(k, l)
+        hkk = (_logc(k + hk, l) - 2.0 * f0 + _logc(k - hk, l)) / (hk * hk)
+        hll = (_logc(k, l + hl) - 2.0 * f0 + _logc(k, l - hl)) / (hl * hl)
+        hkl = (_logc(k + hk, l + hl) - _logc(k + hk, l - hl)
+               - _logc(k - hk, l + hl) + _logc(k - hk, l - hl)) / (4.0 * hk * hl)
+        hess[i] = (hkk, hkl, hll)
+    out = hess[inverse].reshape(kappa.shape + (3,))
+    return out[..., 0], out[..., 1], out[..., 2]
+
+
+def _invbat_log_c_vec(kappa, lmbd):
+    """Vectorized ``log c(κ,λ)`` over per-observation params, once per unique
+    (κ,λ) — the normalizer for the regression-path ``_logpdf`` (each datum its
+    own κ_i, λ_i). Reuses the tested scalar ``_c_invbatschelet``."""
+    kappa, lmbd = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(lmbd, dtype=float)
+    )
+    pairs, inverse = np.unique(
+        np.stack([kappa.ravel(), lmbd.ravel()], axis=1), axis=0,
+        return_inverse=True,
+    )
+    vals = np.array(
+        [np.log(_c_invbatschelet(float(k), float(l))) for k, l in pairs]
+    )
+    return vals[inverse].reshape(kappa.shape)
+
+
+def _invbat_as_scalar(value):
+    """Collapse a parameter to a float (tolerating constant arrays), or return
+    ``None`` if it genuinely varies — the scalar-vs-regression-path switch the
+    ``_logpdf`` uses (mirrors ``_jp_as_scalar``)."""
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        return float(arr)
+    flat = arr.reshape(-1)
+    if flat.size == 1:
+        return float(flat[0])
+    first = flat[0]
+    if np.all(flat == first):
+        return float(first)
+    return None
+
+
+def _invbat_dlogkernel(x, xi, kappa, nu, lmbd):
+    """The four analytic log-*kernel* gradient components (no normalizer),
+    stacked as ``(..., 4)`` in book order [ξ, κ, ν, λ]. The per-observation
+    score reuses the two warps' solved roots φ⋆, u⋆ and their slopes; see
+    ``inverse_batschelet_gen.dlogpdf``. Isolated as a module function so
+    ``d2logpdf`` can central-difference it for the kernel Hessian block
+    (FD of an analytic gradient — not FD-of-FD)."""
+    x, xi, kappa, nu, lmbd = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (x, xi, kappa, nu, lmbd))
+    )
+    phi_star, u_star = _invbat_warp_vec(x, xi, nu, lmbd)
+    half = 0.5 * (1.0 - lmbd)
+    A = u_star - half * np.sin(u_star)
+    Bp = 1.0 - half * np.cos(u_star)
+    Tnu = 1.0 + nu * np.sin(phi_star)
+    Slam = 1.0 - 0.5 * (1.0 + lmbd) * np.cos(u_star)
+    S = kappa * np.sin(A)
+    chain = Bp / (Tnu * Slam)
+    d_xi = S * chain
+    d_nu = -S * chain * (1.0 + np.cos(phi_star))
+    d_lmbd = -S * 0.5 * np.sin(u_star) * (1.0 + Bp / Slam)
+    d_kappa = np.cos(A)
+    return np.stack([d_xi, d_kappa, d_nu, d_lmbd], axis=-1)
 
 
 def _A1(kappa):
