@@ -1174,9 +1174,9 @@ def test_distribution_cdf_matches_numeric(case):
 
 @pytest.mark.parametrize("case", RVS_CASES, ids=lambda case: case.id)
 def test_distribution_rvs_pit(case):
-    cdf_callable = lambda values: _evaluate_array(
-        case.factory.cdf, values, **case.params
-    )
+    def cdf_callable(values):
+        return _evaluate_array(case.factory.cdf, values, **case.params)
+
     _assert_rvs_reasonable(
         case.dist(),
         size=case.size,
@@ -1545,11 +1545,11 @@ def test_inverse_batschelet_log_c_array_matches_scalar():
     kk = np.array([0.05, 0.5, 1.0, 2.0, 4.0, 8.0, 20.0, 100.0, 400.0, 700.0])
     ll = np.array([-0.95, -0.7, -0.3, -0.05, 0.0, 0.05, 0.3, 0.7, 0.95])
     K, L = np.meshgrid(kk, ll)
-    k, l = K.ravel(), L.ravel()
+    k, lam = K.ravel(), L.ravel()
 
     ref = np.array([np.log(_c_invbatschelet(float(a), float(b)))
-                    for a, b in zip(k, l)])
-    vec = _invbat_log_c_array(k, l, grid_size=_INVBAT_NUMERIC_GRID)
+                    for a, b in zip(k, lam)])
+    vec = _invbat_log_c_array(k, lam, grid_size=_INVBAT_NUMERIC_GRID)
     # interior pairs are computed by the vectorized assembly itself
     np.testing.assert_allclose(vec, ref, atol=1e-12, rtol=0.0)
     # broadcasting preserves the input shape
@@ -2122,9 +2122,11 @@ def _assert_rvs_reasonable(
 
 def _check_pdf_normalizes(dist, params=None, atol=1e-6, limit=400):
     if params is None:
-        integrand = lambda t: dist.pdf(t)
+        def integrand(t):
+            return dist.pdf(t)
     else:
-        integrand = lambda t: dist.pdf(t, *params)
+        def integrand(t):
+            return dist.pdf(t, *params)
 
     val, err = quad(integrand, 0, 2 * np.pi, limit=limit)
     assert np.isfinite(val)

@@ -688,7 +688,7 @@ def test_harrison_kanji_vs_pycircstat():
         import pandas as pd
         from scipy import special, stats
 
-        from pycircstat2.descriptive import circ_kappa, circ_mean, circ_r
+        from pycircstat2.descriptive import circ_kappa, circ_r
 
         if fn is None:
             fn = ["A", "B"]
@@ -710,12 +710,10 @@ def test_harrison_kanji_vs_pycircstat():
         gr = df.groupby(fn[0])
         pn = gr.count()["dependent"]
         pr = gr.agg(circ_r)["dependent"] * pn
-        pm = gr.agg(circ_mean)["dependent"]
         # factor B
         gr = df.groupby(fn[1])
         qn = gr.count()["dependent"]
         qr = gr.agg(circ_r)["dependent"] * qn
-        qm = gr.agg(circ_mean)["dependent"]
 
         if kk > 2:  # large kappa
             # effect of factor 1
