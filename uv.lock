@@ -586,7 +586,7 @@ wheels = [
 [[package]]
 name = "hea"
 version = "0.1.5"
-source = { git = "https://github.com/huangziwei/hea?branch=gam-parity#b83623cfbb996c282298cf26c9ee5fe74ddb0391" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -596,6 +596,13 @@ dependencies = [
     { name = "rdatasets" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/d9/36de5b09017df0ae6b5e9a71189e6628de6cdca715d2876ce845dc67148a/hea-0.1.5-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:3c37dff8fd5b87ae45290c65d8c8f3a146b399a670ce0265ea5874aa0b6b6e6d", size = 1722823, upload-time = "2026-06-16T19:40:27.201Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/cc/104bab98969b0154ae9d27a65acb39c4441d5d9d68def4961a270c1e5ef9/hea-0.1.5-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:bfd6c03d1983d6274be637743d7d434aa0b58f6969a9f8b1e6f9c275fde65afd", size = 1711004, upload-time = "2026-06-16T19:40:21.249Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/97/ce5aaba50125b989bd049ff23d97c7930abec0496881c67b83d04d4566a0/hea-0.1.5-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:730c74e9943e9f6bad0e068ccdc80669bb553e52767c53fcd8d5b64ad330517a", size = 1780909, upload-time = "2026-06-16T19:40:22.95Z" },
+    { url = "https://files.pythonhosted.org/packages/07/3f/9624ad55b41dddfef40a850272752e763536f4922be8f71d6a6a46c57078/hea-0.1.5-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:00ef9562481509d5f81cb1428c3128990f70474b9c21d630947215805bacdcea", size = 1984586, upload-time = "2026-06-16T19:40:24.693Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/91/0bd467bbf13400f1cffe56bd59e4731b93889ecf880453fa6426c496996f/hea-0.1.5-cp310-abi3-win_amd64.whl", hash = "sha256:3af2455c3a202bb41da051e75658d5fab20b97a62ad1fc55bacc7df7002f3d0b", size = 1636705, upload-time = "2026-06-16T19:33:26.795Z" },
 ]
 
 [[package]]
@@ -1838,7 +1845,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hea", git = "https://github.com/huangziwei/hea?branch=gam-parity" },
+    { name = "hea", specifier = ">=0.1.5" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.31.0" },
     { name = "matplotlib" },
     { name = "mkdocs", marker = "extra == 'dev'" },

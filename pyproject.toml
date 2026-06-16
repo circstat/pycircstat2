@@ -35,16 +35,6 @@ dev = [
 packages = {find = {}}
 include-package-data = true
 
-# hea 0.1.4 (the general-family engine: GeneralFamily/gam.fit5, multi-formula
-# gam, gamlss_* helpers, subclassable Link) is published to PyPI. While the
-# 0.1.5 seam-hardening work (mgcv 6-arg postproc, optimizer="efs", W-slices)
-# is unreleased, track its GitHub branch — uv.lock pins the exact commit;
-# pull the branch tip with `uv sync -P hea`. Drop the override when hea
-# 0.1.5 is on PyPI (then bump the floor above to hea>=0.1.5). For local
-# hea iteration use `hea = { path = "../hea", editable = true }` instead.
-[tool.uv.sources]
-hea = { git = "https://github.com/huangziwei/hea", branch = "gam-parity" }
-
 [tool.pytest.ini_options]
 # Only collect the project's own tests; skip the vendored reference copy of the
 # original pycircstat under dev/ref (it depends on `nose`).
