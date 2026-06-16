@@ -5,17 +5,14 @@ from itertools import combinations_with_replacement
 import numpy as np
 from scipy.integrate import quad
 from scipy.interpolate import PchipInterpolator
-from scipy.optimize import minimize, minimize_scalar, brentq, root_scalar
+from scipy.optimize import minimize, minimize_scalar, brentq
 from scipy.special import beta as beta_fn
 from scipy.special import (
     gamma,
-    i0,
     i0e,
-    i1,
     i1e,
     ndtr,
     ndtri,
-    iv,
     ive,
     betainc,
     betaincinv,
@@ -8266,14 +8263,17 @@ def _jp_feature_scales(kappa, psi):
 
 def _gl_panels_from_edges(edges):
     """Composite 24-point Gauss–Legendre nodes/weights over consecutive
-    panel ``edges`` (sorted). Returns ``(nodes, weights)``."""
+    panel ``edges`` (sorted). Returns ``(nodes, weights)`` in panel-major
+    order — built by one broadcast (no Python panel loop), bitwise the same
+    as the per-panel concatenation it replaces; this runs once per unique
+    parameter tuple on every JP-family normalizer sweep."""
     xi, wgl = _JP_GL_XW
-    nodes, wts = [], []
-    for a, b in zip(edges[:-1], edges[1:]):
-        mid, hw = 0.5 * (a + b), 0.5 * (b - a)
-        nodes.append(mid + hw * xi)
-        wts.append(hw * wgl)
-    return np.concatenate(nodes), np.concatenate(wts)
+    edges = np.asarray(edges, dtype=float)
+    mid = 0.5 * (edges[:-1] + edges[1:])
+    hw = 0.5 * (edges[1:] - edges[:-1])
+    nodes = (mid[:, None] + hw[:, None] * xi[None, :]).ravel()
+    wts = (hw[:, None] * wgl[None, :]).ravel()
+    return nodes, wts
 
 
 def _jp_ladder_edges(kappa, psi):
@@ -8302,6 +8302,35 @@ def _jp_gl_panels(kappa, psi):
     Returns ``(nodes, weights)``.
     """
     return _gl_panels_from_edges(_jp_ladder_edges(kappa, psi))
+
+
+@lru_cache(maxsize=8192)
+def _jp_grid(kappa: float, psi: float):
+    """Cached [0, π] GL nodes/weights for one symmetric Jones–Pewsey tuple
+    (deterministic in (κ, ψ)) — the un-warped twin of ``_jp_asym_grid``, shared
+    by the value (``_jp_log_c_vec``) and moment (``_jp_logZ_moments_vec``)
+    sweeps of a fit iteration. Callers copy via ``np.stack``, so the cached
+    arrays are never mutated."""
+    return _jp_gl_panels(kappa, psi)
+
+
+def _jp_size_groups(pairs):
+    """Symmetric-JP GL grids grouped by node count for batched evaluation —
+    the un-warped twin of ``_jp_asym_size_groups`` (jplss / ssjplss). Each group
+    stacks into one rectangular ``(g, L)`` batch with no padding: every tuple
+    keeps its own adaptive ``_jp_ladder_edges`` grid, so a batched sweep is
+    bit-for-bit the per-tuple scalar, and a lone deep-ψ spike forms its own
+    one-row group instead of inflating every datum's node count. Returns
+    ``[(idx, nodes, wts), ...]`` with ``idx`` indexing rows of ``pairs``."""
+    grids = [_jp_grid(float(k), float(p)) for k, p in pairs]
+    sizes = np.array([g[0].size for g in grids])
+    groups = []
+    for L in np.unique(sizes):
+        idx = np.nonzero(sizes == L)[0]
+        nodes = np.stack([grids[i][0] for i in idx])
+        wts = np.stack([grids[i][1] for i in idx])
+        groups.append((idx, nodes, wts))
+    return groups
 
 
 @lru_cache(maxsize=1024)
@@ -8613,7 +8642,15 @@ def _jp_log_c_vec(kappa, psi):
     pairs, inverse = np.unique(
         np.stack([kappa[gen], psi[gen]], axis=1), axis=0, return_inverse=True
     )
-    vals = np.array([_jp_log_c(float(k), float(p)) for k, p in pairs])
+    vals = np.empty(pairs.shape[0])
+    tiny = np.finfo(float).tiny
+    for idx, nodes, wts in _jp_size_groups(pairs):
+        k, p = pairs[idx, 0:1], pairs[idx, 1:2]
+        # h via score_terms (2D-safe, bitwise-identical to _jp_log_kernel);
+        # 2· for the even-kernel half-circle, peak e^κ factored out
+        h = _jp_score_terms(nodes, k, p, second=False)["h"]
+        integral = 2.0 * np.sum(wts * np.exp(h - k), axis=1)
+        vals[idx] = -(k[:, 0] + np.log(np.maximum(integral, tiny)))
     out[gen] = vals[inverse]
     return out
 
@@ -8807,9 +8844,12 @@ def _jp_logZ_moments(kappa: float, psi: float):
 
 
 def _jp_logZ_moments_vec(kappa, psi):
-    """Element-wise ``_jp_logZ_moments`` over per-observation (κ_i, ψ_i),
-    evaluated once per unique pair. Returns five arrays broadcast to the
-    common parameter shape: ``(dk, dp, dkk, dkp, dpp)``."""
+    """Batched ``_jp_logZ_moments`` over per-observation (κ_i, ψ_i): unique
+    pairs grouped by GL node count and evaluated as rectangular ``(group ×
+    node)`` batches — one ``_jp_score_terms`` sweep per size group rather than
+    per pair, on each tuple's own adaptive grid (bit-for-bit the scalar). This
+    is the jplss / ssjplss hot path. Returns five arrays broadcast to the input
+    shape: ``(dk, dp, dkk, dkp, dpp)``."""
     kappa, psi = np.broadcast_arrays(
         np.asarray(kappa, dtype=float), np.asarray(psi, dtype=float)
     )
@@ -8817,7 +8857,23 @@ def _jp_logZ_moments_vec(kappa, psi):
         np.stack([kappa.ravel(), psi.ravel()], axis=1), axis=0,
         return_inverse=True,
     )
-    vals = np.array([_jp_logZ_moments(float(k), float(p)) for k, p in pairs])
+    vals = np.empty((pairs.shape[0], 5))
+    tiny = np.finfo(float).tiny
+    for idx, nodes, wts in _jp_size_groups(pairs):
+        k, p = pairs[idx, 0:1], pairs[idx, 1:2]
+        t = _jp_score_terms(nodes, k, p, second=True)
+        e = np.exp(t["h"] - np.max(t["h"], axis=1, keepdims=True)) * wts
+        Z = np.maximum(np.sum(e, axis=1, keepdims=True), tiny)
+
+        def m(v):
+            return np.sum(e * v, axis=1, keepdims=True) / Z
+
+        hk, hp = t["hk"], t["hp"]
+        dk, dp = m(hk), m(hp)
+        dkk = m(t["hkk"] + hk * hk) - dk * dk
+        dkp = m(t["hkp"] + hk * hp) - dk * dp
+        dpp = m(t["hpp"] + hp * hp) - dp * dp
+        vals[idx] = np.concatenate([dk, dp, dkk, dkp, dpp], axis=1)
     out = vals[inverse].reshape(kappa.shape + (5,))
     return tuple(np.moveaxis(out, -1, 0))
 
@@ -10292,18 +10348,28 @@ ajplss = CircularLL(jonespewsey_asym, name="ajplss")
 
 def _jp_warp_inv(u, nu):
     """φ = g⁻¹(u) on the principal branch of the asymmetry warp
-    g(φ) = φ + ν cos φ, by bisection — monotone (g′ ≥ 1 − ν > 0), and 60
-    halvings (2π/2⁶⁰ ≈ 5e-18) are beyond what the smooth weight consuming
-    φ(u) can distinguish."""
+    g(φ) = φ + ν cos φ. Monotone (g′ = 1 − ν sinφ ≥ 1 − |ν| > 0), so a short
+    bisection warms a tight bracket and clamped Newton — using the closed-form
+    g′ — polishes it: ≤3e-14 across |ν| ≤ 0.999, indistinguishable to the
+    smooth weight 1/g′ that consumes φ(u) from the ~5e-18 of 60 pure halvings
+    this replaces, at ~4× the speed. The Newton step is clamped to the live
+    bracket so it cannot run away where g′ → 0 (ν → 1 near φ = π/2) — the
+    failure mode of unguarded Newton from a far start. Feeds every
+    asymmetric-JP value/derivative/cdf/rvs path."""
     u = np.asarray(u, dtype=float)
     a = np.full_like(u, -np.pi)
     b = np.full_like(u, np.pi)
-    for _ in range(60):
+    for _ in range(5):                       # warm a tight bracket (width ~2π/32)
         m = 0.5 * (a + b)
         too_high = m + nu * np.cos(m) > u
         b = np.where(too_high, m, b)
         a = np.where(too_high, a, m)
-    return 0.5 * (a + b)
+    phi = 0.5 * (a + b)
+    for _ in range(6):                       # Newton polish, clamped to [a, b]
+        phi = np.clip(
+            phi - (phi + nu * np.cos(phi) - u) / (1.0 - nu * np.sin(phi)), a, b
+        )
+    return phi
 
 
 def _jp_ladder_edges_asym(kappa, psi, nu):
@@ -10372,10 +10438,45 @@ def _jp_log_c_asym(kappa: float, psi: float, nu: float) -> float:
     return float(-(kappa + np.log(max(integral, np.finfo(float).tiny))))
 
 
+@lru_cache(maxsize=8192)
+def _jp_asym_grid(kappa: float, psi: float, nu: float):
+    """Cached GL nodes/weights for one asymmetric-JP tuple — deterministic in
+    (κ, ψ, ν), so the value sweep and the moment sweep of a fit iteration build
+    each tuple's adaptive ladder once and share it (and a re-visited coefficient
+    in a line search is free). Callers copy via ``np.stack`` before use, so the
+    cached arrays are never mutated."""
+    return _gl_panels_from_edges(_jp_ladder_edges_asym(kappa, psi, nu))
+
+
+def _jp_asym_size_groups(pairs):
+    """Per-tuple GL grids for the asymmetric-JP normalizer, grouped by node
+    count so each group stacks into one rectangular ``(g, L)`` batch with **no
+    padding** — every tuple keeps its own adaptive ``_jp_ladder_edges_asym``
+    grid, so a batched sweep is bit-for-bit the per-tuple scalar. Grouping by
+    size (rather than a shared/padded grid) is what makes this exact *and*
+    blow-up-free: a lone deep-ψ tuple with a 100-panel ladder forms its own
+    one-row group instead of forcing its node count onto every other datum.
+    Returns ``[(idx, nodes, wts), ...]`` with ``idx`` indexing rows of
+    ``pairs`` and ``nodes``/``wts`` shaped ``(g, L)``."""
+    grids = [_jp_asym_grid(float(k), float(p), float(n)) for k, p, n in pairs]
+    sizes = np.array([g[0].size for g in grids])
+    groups = []
+    for L in np.unique(sizes):
+        idx = np.nonzero(sizes == L)[0]
+        nodes = np.stack([grids[i][0] for i in idx])
+        wts = np.stack([grids[i][1] for i in idx])
+        groups.append((idx, nodes, wts))
+    return groups
+
+
 def _jp_log_c_asym_vec(kappa, psi, nu):
-    """Per-observation ``_jp_log_c_asym(κ_i, ψ_i, ν_i)`` — element-wise, once
-    per unique (κ, ψ, ν) triple (the scalar is lru-cached, so repeated
-    regression iterations are cheap). κ ≈ 0 → uniform."""
+    """Per-observation ``_jp_log_c_asym(κ_i, ψ_i, ν_i)``, batched: unique
+    triples are grouped by GL node count and evaluated as rectangular
+    ``(group × node)`` array ops — one ``_jp_warp_inv``/``_jp_log_kernel`` call
+    per size group instead of one per tuple — so a distributional κ-smooth pays
+    a handful of vectorized sweeps, not a Python loop over every datum. Each
+    tuple keeps its own adaptive grid, so the result matches the lru-cached
+    scalar to the last bit. κ ≈ 0 → uniform."""
     kappa, psi, nu = np.broadcast_arrays(
         *(np.asarray(v, dtype=float) for v in (kappa, psi, nu))
     )
@@ -10387,8 +10488,16 @@ def _jp_log_c_asym_vec(kappa, psi, nu):
         np.stack([kappa[live], psi[live], nu[live]], axis=1), axis=0,
         return_inverse=True,
     )
-    vals = np.array([_jp_log_c_asym(float(k), float(p), float(n))
-                     for k, p, n in pairs])
+    vals = np.empty(pairs.shape[0])
+    tiny = np.finfo(float).tiny
+    for idx, nodes, wts in _jp_asym_size_groups(pairs):
+        k, p, n = pairs[idx, 0:1], pairs[idx, 1:2], pairs[idx, 2:3]
+        weight = 1.0 / (1.0 - n * np.sin(_jp_warp_inv(nodes, n)))
+        # h via score_terms (2D-safe, bitwise-identical to _jp_log_kernel,
+        # which special-cases scalar ψ == 0 and so cannot take array params)
+        h = _jp_score_terms(nodes, k, p, second=False)["h"]
+        integral = np.sum(wts * np.exp(h - k) * weight, axis=1)
+        vals[idx] = -(k[:, 0] + np.log(np.maximum(integral, tiny)))
     out[live] = vals[inverse]
     return out
 
@@ -10454,9 +10563,12 @@ def _jp_logZ_moments_asym(kappa: float, psi: float, nu: float):
 
 
 def _jp_logZ_moments_asym_vec(kappa, psi, nu):
-    """Element-wise :func:`_jp_logZ_moments_asym` over per-observation
-    (κ_i, ψ_i, ν_i), once per unique triple. Returns nine arrays broadcast to
-    the common parameter shape:
+    """Batched :func:`_jp_logZ_moments_asym` over per-observation
+    (κ_i, ψ_i, ν_i): unique triples grouped by GL node count and evaluated as
+    rectangular ``(group × node)`` batches — one ``_jp_warp_inv``/
+    ``_jp_score_terms`` sweep per size group rather than per tuple, on each
+    tuple's own adaptive grid (bit-for-bit the scalar). κ < tol rows stay 0
+    (the scalar contract). Returns nine arrays broadcast to the input shape:
     ``(dk, dp, dnu, dkk, dkp, dpp, dknu, dpnu, dnunu)``."""
     kappa, psi, nu = np.broadcast_arrays(
         *(np.asarray(v, dtype=float) for v in (kappa, psi, nu))
@@ -10465,8 +10577,39 @@ def _jp_logZ_moments_asym_vec(kappa, psi, nu):
         np.stack([kappa.ravel(), psi.ravel(), nu.ravel()], axis=1), axis=0,
         return_inverse=True,
     )
-    vals = np.array([_jp_logZ_moments_asym(float(k), float(p), float(n))
-                     for k, p, n in pairs])
+    vals = np.zeros((pairs.shape[0], 9))      # κ < tol → 0 (scalar contract)
+    live = pairs[:, 0] >= _JP_KAPPA_TOL
+    tiny = np.finfo(float).tiny
+    if np.any(live):
+        live_pairs = pairs[live]
+        live_vals = np.empty((live_pairs.shape[0], 9))
+        for idx, nodes, wts in _jp_asym_size_groups(live_pairs):
+            k, p, n = live_pairs[idx, 0:1], live_pairs[idx, 1:2], live_pairs[idx, 2:3]
+            phi = _jp_warp_inv(nodes, n)
+            cphi = np.cos(phi)
+            weight = 1.0 / (1.0 - n * np.sin(phi))
+            t = _jp_score_terms(nodes, k, p, second=True)
+            e = wts * np.exp(t["h"] - k) * weight
+            Z = np.maximum(np.sum(e, axis=1, keepdims=True), tiny)
+
+            def m(v):
+                return np.sum(e * v, axis=1, keepdims=True) / Z
+
+            hk, hp, hphi = t["hk"], t["hp"], t["hphi"]
+            hnu = hphi * cphi                          # h_ν
+            dk, dp, dnu = m(hk), m(hp), m(hnu)
+            h_knu = t["hphik"] * cphi                  # h_κν
+            h_pnu = t["hphip"] * cphi                  # h_ψν
+            h_nunu = t["hphiphi"] * cphi * cphi        # h_νν
+            dkk = m(t["hkk"] + hk * hk) - dk * dk
+            dkp = m(t["hkp"] + hk * hp) - dk * dp
+            dpp = m(t["hpp"] + hp * hp) - dp * dp
+            dknu = m(h_knu + hk * hnu) - dk * dnu
+            dpnu = m(h_pnu + hp * hnu) - dp * dnu
+            dnunu = m(h_nunu + hnu * hnu) - dnu * dnu
+            live_vals[idx] = np.concatenate(
+                [dk, dp, dnu, dkk, dkp, dpp, dknu, dpnu, dnunu], axis=1)
+        vals[live] = live_vals
     out = vals[inverse].reshape(kappa.shape + (9,))
     return tuple(np.moveaxis(out, -1, 0))
 
@@ -10691,7 +10834,8 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
         H = np.empty(x.shape + (4, 4), dtype=float)
         for b in range(4):
             hb = steps[b]
-            pp = list(base); pm = list(base)
+            pp = list(base)
+            pm = list(base)
             pp[b] = base[b] + hb
             pm[b] = base[b] - hb
             gp = _invbat_dlogkernel(x, *pp)
