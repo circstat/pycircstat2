@@ -6401,7 +6401,7 @@ projectednormal = projectednormal_gen(name="projectednormal")
 pnlss = CircularLL(projectednormal, name="pnlss")
 
 
-class vonmises_flattopped_gen(CircularContinuous):
+class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
     r"""Flat-topped von Mises Distribution
 
     The Flat-topped von Mises distribution is a modification of the von Mises distribution
@@ -6433,9 +6433,28 @@ class vonmises_flattopped_gen(CircularContinuous):
 
     Note
     ----
-    Parameters must be scalar; cached normalization tables are built per parameter set.
-    Implementation based on Section 4.3.10 of Pewsey et al. (2013)
+    ``cdf``/``ppf``/``rvs`` take scalar parameters (cached normalization tables
+    are built per parameter set); ``pdf``/``logpdf`` and the regression
+    derivatives ``dlogpdf``/``d2logpdf`` additionally accept per-observation
+    parameter arrays (the regression contract — this is the ``vmftlss``
+    location-concentration-shape family). Implementation based on Section
+    4.3.10 of Pewsey et al. (2013).
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names mu/kappa/nu preserved. The peakedness factor warps
+    # *forward* (B = φ + ν sinφ), so unlike inverse_batschelet the score needs
+    # no implicit differentiation; B is odd in φ → the density stays symmetric,
+    # so ν is a peakedness/flat-top knob (ν>0 sharper, ν<0 flatter), not a skew
+    # one. The normalizer Z(κ,ν) depends on both κ and ν, so ℓ_κ and ℓ_ν each
+    # carry a grid-expectation term (the jplss `ℓ_κ = h_κ − E[h_κ]` pattern).
+    # ν ∈ (−1,1) rides the tanh link. Reduction member ν=0 is plain `vmlss`. ---
+    param_roles = {"mu": "location", "kappa": "concentration", "nu": "shape"}
+    default_links = {
+        "location": "tanhalf",
+        "concentration": "log",
+        "shape": "tanh",
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -6459,7 +6478,69 @@ class vonmises_flattopped_gen(CircularContinuous):
         super()._clear_normalization_cache()
         self._vmft_table_cache = {}
 
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar`` for
+        the regression null model: the von Mises A1-inverse ``kappa`` (the ν→0
+        reduction member), clamped — the circlss ``initialize`` convention (see
+        CircularLL._null_params)."""
+        return float(np.clip(A1inv(Rbar), 0.01, 500.0))
+
+    def dlogpdf(self, x, mu, kappa, nu):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        With ``φ = θ − μ``, ``B = φ + ν sinφ`` and ``B_φ = 1 + ν cosφ``, the
+        log-density is ``κ cos B − log Z(κ, ν)``:
+
+        $$\ell_\mu = \kappa\sin B\,B_\phi,\quad
+          \ell_\kappa = \cos B - \mathbb{E}[\cos B],\quad
+          \ell_\nu = -\kappa\sin B\sin\phi - \mathbb{E}[-\kappa\sin B\sin\phi].$$
+
+        ``Z`` is μ-invariant (translation), so ``ℓ_μ`` carries no normalizer
+        term; the κ/ν expectations come from :func:`_vmft_logZ_moments_vec`.
+        Vectorizes over per-observation arrays; returns a book-named dict.
+        """
+        x, mu, kappa, nu = (np.asarray(v, dtype=float)
+                            for v in (x, mu, kappa, nu))
+        phi = x - mu
+        s, c = np.sin(phi), np.cos(phi)
+        B = phi + nu * s
+        sinB, cosB = np.sin(B), np.cos(B)
+        Bphi = 1.0 + nu * c
+        dk, dnu, *_ = _vmft_logZ_moments_vec(kappa, nu)
+        return {
+            "mu": kappa * sinB * Bphi,
+            "kappa": cosB - dk,
+            "nu": -kappa * sinB * s - dnu,
+        }
+
+    def d2logpdf(self, x, mu, kappa, nu):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs.
+        The location blocks are pure kernel (``Z`` is μ-free, so ``∂²_{μ·}log
+        Z = 0``); the (κ,κ), (κ,ν), (ν,ν) blocks subtract the normalizer
+        second derivatives ``∂²log Z = E[h_{ab}] + Cov(h_a, h_b)`` from
+        :func:`_vmft_logZ_moments_vec` (kernel ``h_{κκ}=0``, so ``ℓ_{κκ}=
+        −Var[\cos B]``)."""
+        x, mu, kappa, nu = (np.asarray(v, dtype=float)
+                            for v in (x, mu, kappa, nu))
+        phi = x - mu
+        s, c = np.sin(phi), np.cos(phi)
+        B = phi + nu * s
+        sinB, cosB = np.sin(B), np.cos(B)
+        Bphi = 1.0 + nu * c
+        _, _, dkk, dknu, dnunu = _vmft_logZ_moments_vec(kappa, nu)
+        return {
+            ("mu", "mu"): -kappa * cosB * Bphi * Bphi + kappa * nu * sinB * s,
+            ("mu", "kappa"): sinB * Bphi,
+            ("mu", "nu"): kappa * (cosB * s * Bphi + sinB * c),
+            ("kappa", "kappa"): -dkk,
+            ("kappa", "nu"): -sinB * s - dknu,
+            ("nu", "nu"): -kappa * cosB * s * s - dnunu,
+        }
+
     def _pdf(self, x, mu, kappa, nu):
+        if any(_vmft_as_scalar(v) is None for v in (mu, kappa, nu)):
+            # per-observation parameters — regression contract path
+            return np.exp(_vmft_logpdf_vec(x, mu, kappa, nu))
         x_arr = np.asarray(x, dtype=float)
         mu_val = _vmft_ensure_scalar(mu, "mu")
         kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
@@ -6531,6 +6612,9 @@ class vonmises_flattopped_gen(CircularContinuous):
         # cached table log-normalizer), returned before the exp so the
         # antipodal tail stays finite at concentrations where the density
         # underflows (κ ≳ 360 for ν = 0)
+        if any(_vmft_as_scalar(v) is None for v in (mu, kappa, nu)):
+            # per-observation parameters — regression contract path
+            return _vmft_logpdf_vec(x, mu, kappa, nu)
         x_arr = np.asarray(x, dtype=float)
         mu_val = _vmft_ensure_scalar(mu, "mu")
         kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
@@ -6570,6 +6654,10 @@ class vonmises_flattopped_gen(CircularContinuous):
         logpdf_values : array_like
             Logarithm of the probability density function evaluated at `x`.
         """
+        if any(_vmft_as_scalar(v) is None for v in (mu, kappa, nu)):
+            # per-observation parameters — regression contract path (the
+            # `vmftlss` general family calls `dist.logpdf(y, **array_params)`)
+            return _vmft_logpdf_vec(x, mu, kappa, nu)
         mu_val = _vmft_ensure_scalar(mu, "mu")
         kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
         nu_val = _vmft_ensure_scalar(nu, "nu")
@@ -7097,6 +7185,7 @@ class vonmises_flattopped_gen(CircularContinuous):
         return table
 
 vonmises_flattopped = vonmises_flattopped_gen(name="vonmises_flattopped")
+vmftlss = CircularLL(vonmises_flattopped, name="vmftlss")
 
 ##############################################
 ## Helper Functions: Flat-topped von Mises  ##
@@ -7174,6 +7263,126 @@ def _c_vmft(kappa, nu):
         return 1.0 / (2.0 * np.pi)
     table = _vmft_build_table(float(kappa), float(nu), _vmft_grid_size(float(kappa), float(nu)))
     return table["normalizer"]
+
+
+def _vmft_as_scalar(value):
+    """Collapse a parameter to a float (tolerating constant arrays), or return
+    ``None`` if it genuinely varies — the scalar-vs-regression-path switch the
+    flat-topped vM ``pdf``/``logpdf`` use (mirrors ``_jp_as_scalar``)."""
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        return float(arr)
+    flat = arr.reshape(-1)
+    if flat.size == 1:
+        return float(flat[0])
+    first = flat[0]
+    if np.all(flat == first):
+        return float(first)
+    return None
+
+
+def _vmft_log_c_vec(kappa, nu):
+    """Vectorized ``log c(κ,ν) = −log ∫ e^{κ cos(φ + ν sinφ)} dφ`` over
+    per-observation params, once per unique (κ,ν) on one shared grid (the
+    ibslss ``_invbat_log_c_array`` pattern — overflow-safe max-subtracted
+    trapezoid). κ ≤ tol → uniform. Matches the cached scalar table's
+    ``log_normalizer`` at the same grid size."""
+    kappa, nu = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(nu, dtype=float)
+    )
+    out = np.full(kappa.shape, -np.log(2.0 * np.pi))
+    live = kappa > _VMFT_KAPPA_TOL
+    if not np.any(live):
+        return out
+    kl = np.clip(kappa[live], 0.0, _VMFT_KAPPA_UPPER)
+    nl = nu[live]
+    pairs, inverse = np.unique(
+        np.stack([kl, nl], axis=1), axis=0, return_inverse=True
+    )
+    k = pairs[:, 0]
+    nv = pairs[:, 1]
+    grid = _vmft_grid_size(float(k.max()), float(np.abs(nv).max()))
+    phi = np.linspace(-np.pi, np.pi, grid + 1)
+    sin_phi = np.sin(phi)
+    w = np.ones_like(phi)
+    w[0] = w[-1] = 0.5
+    log_ker = k[:, None] * np.cos(phi[None, :] + nv[:, None] * sin_phi[None, :])
+    mx = np.max(log_ker, axis=1)
+    log_Z = (np.log(2.0 * np.pi / grid) + mx
+             + np.log(np.exp(log_ker - mx[:, None]) @ w))
+    out[live] = (-log_Z)[inverse]
+    return out
+
+
+def _vmft_logpdf_vec(x, mu, kappa, nu):
+    """Per-observation flat-topped vM log-density (regression contract): the
+    log-kernel ``κ cos(φ + ν sinφ)`` plus the vectorized log-normalizer, each
+    datum its own (μ, κ, ν). κ ≤ tol → uniform."""
+    x, mu, kappa, nu = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (x, mu, kappa, nu))
+    )
+    kappa = np.clip(kappa, 0.0, _VMFT_KAPPA_UPPER)
+    phi = ((x - mu + np.pi) % (2.0 * np.pi)) - np.pi
+    B = phi + nu * np.sin(phi)
+    out = kappa * np.cos(B) + _vmft_log_c_vec(kappa, nu)
+    return np.where(kappa <= _VMFT_KAPPA_TOL, -np.log(2.0 * np.pi), out)
+
+
+def _vmft_logZ_moments_vec(kappa, nu):
+    """First and second (κ,ν)-derivatives of ``log Z(κ,ν)`` (``Z = ∫ e^{κ cos B}
+    dφ``, ``B = φ + ν sinφ``) as kernel-weighted moments under the density,
+    vectorized over all unique (κ,ν) pairs in one grid pass — the normalizer
+    block of the flat-topped vM score/Hessian. With ``h_κ = cos B`` and
+    ``h_ν = −κ sin B sinφ``:
+
+        ∂log Z/∂κ = E[h_κ],    ∂log Z/∂ν = E[h_ν],
+        ∂²log Z/∂a∂b = E[h_{ab}] + Cov(h_a, h_b),
+
+    using the kernel second derivatives ``h_κκ = 0``, ``h_κν = −sin B sinφ``,
+    ``h_νν = −κ cos B sin²φ``. Each E[·] is a normalizer-free ratio (the
+    e^{κcosB−max} factor cancels), so it is accurate at any concentration.
+    Returns ``(dk, dnu, dkk, dknu, dnunu)`` broadcast to the parameter shape."""
+    kappa, nu = np.broadcast_arrays(
+        np.asarray(kappa, dtype=float), np.asarray(nu, dtype=float)
+    )
+    shape = kappa.shape
+    kf = np.clip(kappa.ravel(), 0.0, _VMFT_KAPPA_UPPER)
+    nf = nu.ravel()
+    pairs, inverse = np.unique(
+        np.stack([kf, nf], axis=1), axis=0, return_inverse=True
+    )
+    k = pairs[:, 0]
+    nv = pairs[:, 1]
+    grid = _vmft_grid_size(float(k.max()), float(np.abs(nv).max()))
+    phi = np.linspace(-np.pi, np.pi, grid + 1)
+    sin_phi = np.sin(phi)
+    sin2 = sin_phi * sin_phi
+    w = np.ones_like(phi)
+    w[0] = w[-1] = 0.5
+    B = phi[None, :] + nv[:, None] * sin_phi[None, :]
+    cosB = np.cos(B)
+    sinB = np.sin(B)
+    log_ker = k[:, None] * cosB
+    e = np.exp(log_ker - np.max(log_ker, axis=1, keepdims=True)) * w[None, :]
+    Z = np.maximum(np.sum(e, axis=1), np.finfo(float).tiny)
+
+    def m(v):
+        return np.sum(e * v, axis=1) / Z
+
+    sBsp = sinB * sin_phi[None, :]                 # sin B sinφ
+    E_cosB = m(cosB)
+    E_sBsp = m(sBsp)
+    dk = E_cosB                                    # ∂logZ/∂κ
+    dnu = -k * E_sBsp                              # ∂logZ/∂ν = E[h_ν]
+    # ∂²logZ/∂a∂b = E[h_ab] + Cov(h_a, h_b); h_κκ = 0
+    dkk = m(cosB * cosB) - E_cosB * E_cosB         # Var(cos B)
+    cov_k_nu = -k * (m(cosB * sBsp) - E_cosB * E_sBsp)   # Cov(h_κ, h_ν)
+    dknu = -E_sBsp + cov_k_nu                      # E[h_κν] = −E[sin B sinφ]
+    var_nu = k * k * (m(sBsp * sBsp) - E_sBsp * E_sBsp)  # Var(h_ν)
+    dnunu = -k * m(cosB * sin2[None, :]) + var_nu  # E[h_νν] + Var(h_ν)
+    vals = np.stack([dk, dnu, dkk, dknu, dnunu], axis=1)
+    out = vals[inverse].reshape(shape + (5,))
+    return tuple(np.moveaxis(out, -1, 0))
 
 
 def _vmft_ensure_scalar(value, name):

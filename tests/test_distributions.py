@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from itertools import combinations_with_replacement as cwr
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
@@ -1624,6 +1625,108 @@ def test_inverse_batschelet_d2logpdf_kernel_block_matches_fd(params):
     for a, b in kernel_pairs:
         h = 1e-5 if b == "kappa" else 1e-6
         np.testing.assert_allclose(H[(a, b)], fd(a, b, h), atol=1e-4, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        dict(mu=2.0, kappa=2.0, nu=0.3),
+        dict(mu=1.0, kappa=6.0, nu=-0.5),
+        dict(mu=3.5, kappa=1.0, nu=0.7),
+        dict(mu=0.7, kappa=10.0, nu=-0.8),
+    ],
+)
+def test_vmft_dlogpdf_matches_finite_difference(params):
+    """l1 of the flat-topped vM *lss (`vmftlss`): the analytic score vs central
+    differences of `logpdf`. ξ is the pure forward-warp kernel term; κ/ν carry
+    the grid-expectation normalizer terms (`_vmft_logZ_moments_vec`)."""
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 12))
+    ana = vonmises_flattopped.dlogpdf(x, **params)
+
+    def fd(name, h):
+        hi, lo = dict(params), dict(params)
+        hi[name] += h
+        lo[name] -= h
+        return (vonmises_flattopped.logpdf(x, **hi)
+                - vonmises_flattopped.logpdf(x, **lo)) / (2.0 * h)
+
+    for name in params:
+        np.testing.assert_allclose(ana[name], fd(name, 1e-6),
+                                   atol=1e-6, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        dict(mu=2.0, kappa=2.0, nu=0.3),
+        dict(mu=1.0, kappa=6.0, nu=-0.5),
+        dict(mu=3.5, kappa=1.0, nu=0.7),
+    ],
+)
+def test_vmft_d2logpdf_matches_finite_difference(params):
+    """l2 of `vmftlss`: every unique unordered pair vs central differences of
+    `dlogpdf` (symmetrized). Unlike ibslss the normalizer block is analytic
+    here (grid moments + Cov identity), so all six pairs — including κκ/κν/νν —
+    match tightly, not just the kernel ones."""
+    rng = np.random.default_rng(1)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 10))
+    H = vonmises_flattopped.d2logpdf(x, **params)
+    names = list(params)
+
+    def dfd(name, h):
+        hi, lo = dict(params), dict(params)
+        hi[name] += h
+        lo[name] -= h
+        d_hi = vonmises_flattopped.dlogpdf(x, **hi)
+        d_lo = vonmises_flattopped.dlogpdf(x, **lo)
+        return {n: (d_hi[n] - d_lo[n]) / (2.0 * h) for n in names}
+
+    fd = {n: dfd(n, 1e-5) for n in names}
+    for a, b in cwr(names, 2):
+        ref = 0.5 * (fd[a][b] + fd[b][a])
+        np.testing.assert_allclose(H[(a, b)], ref, atol=1e-4, rtol=0.0)
+
+
+def test_vmft_reduces_to_vonmises_at_nu0():
+    """At ν=0 the forward warp B=φ collapses, so `vmftlss` *is* `vmlss`: the
+    μ/κ score and Hessian blocks must equal von Mises to machine precision —
+    a strong, reference-backed check on the grid-expectation normalizer
+    (E[cos B]→A₁(κ), Var[cos B]→A₁′(κ))."""
+    rng = np.random.default_rng(2)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 12))
+    mu, kappa = 1.3, 3.0
+    dv = vonmises_flattopped.dlogpdf(x, mu=mu, kappa=kappa, nu=0.0)
+    vv = vonmises.dlogpdf(x, mu=mu, kappa=kappa)
+    np.testing.assert_allclose(dv["mu"], vv["mu"], atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(dv["kappa"], vv["kappa"], atol=1e-12, rtol=0.0)
+    H = vonmises_flattopped.d2logpdf(x, mu=mu, kappa=kappa, nu=0.0)
+    Hv = vonmises.d2logpdf(x, mu=mu, kappa=kappa)
+    for pair in (("mu", "mu"), ("mu", "kappa"), ("kappa", "kappa")):
+        np.testing.assert_allclose(H[pair], Hv[pair], atol=1e-12, rtol=0.0)
+
+
+def test_vmft_log_c_vec_matches_table():
+    """The vectorized normalizer `_vmft_log_c_vec` (the regression-path value +
+    the base for the grid moments) must reproduce the cached scalar table's
+    `log_normalizer` to machine precision at the same grid, and route κ≈0 to
+    the uniform constant."""
+    from pycircstat2.distributions import (
+        _vmft_build_table,
+        _vmft_grid_size,
+        _vmft_log_c_vec,
+    )
+
+    for k in (0.3, 1.0, 3.0, 8.0, 30.0):
+        for nu in (-0.8, -0.3, 0.0, 0.4, 0.9):
+            table = _vmft_build_table(float(k), float(nu),
+                                      _vmft_grid_size(float(k), float(nu)))
+            vec = float(_vmft_log_c_vec(np.array([k]), np.array([nu]))[0])
+            assert vec == pytest.approx(table["log_normalizer"], abs=1e-12)
+    # κ ≈ 0 → uniform; broadcasting preserves shape
+    got = _vmft_log_c_vec(np.array([1e-12, 2.0]), np.array([0.3, 0.5]))
+    assert got[0] == pytest.approx(-np.log(2.0 * np.pi), abs=1e-12)
+    assert _vmft_log_c_vec(np.zeros((2, 3)), np.zeros((2, 3))).shape == (2, 3)
 
 
 def test_inverse_batschelet_fit_moments():

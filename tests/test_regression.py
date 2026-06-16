@@ -974,7 +974,7 @@ def test_lss_alias_surface():
         "wclss": D.wrapcauchy, "vmlss": D.vonmises,
         "pnlss": D.projectednormal, "jplss": D.jonespewsey,
         "ssjplss": D.jonespewsey_sineskewed, "kjlss": D.katojones,
-        "ibslss": D.inverse_batschelet,
+        "ibslss": D.inverse_batschelet, "vmftlss": D.vonmises_flattopped,
     }
     for name, dist in aliases.items():
         fam = getattr(D, name)
@@ -1098,6 +1098,64 @@ def test_ibslss_recovers_covariate_concentration():
     log_k_true = 0.7 + 0.9 * np.sin(grid)
     corr = np.corrcoef(eta_k, log_k_true)[0, 1]
     assert corr > 0.9
+
+
+def test_vmftlss_intercept_only_matches_marginal_mle():
+    """The end-to-end gate for the flat-topped von Mises *lss family: an
+    intercept-only `vmftlss` fit must reproduce `vonmises_flattopped.fit`
+    (μ, κ, ν), since with no covariates the GAM maximizes the same marginal
+    likelihood. Exercises the scalar/constant-array normalizer path and the
+    EFS (l1+l2) wiring."""
+    from pycircstat2.distributions import vmftlss, vonmises_flattopped
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(3)
+    theta = vonmises_flattopped.rvs(mu=2.0, kappa=3.0, nu=0.4, size=4000,
+                                    random_state=rng)
+    df = pl.DataFrame({"theta": np.mod(theta, 2.0 * np.pi)})
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1"], df, family=vmftlss,
+                 method="REML")
+    assert g.converged
+    resp = np.asarray(g.predict(df.head(1), type="response"))[0]
+    mle = vonmises_flattopped.fit(np.mod(theta, 2.0 * np.pi))
+    # mean direction compared on the circle; κ, ν directly
+    assert abs(np.angle(np.exp(1j * (resp[0] - mle[0])))) < 1e-3
+    assert resp[1] == pytest.approx(mle[1], abs=1e-3)
+    assert resp[2] == pytest.approx(mle[2], abs=1e-3)
+
+
+def test_vmftlss_recovers_covariate_shape():
+    """A *distributional* `vmftlss` smooth — the peakedness ν(x) on the tanh
+    link — drives the per-observation normalizer expectations
+    (`_vmft_logZ_moments_vec`), the path a location smooth never reaches.
+    Simulate ν(x)=0.6 sin x (binned scalar draws, μ,κ fixed), fit a shape
+    smooth, and confirm the recovered ν tracks the truth."""
+    from pycircstat2.distributions import vmftlss, vonmises_flattopped
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(6)
+    n = 1500
+    x = np.sort(rng.uniform(-np.pi, np.pi, n))
+    theta = np.empty(n)
+    edges = np.linspace(x.min(), x.max(), 41)
+    idx = np.clip(np.digitize(x, edges) - 1, 0, 39)
+    for b in range(40):
+        m = idx == b
+        if not m.any():
+            continue
+        nub = float(0.6 * np.sin(x[m].mean()))
+        theta[m] = vonmises_flattopped.rvs(mu=1.0, kappa=3.0, nu=nub,
+                                           size=int(m.sum()), random_state=rng)
+    df = pl.DataFrame({"theta": np.mod(theta, 2.0 * np.pi), "x": x})
+
+    g = circ_gam(["theta ~ 1", "~ 1", "~ s(x)"], df, family=vmftlss,
+                 method="REML")
+    assert g.converged
+    grid = np.linspace(x.min(), x.max(), 150)
+    nu_fit = np.tanh(
+        np.asarray(g.predict(pl.DataFrame({"x": grid}), type="link"))[:, 2])
+    nu_true = 0.6 * np.sin(grid)
+    assert np.corrcoef(nu_fit, nu_true)[0, 1] > 0.9
 
 
 def test_lss_alias_is_clregression_default():
