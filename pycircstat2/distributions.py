@@ -535,10 +535,45 @@ class CircularLL(GeneralFamily):
         return np.asarray(self.dist.logpdf(y, **params), dtype=float)
 
     def _null_params(self, y):
-        """Intercept-only parameter estimates in LP coordinates,
-        declaration-ordered — the distribution's own ``fit`` for every
-        family whose LP coordinates are the book parameters."""
-        return np.atleast_1d(self.dist.fit(y)).astype(float)
+        """Intercept-only start in LP coordinates, declaration-ordered.
+
+        The neutral closed-form start of the circlss ``initialize`` convention:
+        location = mean direction, every concentration parameter = its
+        ``Rbar``-based moment/A1-inverse estimator (the per-distribution
+        ``_concentration_start`` hook), every shape/skewness parameter = 0 (the
+        symmetric / von-Mises reduction member). Optimizer-free and bit-exact
+        across languages and — unlike the marginal joint MLE (``dist.fit``) —
+        it never lets a covariate-distorted pooled moment push a shape
+        parameter to an extreme where ``gam.fit5``'s penalized Hessian goes
+        indefinite. Both starts reach the same optimum (only the EFS path
+        differs); see ``dev/plans/pycircstat2-divergences.md``.
+
+        Feeds both the EFS start (via :meth:`initialize_coef`, which overrides
+        the single location with the projected pilot) and ``postproc``'s null
+        deviance, so this is also the null-deviance reference — matching
+        circlss's ``postproc``. Families that declare no ``_concentration_start``
+        (the 2-component projected normal: pure location, no concentration or
+        shape, no boundary pathology) keep the marginal ``fit``.
+        """
+        roles = self.dist.param_roles
+        conc_start = getattr(self.dist, "_concentration_start", None)
+        locs = [p for p in self.params if roles[p] == "location"]
+        if conc_start is None or len(locs) != 1:
+            return np.atleast_1d(self.dist.fit(y)).astype(float)
+        y = np.asarray(y, dtype=float)
+        sy, cy = float(np.mean(np.sin(y))), float(np.mean(np.cos(y)))
+        mu0 = float(np.arctan2(sy, cy))
+        Rbar = float(np.hypot(sy, cy))
+        out = []
+        for p in self.params:
+            role = roles[p]
+            if role == "location":
+                out.append(mu0)
+            elif role == "concentration":
+                out.append(float(conc_start(Rbar)))
+            else:  # shape / skewness -> reduction member
+                out.append(0.0)
+        return np.asarray(out, dtype=float)
 
     def ll(self, y, X, coef, wt=None, *, lpi, offset=None, deriv: int = 0,
            d1b=None, d2b=None, fh=None, D=None) -> dict:
@@ -797,7 +832,21 @@ class KatoJonesLL(CircularLL):
     def _null_params(self, y):
         mu0, g0, rho0, lam0 = self.dist.fit(y, method="moments")
         u1, u2 = self.dist.disc_chart_inverse(g0, rho0, lam0)
-        return np.array([mu0, g0, float(u1), float(u2)])
+        # Cap the chart-coordinate magnitude. disc_chart_inverse keeps the disc
+        # coordinate finite (|v| <= vmax) but u = v/sqrt(1-|v|^2) can still
+        # reach ~1e4 when the marginal moment fit lands on the Theorem-1
+        # feasibility circle — which it does whenever mu is covariate-driven
+        # (the pooled 2nd moment of angles with a swinging mean inflates to the
+        # boundary). |u| ~ 1e4 makes gam.fit5's penalized Hessian indefinite
+        # ("indefinite penalized likelihood"). |u| <= 8 (the circlss
+        # ``initialize`` bound) is solver-agnostic and harmless when the fit is
+        # sane — the start only needs the right basin, EFS refines from there.
+        # See dev/plans/pycircstat2-divergences.md §2.
+        u = np.array([float(u1), float(u2)])
+        nrm = float(np.hypot(*u))
+        if nrm > 8.0:
+            u *= 8.0 / nrm
+        return np.array([mu0, g0, u[0], u[1]])
 
 
 # Distributions whose regression (LP) coordinates are not their own logpdf
@@ -2107,6 +2156,13 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
     param_roles = {"mu": "location", "rho": "concentration"}
     default_links = {"location": "tanhalf", "concentration": "logit_half"}
 
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar``
+        for the regression null model: ``rho = Rbar`` (the cardioid moment
+        estimator, E[cos(y-mu)] = rho), clamped strictly below the 1/2 bound —
+        the circlss ``initialize`` convention (see CircularLL._null_params)."""
+        return float(np.clip(Rbar, 0.01, 0.49))
+
     # The log-density is ℓ = log P − log 2π with P = 1 + 2ρ cos(θ−μ): the
     # same −log-quadratic pattern as the wrapped Cauchy's −log D, but P is
     # *linear* in ρ (P_ρρ = 0), so the derivative table below is even
@@ -2747,6 +2803,14 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
     # peakedness, so its default link is log. ---
     param_roles = {"mu": "location", "zeta": "concentration"}
     default_links = {"location": "tanhalf", "concentration": "log"}
+
+    def _concentration_start(self, Rbar):
+        """Closed-form peakedness start from the mean resultant ``Rbar`` for
+        the regression null model: ``zeta = (1 - Rbar)/Rbar`` from the relation
+        Rbar = 1/(zeta + 1), Rbar clamped — the circlss ``initialize``
+        convention (see CircularLL._null_params)."""
+        rb = float(np.clip(Rbar, 0.05, 0.95))
+        return (1.0 - rb) / rb
 
     # The log-density is ℓ = (1/ζ − 1) log 2 + 2 log Γ(1+1/ζ) − log π
     # − log Γ(1+2/ζ) + (1/ζ) L with L = log(1 + cos(θ−μ)), evaluated as
@@ -3499,6 +3563,13 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
     # bounded in (0, 1), so its default link is logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
     default_links = {"location": "tanhalf", "concentration": "logit"}
+
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar``
+        for the regression null model: ``rho = Rbar`` (the wrapped-normal
+        moment estimator, E[cos(y-mu)] = rho), clamped — the circlss
+        ``initialize`` convention (see CircularLL._null_params)."""
+        return float(np.clip(Rbar, 0.01, 0.95))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -4289,6 +4360,13 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
     param_roles = {"mu": "location", "rho": "concentration"}
     default_links = {"location": "tanhalf", "concentration": "logit"}
 
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar``
+        for the regression null model: ``rho = Rbar`` (the wrapped-Cauchy
+        moment estimator, E[cos(y-mu)] = rho), clamped — the circlss
+        ``initialize`` convention (see CircularLL._null_params)."""
+        return float(np.clip(Rbar, 0.01, 0.95))
+
     # The log-density splits as ℓ = log(1−ρ²) − log 2π − log D with
     # D = 1 + ρ² − 2ρ cos(θ−μ). The derivative methods below differentiate
     # −log D through the multivariate chain rule from D's (sparse) partial
@@ -4918,6 +4996,13 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
     # only). Book names mu/kappa are preserved; roles attach the default links. ---
     param_roles = {"mu": "location", "kappa": "concentration"}
     default_links = {"location": "tanhalf", "concentration": "log"}
+
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar``
+        for the regression null model: the von Mises A1-inverse ``kappa`` (the
+        marginal MLE for the symmetric member), clamped — the circlss
+        ``initialize`` convention (see CircularLL._null_params)."""
+        return float(np.clip(A1inv(Rbar), 0.01, 500.0))
 
     def __call__(self, *args, **kwds):
         return self.freeze(*args, **kwds)
@@ -7147,6 +7232,13 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         "shape": "identity",
     }
 
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar``
+        for the regression null model: the von Mises A1-inverse ``kappa`` (the
+        ``psi -> 0`` reduction member), clamped — the circlss ``initialize``
+        convention (see CircularLL._null_params)."""
+        return float(np.clip(A1inv(Rbar), 0.01, 500.0))
+
     def dlogpdf(self, x, mu, kappa, psi):
         r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
 
@@ -8575,6 +8667,13 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         "shape": "identity",
         "skewness": "tanh",
     }
+
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar``
+        for the regression null model: the von Mises A1-inverse ``kappa`` (the
+        ``psi -> 0``, ``lambda -> 0`` reduction member), clamped — the circlss
+        ``initialize`` convention (see CircularLL._null_params)."""
+        return float(np.clip(A1inv(Rbar), 0.01, 500.0))
 
     def dlogpdf(self, x, xi, kappa, psi, lmbd):
         r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).

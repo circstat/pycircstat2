@@ -1446,6 +1446,71 @@ def test_circ_gam_k3_k4_families_post_gate():
     assert np.isfinite(float(k.logLik))
 
 
+def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
+    """Closed-form null start in ``CircularLL._null_params`` (the circlss
+    ``initialize`` convention): location = mean direction, concentration =
+    the Rbar-based estimator, every shape/skewness parameter = 0 (the
+    von-Mises/symmetric reduction member).
+
+    The marginal joint MLE start it replaces (``dist.fit``) pushes a shape
+    parameter to an extreme on covariate-driven-location data: the pooled 2nd
+    moment of angles with a swinging mean inflates toward the boundary, so
+    ssjplss gets psi-hat ~ -4 (vs the data-generating 0.5). That start makes
+    ``gam.fit5``'s penalized Hessian indefinite ("indefinite penalized
+    likelihood"); the neutral shape=0 start stays in the well-conditioned
+    basin. kjlss is the same failure mode via the disc-chart blow-up
+    |u| -> ~1e4 (now bounded at 8). See dev/plans/pycircstat2-divergences.md.
+    """
+    from pycircstat2 import distributions as D
+
+    # (a) the start *is* the closed form: shape/skew exactly 0, concentration
+    #     from Rbar via the per-distribution hook, location = mean direction.
+    rng = np.random.default_rng(3)
+    y = np.mod(rng.vonmises(1.0, 2.5, 300), 2 * np.pi)
+    sy, cy = float(np.mean(np.sin(y))), float(np.mean(np.cos(y)))
+    Rbar = float(np.hypot(sy, cy))
+    np.testing.assert_allclose(
+        D.ssjplss._null_params(y),
+        [np.arctan2(sy, cy), D.ssjplss.dist._concentration_start(Rbar), 0.0, 0.0],
+        atol=1e-12,
+    )
+    # von Mises concentration start is exactly Fisher's A1-inverse, clamped
+    assert D.vmlss._null_params(y)[1] == pytest.approx(
+        float(np.clip(A1inv(Rbar), 0.01, 500.0)), abs=1e-12)
+    # the 2-component projected normal has no concentration hook -> MLE fallback
+    assert len(D.pnlss._null_params(y)) == 2
+
+    # (b) ssjplss with a covariate-driven location: the marginal-MLE start
+    #     raised FloatingPointError("indefinite penalized likelihood") here;
+    #     the closed-form start converges to a finite fit.
+    rng = np.random.default_rng(11)
+    n = 150
+    x = np.sort(rng.uniform(0.0, 1.0, n))
+    mu = np.mod(2.0 * np.arctan(2.0 * np.sin(2 * np.pi * x)), 2 * np.pi)
+    th = np.mod(np.array([
+        float(D.jonespewsey_sineskewed.rvs(
+            xi=float(m), kappa=2.0, psi=0.5, lmbd=0.6, size=1, random_state=rng)[0])
+        for m in mu]), 2 * np.pi)
+    df = pl.DataFrame({"theta": th, "x": x})
+    g = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family="ssjplss")
+    assert np.isfinite(float(g.logLik)) and g.converged
+
+    # (c) kjlss with a covariate-driven location: the uncapped disc-chart
+    #     inverse handed gam.fit5 a |u| ~ 1e4 start and crashed; the |u| <= 8
+    #     cap keeps it finite.
+    rng = np.random.default_rng(7)
+    n = 200
+    x = rng.uniform(0.0, 1.0, n)
+    mu = np.mod(2 * np.pi * x, 2 * np.pi)
+    th = np.mod(np.array([
+        float(D.katojones.rvs(mu=float(m), gamma=0.4, rho=0.3, lam=0.5,
+                              size=1, random_state=rng)[0])
+        for m in mu]), 2 * np.pi)
+    df = pl.DataFrame({"theta": th, "x": x})
+    k = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family="kjlss")
+    assert np.isfinite(float(k.logLik))
+
+
 def test_circ_gam_cartlss_location_warm_start_recovers_wiggly_mu():
     """Role-aware location warm start in ``CircularLL.initialize_coef``.
 
