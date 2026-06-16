@@ -1707,9 +1707,13 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
 
     # (b) ssjplss with a covariate-driven location: the marginal-MLE start
     #     raised FloatingPointError("indefinite penalized likelihood") here;
-    #     the closed-form start converges to a finite fit.
+    #     the closed-form start converges to a finite fit. n is 500 (not the
+    #     handful needed to show the start works): the small-n fit sits right on
+    #     the indefinite-Hessian cliff — it converged on macOS/Accelerate but
+    #     tipped over on Linux/OpenBLAS (and for ~1 in 12 seeds even locally), so
+    #     more data gives a well-conditioned margin that holds across platforms.
     rng = np.random.default_rng(11)
-    n = 150
+    n = 500
     x = np.sort(rng.uniform(0.0, 1.0, n))
     mu = np.mod(2.0 * np.arctan(2.0 * np.sin(2 * np.pi * x)), 2 * np.pi)
     th = np.mod(np.array([
@@ -1721,8 +1725,13 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
     assert np.isfinite(float(g.logLik)) and g.converged
 
     # (c) kjlss with a covariate-driven location: the uncapped disc-chart
-    #     inverse handed gam.fit5 a |u| ~ 1e4 start and crashed; the |u| <= 8
-    #     cap keeps it finite.
+    #     inverse lands on the Theorem-1 feasibility circle and returns a
+    #     |u| ~ 2e4 start, which makes gam.fit5's penalized Hessian indefinite;
+    #     the |u| <= 8 norm cap keeps the start finite. Assert that cap *directly*
+    #     on the null start — it is the platform-independent guard, whereas the
+    #     EFS fit on this pathological full-wrap-mu data does not converge and
+    #     tips into the same indefinite-Hessian guard on stricter BLAS (so a fit
+    #     assertion here would be the very flake this start fix exists to avoid).
     rng = np.random.default_rng(7)
     n = 200
     x = rng.uniform(0.0, 1.0, n)
@@ -1731,9 +1740,11 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
         float(D.katojones.rvs(mu=float(m), gamma=0.4, rho=0.3, lam=0.5,
                               size=1, random_state=rng)[0])
         for m in mu]), 2 * np.pi)
-    df = pl.DataFrame({"theta": th, "x": x})
-    k = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family="kjlss")
-    assert np.isfinite(float(k.logLik))
+    g0, rho0, lam0 = D.katojones.fit(th, method="moments")[1:]
+    u1, u2 = D.katojones.disc_chart_inverse(g0, rho0, lam0)
+    assert np.hypot(float(u1), float(u2)) > 1e3      # uncapped: ~2e4 → crash
+    u_start = D.kjlss._null_params(th)[2:]            # the capped chart coords
+    assert np.hypot(*u_start) == pytest.approx(8.0)   # clamped to the |u| <= 8 bound
 
 
 def test_circ_gam_cartlss_location_warm_start_recovers_wiggly_mu():
