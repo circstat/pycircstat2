@@ -1064,6 +1064,42 @@ def test_ibslss_recovers_covariate_location():
     assert corr > 0.95
 
 
+def test_ibslss_recovers_covariate_concentration():
+    """A *distributional* `ibslss` smooth — κ(x) on the log link — is the only
+    fit that drives the per-observation normalizer derivative (the location
+    smooth leaves κ,λ constant, so its normalizer block stays on the cheap
+    scalar path). Simulate κ(x)=exp(0.7+0.9 sin x) (binned scalar draws), fit a
+    concentration smooth, and confirm the recovered log-κ tracks the truth.
+    This is the permanent guard on the vectorized normalizer that the κ(x)/λ(x)
+    perf rewrite enabled (dev/plans/vectorize-distributions-and-ibslss.md)."""
+    from pycircstat2.distributions import ibslss, inverse_batschelet
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(7)
+    n = 700
+    x = np.sort(rng.uniform(-np.pi, np.pi, n))
+    theta = np.empty(n)
+    edges = np.linspace(x.min(), x.max(), 21)
+    idx = np.clip(np.digitize(x, edges) - 1, 0, 19)
+    for b in range(20):
+        m = idx == b
+        if not m.any():
+            continue
+        kb = float(np.exp(0.7 + 0.9 * np.sin(x[m].mean())))
+        theta[m] = inverse_batschelet.rvs(xi=0.4, kappa=kb, nu=0.2, lmbd=-0.2,
+                                          size=int(m.sum()), random_state=rng)
+    df = pl.DataFrame({"theta": np.mod(theta, 2.0 * np.pi), "x": x})
+
+    g = circ_gam(["theta ~ 1", "~ s(x)", "~ 1", "~ 1"], df, family=ibslss,
+                 method="REML")
+    assert g.converged
+    grid = np.linspace(x.min(), x.max(), 150)
+    eta_k = np.asarray(g.predict(pl.DataFrame({"x": grid}), type="link"))[:, 1]
+    log_k_true = 0.7 + 0.9 * np.sin(grid)
+    corr = np.corrcoef(eta_k, log_k_true)[0, 1]
+    assert corr > 0.9
+
+
 def test_lss_alias_is_clregression_default():
     """``family=None``, ``family=vmlss`` and ``family=CircularLL(vonmises)``
     fit the same model; the default *is* the shared vmlss alias, so fitted

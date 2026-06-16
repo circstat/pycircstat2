@@ -1521,6 +1521,47 @@ def test_inverse_batschelet_warps_match_brentq():
     assert isinstance(_slmbdinv(0.7, 0.5), float)
 
 
+def test_inverse_batschelet_log_c_array_matches_scalar():
+    """The vectorized normalizer `_invbat_log_c_array` (the regression-path
+    value + the base for the FD'd log-c gradient/Hessian) must reproduce the
+    tested scalar `_c_invbatschelet` to machine precision on the full value
+    grid, across the interior (κ>0, |λ|<1) the log/tanh links guarantee — and
+    fall back to the scalar at the κ≈0 / |λ|≈1 edges. This pins the per-pair
+    Python loop the vectorization replaced (the κ(x)/λ(x) fit hotspot); see
+    dev/plans/vectorize-distributions-and-ibslss.md."""
+    from pycircstat2.distributions import (
+        _INVBAT_NUMERIC_GRID,
+        _c_invbatschelet,
+        _invbat_log_c_array,
+    )
+
+    kk = np.array([0.05, 0.5, 1.0, 2.0, 4.0, 8.0, 20.0, 100.0, 400.0, 700.0])
+    ll = np.array([-0.95, -0.7, -0.3, -0.05, 0.0, 0.05, 0.3, 0.7, 0.95])
+    K, L = np.meshgrid(kk, ll)
+    k, l = K.ravel(), L.ravel()
+
+    ref = np.array([np.log(_c_invbatschelet(float(a), float(b)))
+                    for a, b in zip(k, l)])
+    vec = _invbat_log_c_array(k, l, grid_size=_INVBAT_NUMERIC_GRID)
+    # interior pairs are computed by the vectorized assembly itself
+    np.testing.assert_allclose(vec, ref, atol=1e-12, rtol=0.0)
+    # broadcasting preserves the input shape
+    assert _invbat_log_c_array(K, L, grid_size=_INVBAT_NUMERIC_GRID).shape == K.shape
+
+    # κ≈0 and |λ|≈1 edges defer to the scalar exact limits
+    edge_k = np.array([1e-12, 1e-12])
+    edge_l = np.array([0.3, -0.3])
+    np.testing.assert_allclose(
+        _invbat_log_c_array(edge_k, edge_l, grid_size=_INVBAT_NUMERIC_GRID),
+        -np.log(2.0 * np.pi), atol=1e-12, rtol=0.0,
+    )
+    for lam in (1.0 - 1e-13, -1.0 + 1e-13):
+        got = float(_invbat_log_c_array(np.array([3.0]), np.array([lam]),
+                                        grid_size=_INVBAT_NUMERIC_GRID)[0])
+        assert np.isfinite(got)
+        assert got == pytest.approx(np.log(_c_invbatschelet(3.0, lam)), abs=1e-12)
+
+
 @pytest.mark.parametrize(
     "params",
     [
