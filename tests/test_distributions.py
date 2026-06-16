@@ -319,6 +319,12 @@ _SCALAR_ONLY_CALLS = [
         ),
     ),
     (
+        "vonmises_flattopped",
+        lambda: vonmises_flattopped.pdf(
+            0.1, mu=0.0, kappa=np.array([1.0, 1.1]), nu=0.2
+        ),
+    ),
+    (
         "inverse_batschelet",
         lambda: inverse_batschelet.pdf(
             0.1, xi=0.0, kappa=np.array([1.0, 1.1]), nu=0.2, lmbd=0.1
@@ -1727,6 +1733,136 @@ def test_vmft_log_c_vec_matches_table():
     got = _vmft_log_c_vec(np.array([1e-12, 2.0]), np.array([0.3, 0.5]))
     assert got[0] == pytest.approx(-np.log(2.0 * np.pi), abs=1e-12)
     assert _vmft_log_c_vec(np.zeros((2, 3)), np.zeros((2, 3))).shape == (2, 3)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        dict(xi=2.0, kappa=2.0, psi=0.5, nu=0.3),
+        dict(xi=1.0, kappa=5.0, psi=-0.6, nu=-0.4),
+        dict(xi=3.5, kappa=1.0, psi=1.2, nu=0.6),
+        dict(xi=0.7, kappa=3.0, psi=0.0, nu=-0.7),
+    ],
+)
+def test_ajp_dlogpdf_matches_finite_difference(params):
+    """l1 of the asymmetric-extended JP *lss (`ajplss`): the analytic score vs
+    central differences of `logpdf`. ξ is the JP kernel chained through the
+    forward warp g=φ+ν cosφ; κ/ψ/ν carry the (κ,ψ,ν) grid-expectation
+    normalizer terms (`_jp_logZ_moments_asym_vec`)."""
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 12))
+    ana = jonespewsey_asym.dlogpdf(x, **params)
+
+    def fd(name, h):
+        hi, lo = dict(params), dict(params)
+        hi[name] += h
+        lo[name] -= h
+        return (jonespewsey_asym.logpdf(x, **hi)
+                - jonespewsey_asym.logpdf(x, **lo)) / (2.0 * h)
+
+    for name in params:
+        np.testing.assert_allclose(ana[name], fd(name, 1e-6),
+                                   atol=1e-6, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        dict(xi=2.0, kappa=2.0, psi=0.5, nu=0.3),
+        dict(xi=3.5, kappa=1.0, psi=1.2, nu=0.6),
+        dict(xi=0.7, kappa=3.0, psi=0.0, nu=-0.7),
+    ],
+)
+def test_ajp_d2logpdf_matches_finite_difference(params):
+    """l2 of `ajplss`: every unique unordered pair vs central differences of
+    `dlogpdf` (symmetrized). Exercises the warp chain rule in the ξ blocks and
+    the analytic (κ,ψ,ν) normalizer Hessian (grid moments + Cov identity)."""
+    rng = np.random.default_rng(1)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 10))
+    H = jonespewsey_asym.d2logpdf(x, **params)
+    names = list(params)
+
+    def dfd(name, h):
+        hi, lo = dict(params), dict(params)
+        hi[name] += h
+        lo[name] -= h
+        d_hi = jonespewsey_asym.dlogpdf(x, **hi)
+        d_lo = jonespewsey_asym.dlogpdf(x, **lo)
+        return {n: (d_hi[n] - d_lo[n]) / (2.0 * h) for n in names}
+
+    fd = {n: dfd(n, 1e-5) for n in names}
+    for a, b in cwr(names, 2):
+        ref = 0.5 * (fd[a][b] + fd[b][a])
+        np.testing.assert_allclose(H[(a, b)], ref, atol=2e-4, rtol=0.0)
+
+
+def test_ajp_dlogpdf_array_params_matches_fd():
+    """The regression array path: with a *distinct* (ξ, κ, ψ, ν) per datum the
+    score must still match central differences. Exercises `_ajp_logpdf_vec`
+    and the multi-triple `_jp_logZ_moments_asym_vec` (the path a constant-param
+    fit never reaches) cheaply — the fast guard standing in for a slow
+    distributional recover-the-truth fit."""
+    rng = np.random.default_rng(4)
+    n = 8
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, n))
+    P = dict(xi=rng.uniform(0.5, 2.5, n), kappa=rng.uniform(1.0, 5.0, n),
+             psi=rng.uniform(-0.8, 1.0, n), nu=rng.uniform(-0.6, 0.6, n))
+    ana = jonespewsey_asym.dlogpdf(x, **P)
+
+    def fd(name, h):
+        hi = {k: (v if k != name else v + h) for k, v in P.items()}
+        lo = {k: (v if k != name else v - h) for k, v in P.items()}
+        return (jonespewsey_asym.logpdf(x, **hi)
+                - jonespewsey_asym.logpdf(x, **lo)) / (2.0 * h)
+
+    for name in P:
+        np.testing.assert_allclose(ana[name], fd(name, 1e-6),
+                                   atol=1e-6, rtol=0.0)
+
+
+def test_ajp_reduces_to_jonespewsey_at_nu0():
+    """At ν=0 the forward warp g=φ collapses, so `ajplss` *is* `jplss`: the
+    ξ/κ/ψ score and Hessian blocks must equal symmetric Jones–Pewsey to
+    machine precision — a strong, reference-backed check on the warp chain
+    rule and the (κ,ψ,ν) normalizer moments (the ν-block's E[h_φ cosφ]→0 by
+    oddness)."""
+    rng = np.random.default_rng(2)
+    x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 12))
+    for mu, kappa, psi in [(1.3, 3.0, 0.5), (0.7, 2.0, -0.7)]:
+        da = jonespewsey_asym.dlogpdf(x, xi=mu, kappa=kappa, psi=psi, nu=0.0)
+        dj = jonespewsey.dlogpdf(x, mu=mu, kappa=kappa, psi=psi)
+        np.testing.assert_allclose(da["xi"], dj["mu"], atol=1e-11, rtol=0.0)
+        np.testing.assert_allclose(da["kappa"], dj["kappa"], atol=1e-11, rtol=0.0)
+        np.testing.assert_allclose(da["psi"], dj["psi"], atol=1e-11, rtol=0.0)
+        Ha = jonespewsey_asym.d2logpdf(x, xi=mu, kappa=kappa, psi=psi, nu=0.0)
+        Hj = jonespewsey.d2logpdf(x, mu=mu, kappa=kappa, psi=psi)
+        for a, b in (("xi", "xi"), ("xi", "kappa"), ("xi", "psi"),
+                     ("kappa", "kappa"), ("kappa", "psi"), ("psi", "psi")):
+            jb = tuple("mu" if t == "xi" else t for t in (a, b))
+            np.testing.assert_allclose(Ha[(a, b)], Hj[jb], atol=1e-11, rtol=0.0)
+
+
+def test_jp_log_c_asym_vec_matches_scalar():
+    """The vectorized normalizer `_jp_log_c_asym_vec` (the regression-path
+    value) must reproduce the lru-cached scalar `_jp_log_c_asym` exactly over
+    a (κ,ψ,ν) grid, and route κ≈0 to the uniform constant."""
+    from pycircstat2.distributions import _jp_log_c_asym, _jp_log_c_asym_vec
+
+    ks, ps, ns = [], [], []
+    for k in (0.5, 2.0, 6.0):
+        for p in (-0.8, 0.0, 1.0):
+            for nu in (-0.6, -0.2, 0.3, 0.7):
+                ks.append(k)
+                ps.append(p)
+                ns.append(nu)
+    ka, pa, na = np.array(ks), np.array(ps), np.array(ns)
+    ref = np.array([_jp_log_c_asym(float(k), float(p), float(n))
+                    for k, p, n in zip(ka, pa, na)])
+    np.testing.assert_allclose(_jp_log_c_asym_vec(ka, pa, na), ref,
+                               atol=1e-12, rtol=0.0)
+    got = _jp_log_c_asym_vec(np.array([1e-12, 2.0]), np.array([0.5, 0.5]),
+                             np.array([0.3, 0.3]))
+    assert got[0] == pytest.approx(-np.log(2.0 * np.pi), abs=1e-12)
 
 
 def test_inverse_batschelet_fit_moments():

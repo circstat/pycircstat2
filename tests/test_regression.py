@@ -975,6 +975,7 @@ def test_lss_alias_surface():
         "pnlss": D.projectednormal, "jplss": D.jonespewsey,
         "ssjplss": D.jonespewsey_sineskewed, "kjlss": D.katojones,
         "ibslss": D.inverse_batschelet, "vmftlss": D.vonmises_flattopped,
+        "ajplss": D.jonespewsey_asym,
     }
     for name, dist in aliases.items():
         fam = getattr(D, name)
@@ -1156,6 +1157,73 @@ def test_vmftlss_recovers_covariate_shape():
         np.asarray(g.predict(pl.DataFrame({"x": grid}), type="link"))[:, 2])
     nu_true = 0.6 * np.sin(grid)
     assert np.corrcoef(nu_fit, nu_true)[0, 1] > 0.9
+
+
+def test_ajplss_intercept_only_is_mle():
+    """End-to-end gate for the asymmetric-extended JP *lss family. The marginal
+    `jonespewsey_asym.fit` is an unreliable reference here — its generic
+    optimizer from a symmetric seed gets stuck on the hard 4-parameter aeJP
+    likelihood — so instead we assert the intercept-only `ajplss` GAM attains a
+    sample log-likelihood that *dominates* both the generating parameters and
+    `.fit` (the defining property of the MLE: no point scores higher). This
+    pins the full (κ,ψ,ν) normalizer-moments block at a genuinely asymmetric
+    (ν≠0) optimum."""
+    from pycircstat2.distributions import ajplss, jonespewsey_asym
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(3)
+    truth = dict(xi=2.0, kappa=3.0, psi=0.6, nu=0.4)
+    theta = np.mod(jonespewsey_asym.rvs(**truth, size=3000, random_state=rng),
+                   2.0 * np.pi)
+    df = pl.DataFrame({"theta": theta})
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=ajplss,
+                 method="REML")
+    assert g.converged
+    fit = np.asarray(g.predict(df.head(1), type="response"))[0]
+
+    def ll(p):
+        return float(np.sum(jonespewsey_asym.logpdf(
+            theta, xi=p[0], kappa=p[1], psi=p[2], nu=p[3])))
+
+    ll_gam = ll(fit)
+    ll_truth = ll([truth["xi"], truth["kappa"], truth["psi"], truth["nu"]])
+    ll_marg = ll(list(jonespewsey_asym.fit(theta)))
+    assert ll_gam >= ll_truth - 1e-3      # MLE dominates the generating params
+    assert ll_gam >= ll_marg - 1e-3       # ... and the marginal fitter
+    # recovers the true asymmetry/shape (not a degenerate symmetric optimum)
+    assert abs(fit[2] - truth["psi"]) < 0.25
+    assert abs(fit[3] - truth["nu"]) < 0.2
+
+
+def test_ajplss_recovers_covariate_location():
+    """An `ajplss` GAM with a covariate-driven location exercises the
+    per-observation array log-density path (`_ajp_logpdf_vec`) — the warped
+    kernel evaluated each datum its own ξ — while κ,ψ,ν stay constant (so the
+    normalizer moments collapse to one triple and the fit stays fast).
+    Simulate ξ(x)=1.3 sin x by rotating a base sample and confirm the recovered
+    direction tracks the truth."""
+    from pycircstat2.distributions import ajplss, jonespewsey_asym
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(8)
+    n = 1500
+    x = np.sort(rng.uniform(-np.pi, np.pi, n))
+    base = jonespewsey_asym.rvs(xi=0.0, kappa=3.0, psi=0.5, nu=0.4, size=n,
+                                random_state=rng)
+    theta = np.mod(base + 1.3 * np.sin(x), 2.0 * np.pi)
+    df = pl.DataFrame({"theta": theta, "x": x})
+    g = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family=ajplss,
+                 method="REML")
+    assert g.converged
+    grid = np.linspace(x.min(), x.max(), 200)
+    mu = np.angle(np.exp(1j * np.asarray(
+        g.predict(pl.DataFrame({"x": grid}), type="response"))[:, 0]))
+    truth = 1.3 * np.sin(grid)
+    a = mu - np.angle(np.mean(np.exp(1j * mu)))
+    b = truth - np.angle(np.mean(np.exp(1j * truth)))
+    corr = (np.sum(np.sin(a) * np.sin(b))
+            / np.sqrt(np.sum(np.sin(a) ** 2) * np.sum(np.sin(b) ** 2)))
+    assert corr > 0.95
 
 
 def test_lss_alias_is_clregression_default():

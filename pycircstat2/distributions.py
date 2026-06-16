@@ -6538,9 +6538,6 @@ class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
         }
 
     def _pdf(self, x, mu, kappa, nu):
-        if any(_vmft_as_scalar(v) is None for v in (mu, kappa, nu)):
-            # per-observation parameters — regression contract path
-            return np.exp(_vmft_logpdf_vec(x, mu, kappa, nu))
         x_arr = np.asarray(x, dtype=float)
         mu_val = _vmft_ensure_scalar(mu, "mu")
         kappa_val = float(np.clip(_vmft_ensure_scalar(kappa, "kappa"), 0.0, _VMFT_KAPPA_UPPER))
@@ -9556,7 +9553,7 @@ ssjplss = CircularLL(jonespewsey_sineskewed, name="ssjplss")
 ##########################
 
 
-class jonespewsey_asym_gen(CircularContinuous):
+class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
     r"""Asymmetric Extended Jones-Pewsey Distribution
 
     This distribution is an extension of the Jones-Pewsey family, incorporating asymmetry
@@ -9588,9 +9585,105 @@ class jonespewsey_asym_gen(CircularContinuous):
 
     Note
     ----
-    Parameters must be scalar; cached normalisation tables are built per parameter set.
-    Implementation from 4.3.12 of Pewsey et al. (2013)
+    ``cdf``/``ppf``/``rvs`` take scalar parameters (cached normalisation tables
+    are built per parameter set); ``pdf``/``logpdf`` and the regression
+    derivatives ``dlogpdf``/``d2logpdf`` additionally accept per-observation
+    parameter arrays (the regression contract — this is the ``ajplss``
+    asymmetric location-concentration-shape-skewness family). Implementation
+    from 4.3.12 of Pewsey et al. (2013).
     """
+
+    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # only). Book names xi/kappa/psi/nu preserved. The asymmetry warps the JP
+    # kernel argument *forward*, g = φ + ν cosφ (φ = θ − ξ), so the score
+    # reuses jplss's `_jp_score_terms` chained through g (g_φ = 1 − ν sinφ,
+    # g_ν = cosφ) — no implicit differentiation. Unlike ssjplss's sine-skew
+    # (which leaves the normalizer untouched), the warp *moves* Z, so c depends
+    # on (κ, ψ, ν) and ℓ_ν carries a grid-expectation term `−E[h_φ cosφ]`
+    # (`_jp_logZ_moments_asym_vec`). ψ is unbounded (identity link, as jplss);
+    # ν ∈ (−1,1) rides the tanh link. Reduction member ν=0 is plain `jplss`. ---
+    param_roles = {
+        "xi": "location",
+        "kappa": "concentration",
+        "psi": "shape",
+        "nu": "skewness",
+    }
+    default_links = {
+        "location": "tanhalf",
+        "concentration": "log",
+        "shape": "identity",
+        "skewness": "tanh",
+    }
+
+    def _concentration_start(self, Rbar):
+        """Closed-form concentration start from the mean resultant ``Rbar`` for
+        the regression null model: the von Mises A1-inverse ``kappa`` (the
+        ψ→0, ν→0 reduction member), clamped — the circlss ``initialize``
+        convention (see CircularLL._null_params)."""
+        return float(np.clip(A1inv(Rbar), 0.01, 500.0))
+
+    def dlogpdf(self, x, xi, kappa, psi, nu):
+        r"""First derivatives of ``logpdf`` w.r.t. the parameters (l1).
+
+        With ``φ = θ − ξ``, the forward warp ``g = φ + ν cosφ`` (``g_φ = 1 −
+        ν sinφ``) and the JP log-kernel/normalizer ``h``/``Z`` evaluated at
+        ``g``:
+
+        $$\ell_\xi = -h_\phi(g)\,g_\phi,\quad
+          \ell_\kappa = h_\kappa(g) - \mathbb{E}[h_\kappa],\quad
+          \ell_\psi = h_\psi(g) - \mathbb{E}[h_\psi],\quad
+          \ell_\nu = h_\phi(g)\cos\phi - \mathbb{E}[h_\phi(g)\cos\phi].$$
+
+        ``Z`` is ξ-invariant (translation), so ``ℓ_ξ`` has no normalizer term;
+        the κ/ψ/ν expectations come from :func:`_jp_logZ_moments_asym_vec`.
+        Vectorizes over per-observation arrays; returns a book-named dict.
+        """
+        x, xi_b, kappa_b, psi_b, nu_b = (
+            np.asarray(v, dtype=float) for v in (x, xi, kappa, psi, nu)
+        )
+        phi = x - xi_b
+        cphi, sphi = np.cos(phi), np.sin(phi)
+        g = phi + nu_b * cphi
+        gphi = 1.0 - nu_b * sphi
+        t = _jp_score_terms(g, kappa_b, psi_b, second=False)
+        dk, dp, dnu, *_ = _jp_logZ_moments_asym_vec(kappa_b, psi_b, nu_b)
+        return {
+            "xi": -t["hphi"] * gphi,
+            "kappa": t["hk"] - dk,
+            "psi": t["hp"] - dp,
+            "nu": t["hphi"] * cphi - dnu,
+        }
+
+    def d2logpdf(self, x, xi, kappa, psi, nu):
+        r"""Second derivatives of ``logpdf`` (l2) — unique unordered pairs.
+        The location (ξ) blocks are pure kernel chained through the warp (``Z``
+        is ξ-free, ``g_ξ = −g_φ``, ``g_{ξξ} = −ν cosφ``); the κ/ψ/ν blocks
+        subtract the normalizer second derivatives ``∂²log Z = E[h_{ab}] +
+        Cov(h_a, h_b)`` from :func:`_jp_logZ_moments_asym_vec`."""
+        x, xi_b, kappa_b, psi_b, nu_b = (
+            np.asarray(v, dtype=float) for v in (x, xi, kappa, psi, nu)
+        )
+        phi = x - xi_b
+        cphi, sphi = np.cos(phi), np.sin(phi)
+        g = phi + nu_b * cphi
+        gphi = 1.0 - nu_b * sphi          # ∂g/∂φ ; ∂g/∂ξ = −gphi
+        t = _jp_score_terms(g, kappa_b, psi_b, second=True)
+        hphi, hphiphi = t["hphi"], t["hphiphi"]
+        hphik, hphip = t["hphik"], t["hphip"]
+        (_, _, _, dkk, dkp, dpp, dknu, dpnu,
+         dnunu) = _jp_logZ_moments_asym_vec(kappa_b, psi_b, nu_b)
+        return {
+            ("xi", "xi"): hphiphi * gphi * gphi - nu_b * cphi * hphi,
+            ("xi", "kappa"): -hphik * gphi,
+            ("xi", "psi"): -hphip * gphi,
+            ("xi", "nu"): -hphiphi * cphi * gphi + hphi * sphi,
+            ("kappa", "kappa"): t["hkk"] - dkk,
+            ("kappa", "psi"): t["hkp"] - dkp,
+            ("kappa", "nu"): hphik * cphi - dknu,
+            ("psi", "psi"): t["hpp"] - dpp,
+            ("psi", "nu"): hphip * cphi - dpnu,
+            ("nu", "nu"): hphiphi * cphi * cphi - dnunu,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -9690,6 +9783,9 @@ class jonespewsey_asym_gen(CircularContinuous):
         # the log-space assembly ``_pdf`` exponentiates (stable kernel h at
         # the warped angle g(φ) plus the u-substituted log-normalizer),
         # returned before the exp so deep-spike tails stay finite (P2)
+        if any(_jp_as_scalar(v) is None for v in (xi, kappa, psi, nu)):
+            # per-observation parameters — regression contract path
+            return _ajp_logpdf_vec(x, xi, kappa, psi, nu)
         x = np.asarray(x, dtype=float)
         xi_scalar = _jp_ensure_scalar(xi, "xi")
         kappa_scalar = _jp_ensure_scalar(kappa, "kappa")
@@ -10188,6 +10284,7 @@ class jonespewsey_asym_gen(CircularContinuous):
 
 
 jonespewsey_asym = jonespewsey_asym_gen(name="jonespewsey_asym")
+ajplss = CircularLL(jonespewsey_asym, name="ajplss")
 
 
 def _jp_warp_inv(u, nu):
@@ -10270,6 +10367,105 @@ def _jp_log_c_asym(kappa: float, psi: float, nu: float) -> float:
     h = _jp_log_kernel(nodes, kappa, psi)
     integral = float(np.sum(wts * np.exp(h - kappa) * weight))
     return float(-(kappa + np.log(max(integral, np.finfo(float).tiny))))
+
+
+def _jp_log_c_asym_vec(kappa, psi, nu):
+    """Per-observation ``_jp_log_c_asym(κ_i, ψ_i, ν_i)`` — element-wise, once
+    per unique (κ, ψ, ν) triple (the scalar is lru-cached, so repeated
+    regression iterations are cheap). κ ≈ 0 → uniform."""
+    kappa, psi, nu = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (kappa, psi, nu))
+    )
+    out = np.full(kappa.shape, -np.log(2.0 * np.pi))
+    live = kappa >= _JP_KAPPA_TOL
+    if not np.any(live):
+        return out
+    pairs, inverse = np.unique(
+        np.stack([kappa[live], psi[live], nu[live]], axis=1), axis=0,
+        return_inverse=True,
+    )
+    vals = np.array([_jp_log_c_asym(float(k), float(p), float(n))
+                     for k, p, n in pairs])
+    out[live] = vals[inverse]
+    return out
+
+
+def _ajp_logpdf_vec(x, xi, kappa, psi, nu):
+    """Per-observation asymmetric-extended JP log-density (regression
+    contract): the stable log-kernel at the warped angle ``g = φ + ν cosφ``
+    plus the vectorized u-substituted log-normalizer, each datum its own
+    (ξ, κ, ψ, ν). κ ≈ 0 → uniform."""
+    x, xi, kappa, psi, nu = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (x, xi, kappa, psi, nu))
+    )
+    phi = x - xi
+    g = phi + nu * np.cos(phi)
+    h = _jp_score_terms(g, kappa, psi, second=False)["h"]
+    h = np.where(np.abs(kappa) < _JP_KAPPA_TOL, 0.0, h)
+    return h + _jp_log_c_asym_vec(kappa, psi, nu)
+
+
+@lru_cache(maxsize=4096)
+def _jp_logZ_moments_asym(kappa: float, psi: float, nu: float):
+    """First and second (κ, ψ, ν)-derivatives of ``log Z(κ, ψ, ν)`` for the
+    asymmetric-extended JP law, as kernel-weighted moments under the density:
+
+        ∂log Z/∂a = E[h_a],
+        ∂²log Z/∂a∂b = E[h_{ab} + h_a h_b] − E[h_a]E[h_b].
+
+    The forward warp ``g = φ + ν cosφ`` (``g_ν = cosφ``) enters by the chain
+    rule, so the parameter derivatives of the log-kernel are ``h_κ = h_k``,
+    ``h_ψ = h_p``, ``h_ν = h_φ cosφ`` and the cross seconds ``h_κν = h_{φκ}
+    cosφ``, ``h_ψν = h_{φψ} cosφ``, ``h_νν = h_{φφ} cos²φ`` — with ``h_·`` the
+    ``_jp_score_terms`` derivatives at the warped argument ``g``. Same
+    ``u = g(φ)`` substitution and adaptive GL ladder as :func:`_jp_log_c_asym`
+    (so the antipodal near-kink is resolved); one node sweep serves all nine
+    integrands, cached per (κ, ψ, ν). Returns
+    ``(dk, dp, dnu, dkk, dkp, dpp, dknu, dpnu, dnunu)``."""
+    if kappa < _JP_KAPPA_TOL:
+        return (0.0,) * 9
+    nodes, wts = _gl_panels_from_edges(_jp_ladder_edges_asym(kappa, psi, nu))
+    phi = _jp_warp_inv(nodes, nu)
+    cphi = np.cos(phi)
+    weight = 1.0 / (1.0 - nu * np.sin(phi))
+    t = _jp_score_terms(nodes, kappa, psi, second=True)
+    e = wts * np.exp(t["h"] - kappa) * weight
+    Z = max(float(np.sum(e)), np.finfo(float).tiny)
+
+    def m(v):
+        return float(np.sum(e * v)) / Z
+
+    hk, hp, hphi = t["hk"], t["hp"], t["hphi"]
+    hnu = hphi * cphi                              # h_ν
+    dk, dp, dnu = m(hk), m(hp), m(hnu)
+    h_knu = t["hphik"] * cphi                      # h_κν
+    h_pnu = t["hphip"] * cphi                      # h_ψν
+    h_nunu = t["hphiphi"] * cphi * cphi            # h_νν
+    dkk = m(t["hkk"] + hk * hk) - dk * dk
+    dkp = m(t["hkp"] + hk * hp) - dk * dp
+    dpp = m(t["hpp"] + hp * hp) - dp * dp
+    dknu = m(h_knu + hk * hnu) - dk * dnu
+    dpnu = m(h_pnu + hp * hnu) - dp * dnu
+    dnunu = m(h_nunu + hnu * hnu) - dnu * dnu
+    return dk, dp, dnu, dkk, dkp, dpp, dknu, dpnu, dnunu
+
+
+def _jp_logZ_moments_asym_vec(kappa, psi, nu):
+    """Element-wise :func:`_jp_logZ_moments_asym` over per-observation
+    (κ_i, ψ_i, ν_i), once per unique triple. Returns nine arrays broadcast to
+    the common parameter shape:
+    ``(dk, dp, dnu, dkk, dkp, dpp, dknu, dpnu, dnunu)``."""
+    kappa, psi, nu = np.broadcast_arrays(
+        *(np.asarray(v, dtype=float) for v in (kappa, psi, nu))
+    )
+    pairs, inverse = np.unique(
+        np.stack([kappa.ravel(), psi.ravel(), nu.ravel()], axis=1), axis=0,
+        return_inverse=True,
+    )
+    vals = np.array([_jp_logZ_moments_asym(float(k), float(p), float(n))
+                     for k, p, n in pairs])
+    out = vals[inverse].reshape(kappa.shape + (9,))
+    return tuple(np.moveaxis(out, -1, 0))
 
 
 @lru_cache(maxsize=1024)
@@ -11541,15 +11737,15 @@ def _invbat_logc_grad_vec(kappa, lmbd):
     overflow-safe assembly duplicates ``_c_invbatschelet_numeric``; FD reuses
     that exact normalizer, so it stays consistent with the logpdf the
     derivative tests difference."""
-    k, l, inverse, shape = _invbat_unique_pairs(kappa, lmbd)
+    k, lm, inverse, shape = _invbat_unique_pairs(kappa, lmbd)
     hk = 1e-6 * np.maximum(1.0, np.abs(k))
-    hl = np.minimum(1e-6, 0.25 * (1.0 - np.abs(l)))
+    hl = np.minimum(1e-6, 0.25 * (1.0 - np.abs(lm)))
 
     def lc(kk, ll):
         return _invbat_log_c_array(kk, ll, grid_size=_INVBAT_DERIV_GRID)
 
-    gk = (lc(k + hk, l) - lc(k - hk, l)) / (2.0 * hk)
-    gl = (lc(k, l + hl) - lc(k, l - hl)) / (2.0 * hl)
+    gk = (lc(k + hk, lm) - lc(k - hk, lm)) / (2.0 * hk)
+    gl = (lc(k, lm + hl) - lc(k, lm - hl)) / (2.0 * hl)
     grad = np.stack([gk, gl], axis=1)
     out = grad[inverse].reshape(shape + (2,))
     return out[..., 0], out[..., 1]
@@ -11561,20 +11757,20 @@ def _invbat_logc_hess_vec(kappa, lmbd):
     (κ,λ) pairs on ``_INVBAT_DERIV_GRID`` — the normalizer block of `d2logpdf`.
     Direct second differences (one FD level on the smooth log c) avoid the
     FD-of-FD noise of differencing the already-FD'd gradient."""
-    k, l, inverse, shape = _invbat_unique_pairs(kappa, lmbd)
+    k, lm, inverse, shape = _invbat_unique_pairs(kappa, lmbd)
     # second differences want a larger step than the first-difference default
     hk = 1e-4 * np.maximum(1.0, np.abs(k))
-    hl = np.minimum(1e-4, 0.25 * (1.0 - np.abs(l)))
+    hl = np.minimum(1e-4, 0.25 * (1.0 - np.abs(lm)))
 
     def lc(kk, ll):
         return _invbat_log_c_array(kk, ll, grid_size=_INVBAT_DERIV_GRID)
 
-    f0 = lc(k, l)
-    hkk = (lc(k + hk, l) - 2.0 * f0 + lc(k - hk, l)) / (hk * hk)
-    hll = (lc(k, l + hl) - 2.0 * f0 + lc(k, l - hl)) / (hl * hl)
+    f0 = lc(k, lm)
+    hkk = (lc(k + hk, lm) - 2.0 * f0 + lc(k - hk, lm)) / (hk * hk)
+    hll = (lc(k, lm + hl) - 2.0 * f0 + lc(k, lm - hl)) / (hl * hl)
     hkl = (
-        lc(k + hk, l + hl) - lc(k + hk, l - hl)
-        - lc(k - hk, l + hl) + lc(k - hk, l - hl)
+        lc(k + hk, lm + hl) - lc(k + hk, lm - hl)
+        - lc(k - hk, lm + hl) + lc(k - hk, lm - hl)
     ) / (4.0 * hk * hl)
     hess = np.stack([hkk, hkl, hll], axis=1)
     out = hess[inverse].reshape(shape + (3,))
