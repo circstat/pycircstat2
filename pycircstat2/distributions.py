@@ -62,8 +62,7 @@ __all__ = [
     "wrapstable",
     "katojones",
     # regression bridge — general-family classes + the *lss instance
-    # aliases (dev/plans/distribution-validation.md §3.5; names mirror the
-    # circlss R package)
+    # aliases (names mirror the circlss R package)
     "CircularLL",
     "KatoJonesLL",
     "cardlss",
@@ -161,8 +160,7 @@ class _RegressionReady:
     The mixin derives the inverse views for free — nothing is renamed; values
     always flow in the distribution's own book-named dicts. Roles exist only so
     a generic engine can find the mean-direction vs concentration vs shape
-    parameters and attach each one's default link. See the Phase 1 contract in
-    ``dev/plans/circular_gam_integration.md``.
+    parameters and attach each one's default link.
 
     Derivatives (optional, tiered) keep book names too:
 
@@ -193,9 +191,9 @@ class _RegressionReady:
 # --- links (the contract's other half: resolving ``default_links`` names) ----
 # A link maps a parameter onto the unconstrained linear-predictor scale,
 # η = g(param). Every link resolved here is a ``hea.family.Link``, so one
-# authored object serves both regression consumers (plan §3.1): the parametric
+# authored object serves both regression consumers: the parametric
 # ``CLRegression`` reads ``linkinv`` (η → parameter) and ``mu_eta`` (∂param/∂η)
-# for Fisher scoring; the hea general-family bridge (Phase 2) hands the same
+# for Fisher scoring; the hea general-family bridge hands the same
 # object to ``hea.gam``, whose ``gamlss_etamu`` chain rule additionally
 # consumes ``link`` (g) and ``d2link``/``d3link``/``d4link`` (g″, g‴, g⁗ —
 # derivatives w.r.t. the *parameter*, mgcv convention). hea's catalog already
@@ -298,7 +296,7 @@ class LogitHalfLink(Link):
       \rho = \tfrac12\,\operatorname{expit}(\eta) \in (0, \tfrac12).$$
 
     The general scaled logit on (0, c): a subclass overriding ``hi`` serves
-    any upper bound c (the link inventory of the regression plan).
+    any upper bound c.
     """
 
     name = "logit_half"
@@ -368,7 +366,7 @@ def _inverse_cdf_knots(phi, cumulative, min_step=1e-14):
     tabulated cdf grows by denormal amounts per node (the pdf is floored at
     ``np.finfo(float).tiny``), so dφ/dq overflows and Pchip's derivative
     screen rejects the work arrays ("``dydx`` must contain only finite
-    values" — the κ ≳ 200 vmft crash of the methods-parity P1 review, and
+    values" — the κ ≳ 200 vmft crash, and
     its inverse-Batschelet twin at κ ≳ 400). Quantile accuracy is
     unaffected for any q the thinned knots can distinguish; the forced
     q = 1 endpoint keeps the domain closed (its gap is ≥ ~1e-16, because
@@ -404,15 +402,14 @@ def _as_scalar_param(value, dist_name):
 
 
 # --- the hea bridge: a circular distribution as an mgcv-style general family --
-# (moved here from regression.py per dev/plans/distribution-validation.md §3.5:
-# the Phase-1 contract — param_roles/default_links/dlogpdf..d4logpdf — lives in
-# this module, and CircularLL is that contract's assembled reader. regression.py
-# re-exports both classes, so either import site works.)
+# param_roles/default_links/dlogpdf..d4logpdf — the family contract — live in
+# this module, and CircularLL is its assembled reader; regression.py re-exports
+# both classes, so either import site works.
 
 
 class CircularLL(GeneralFamily):
     """A regression-ready circular distribution as a hea/mgcv **general
-    family** — the Phase-2 bridge of ``dev/plans/circular_gam_integration.md``.
+    family**.
 
     Mirrors ``hea.family.gaulss``: one linear predictor per modelable
     distribution parameter, in the order the distribution declares them
@@ -452,7 +449,7 @@ class CircularLL(GeneralFamily):
         if not roles:
             raise TypeError(
                 f"{getattr(dist, 'name', dist)!r} is not regression-ready: it "
-                "declares no `param_roles` overlay (see the Phase 1 contract)."
+                "declares no `param_roles` overlay."
             )
         self.dist = dist
         self.params = list(roles)  # book-named, declaration order = LP order
@@ -460,7 +457,7 @@ class CircularLL(GeneralFamily):
         # The base class assumes the LP coordinates *are* the distribution's
         # own logpdf parameters (its ll/fit seams pass them straight
         # through). A family that regresses in transformed coordinates —
-        # katojones declares the §3.4 chart pair u1/u2, which logpdf does
+        # katojones declares the chart pair u1/u2, which logpdf does
         # not accept — needs its dedicated subclass; fail fast here instead
         # of deep in scipy's argument parsing on the first ll() call.
         if type(self) is CircularLL:
@@ -555,7 +552,7 @@ class CircularLL(GeneralFamily):
         it never lets a covariate-distorted pooled moment push a shape
         parameter to an extreme where ``gam.fit5``'s penalized Hessian goes
         indefinite. Both starts reach the same optimum (only the EFS path
-        differs); see ``dev/plans/pycircstat2-divergences.md``.
+        differs).
 
         Feeds both the EFS start (via :meth:`initialize_coef`, which overrides
         the single location with the projected pilot) and ``postproc``'s null
@@ -698,7 +695,7 @@ class CircularLL(GeneralFamily):
         loc_idx = [self.params.index(nm) for nm in loc]
         # projected pilot only for a SINGLE circular location (tanhalf); the
         # 2-component projected normal keeps the constant start (no antipode
-        # zero), so it is left out and behaves exactly as before
+        # zero), so it is left out
         single_loc = loc_idx[0] if len(loc_idx) == 1 else None
 
         start = np.zeros(p)
@@ -792,8 +789,7 @@ class CircularLL(GeneralFamily):
 
 class KatoJonesLL(CircularLL):
     """Kato–Jones (2015) as a general family in **disc-chart coordinates**
-    (μ, γ, u₁, u₂) — the §3.4 design of ``dev/plans/
-    distribution-validation.md``.
+    (μ, γ, u₁, u₂).
 
     The four LPs are μ (tanhalf), γ (logit) and the unconstrained chart pair
     u₁, u₂ (identity); the chart ``(a, b) = (γ, 0) + (1−γ)·u/√(1+‖u‖²)``
@@ -850,7 +846,6 @@ class KatoJonesLL(CircularLL):
         # ("indefinite penalized likelihood"). |u| <= 8 (the circlss
         # ``initialize`` bound) is solver-agnostic and harmless when the fit is
         # sane — the start only needs the right basin, EFS refines from there.
-        # See dev/plans/pycircstat2-divergences.md §2.
         u = np.array([float(u1), float(u2)])
         nrm = float(np.hypot(*u))
         if nrm > 8.0:
@@ -2061,7 +2056,6 @@ class triangular_gen(CircularContinuous):
             w = np.asarray(weights, dtype=float)
             if np.any(w < 0):
                 raise ValueError("weights must be nonnegative")
-            # broadcast
             w = np.broadcast_to(w, x.shape).astype(float, copy=False)
 
         # Effective sample size for diagnostics
@@ -2159,7 +2153,7 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
     Implementation based on Section 4.3.4 of Pewsey et al. (2013).
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/rho are preserved; ρ is the mean resultant length,
     # bounded in (0, ½), so its default link is the scaled logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
@@ -2176,7 +2170,7 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
     # same −log-quadratic pattern as the wrapped Cauchy's −log D, but P is
     # *linear* in ρ (P_ρρ = 0), so the derivative table below is even
     # sparser. All pure numpy, broadcasting over per-observation parameter
-    # arrays. Likelihood hazard documented in the regression plan: at
+    # arrays. Likelihood hazard: at
     # ρ → ½ the density touches 0 at the antimode (θ−μ = π), where ℓ and
     # every derivative diverge — the logit_half link keeps ρ interior, but
     # data at the antimode still produce −∞/large scores.
@@ -2807,7 +2801,7 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
     Implementation based on Section 4.3.5 of Pewsey et al. (2013)
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/zeta are preserved; ζ > 0 is an inverse
     # peakedness, so its default link is log. ---
     param_roles = {"mu": "location", "zeta": "concentration"}
@@ -2824,7 +2818,7 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
     # The log-density is ℓ = (1/ζ − 1) log 2 + 2 log Γ(1+1/ζ) − log π
     # − log Γ(1+2/ζ) + (1/ζ) L with L = log(1 + cos(θ−μ)), evaluated as
     # log 2 + 2 log|cos((θ−μ)/2)| to avoid the 1+cos cancellation near the
-    # antipode. Likelihood hazard documented in the regression plan: the
+    # antipode. Likelihood hazard: the
     # density is exactly 0 at θ−μ = π for every ζ, where L, tan((θ−μ)/2)
     # and all derivatives diverge. In practice this makes the tanhalf
     # likelihood's generic multimodality bite hard — from the intercept-only
@@ -3567,7 +3561,7 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
     Implementation based on Section 4.3.7 of Pewsey et al. (2013)
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/rho are preserved; ρ is the mean resultant length,
     # bounded in (0, 1), so its default link is logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
@@ -4329,7 +4323,7 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
 
 wrapnorm = wrapnorm_gen(name="wrapnorm")
 # `wnlss` is the candidate circlss name — wrapped normal is regression-ready
-# here but still missing from the R plan's tier table (§3.5 item 7 flag).
+# here.
 wnlss = CircularLL(wrapnorm, name="wnlss")
 
 
@@ -4363,7 +4357,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
     Implementation based on Section 4.3.6 of Pewsey et al. (2013).
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/rho are preserved; ρ is the mean resultant length,
     # bounded in (0, 1), so its default link is logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
@@ -4548,7 +4542,7 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
 
     def _logpdf(self, x, mu, rho):
         # exact log form on the same cancellation-free denominator as
-        # ``_pdf`` (P2): the previous log(clip(pdf, 1e-16)) floored the
+        # ``_pdf``: the previous log(clip(pdf, 1e-16)) floored the
         # honest tail once ρ came within a few ulp of 1
         denom = (1 - rho) ** 2 + 4 * rho * np.sin(0.5 * (x - mu)) ** 2
         with np.errstate(divide="ignore"):
@@ -5001,7 +4995,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         The frozen distribution instance with fixed parameters.
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/kappa are preserved; roles attach the default links. ---
     param_roles = {"mu": "location", "kappa": "concentration"}
     default_links = {"location": "tanhalf", "concentration": "log"}
@@ -5236,7 +5230,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
 
         # Exact feature-scale GL ladder on the centered kernel — the von
         # Mises is the ψ → 0 member of the Jones–Pewsey clan
-        # (h = κ cos φ exactly in `_jp_score_terms`), so the P1-C cdf
+        # (h = κ cos φ exactly in `_jp_score_terms`), so the cdf
         # machinery applies verbatim: the integrand e^{κ(cos φ − 1)} ≤ 1
         # never overflows at any κ, and the 1/√κ peak panels resolve every
         # representable concentration. This retires both defects of the
@@ -5422,19 +5416,15 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         samples : ndarray
             Random variates.
         """
-        # Check if instance-level parameters are set
         mu = getattr(self, "mu", None)
         kappa = getattr(self, "kappa", None)
 
-        # Override instance parameters if provided in args/kwargs
         mu = kwargs.pop("mu", mu)
         kappa = kwargs.pop("kappa", kappa)
 
-        # Ensure required parameters are provided
         if mu is None or kappa is None:
             raise ValueError("Both 'mu' and 'kappa' must be provided.")
 
-        # Call the private _rvs method
         return self._rvs(mu, kappa, size=size, random_state=random_state)
 
     def mean(self, *args, **kwargs):
@@ -5508,9 +5498,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
             The entropy of the distribution.
         """
         # H = log(2πI₀(κ)) − κ·A₁(κ), in scaled form log(2π·i0e(κ)) +
-        # κ(1 − A₁(κ)). (The previous expression −log I₀ + κA₁ had the I₀
-        # sign flipped and dropped the log 2π term — methods-parity review
-        # P1 audit, 2026-06-11; e.g. κ = 2 gave 0.572 instead of 1.266.)
+        # κ(1 − A₁(κ)).
         (_, kappa) = self._parse_args(*args, **kwargs)[0]
         return np.log(2 * np.pi * i0e(kappa)) + kappa * (1 - A1(kappa))
 
@@ -5520,13 +5508,11 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
         """
         mu, kappa = theta
 
-        if not self._argcheck(mu, kappa):  # Validate parameter range
+        if not self._argcheck(mu, kappa):
             return np.inf
 
-        # Compute log-likelihood robustly
         log_likelihood = self._logpdf(data, mu, kappa)
 
-        # Negative log-likelihood
         return -np.sum(log_likelihood)
 
     def fit(
@@ -5785,7 +5771,7 @@ class projectednormal_gen(_RegressionReady, CircularContinuous):
     multivariate linear models for directional data. *JASA* 93(443).
     """
 
-    # --- regression overlay (Phase 1 contract): one role, two parameters —
+    # --- regression overlay: one role, two parameters —
     # the documented one-to-many case. Both LPs use the identity link. ---
     param_roles = {"mu1": "location", "mu2": "location"}
     default_links = {"location": "identity"}
@@ -6441,7 +6427,7 @@ class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
     4.3.10 of Pewsey et al. (2013).
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/kappa/nu preserved. The peakedness factor warps
     # *forward* (B = φ + ν sinφ), so unlike inverse_batschelet the score needs
     # no implicit differentiation; B is odd in φ → the density stays symmetric,
@@ -6555,7 +6541,7 @@ class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
         log_kernel = kappa_val * np.cos(phi + nu_val * np.sin(phi))
         log_pdf = log_kernel + table["log_normalizer"]
         pdf_vals = np.exp(log_pdf)
-        self._c = table["normalizer"]  # retain attribute for existing code paths
+        self._c = table["normalizer"]
         return pdf_vals
 
     def pdf(self, x, mu, kappa, nu, *args, **kwargs):
@@ -6869,7 +6855,7 @@ class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
         # whose von Mises envelope κ_e = κ(1+ν)² under-covers a flat-topped
         # target's shoulders — the acceptance multiplier exploded with κ
         # for ν ≠ 0 (12 s for 5 draws at κ = 5, ν = 0.5; an effective hang
-        # from κ ≈ 100; methods-parity P1 follow-up).
+        # from κ ≈ 100).
         table = self._get_vmft_table(kappa_val, nu_val)
         inv_interp = table["inv_cdf_interp"]
         u = rng.random(size=total)
@@ -7431,7 +7417,7 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
     Implementation based on Section 4.3.9 of Pewsey et al. (2013)
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names mu/kappa/psi are preserved; ψ ∈ ℝ indexes the family
     # shape (−1 wrapped Cauchy, 0 von Mises, +1 cardioid), so it rides an
     # identity link. l1/l2 split as kernel terms (`_jp_score_terms`, exact
@@ -7522,7 +7508,7 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
             # Per-observation (κ_i, ψ_i) — the regression contract path
             # (concentration smoothing on a shape family). Assembled in log
             # space: the raw kernel peaks at e^κ and overflows for κ ≳ 709
-            # (methods-parity P1). Uniform/von-Mises reductions applied
+            # Uniform/von-Mises reductions applied
             # element-wise to match the scalar branch exactly.
             mu_b, kappa_b, psi_b = np.broadcast_arrays(
                 *(np.asarray(a, dtype=float) for a in (mu, kappa, psi))
@@ -7589,7 +7575,7 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
 
     def _logpdf(self, x, mu, kappa, psi):
         # the log-space assembly ``_pdf`` exponentiates, returned before the
-        # exp (P2): h from ``_jp_score_terms`` is stable at any κ and the
+        # exp: h from ``_jp_score_terms`` is stable at any κ and the
         # log-normalizer already exists, so the antipodal tail stays finite
         # (e.g. ≈ −1200 at κ=600, ψ=0.1) where the density underflows — and
         # finite at the deep ψ < 0 mode where the density overflows to inf.
@@ -7711,7 +7697,7 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
         phi_end = (flat - mu_val) % two_pi
 
         if _jp_cdf_use_ladder(kappa_val, psi_val):
-            # deep ψ < 0: exact ladder cumulative (P1-C) — the series
+            # deep ψ < 0: exact ladder cumulative — the series
             # grid cannot resolve the spike there
             H_start = float(
                 _jp_cum01(
@@ -7806,7 +7792,7 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
                     vm = vonmises(kappa=kappa_val, mu=mu_val)
                     theta_vals[interior] = vm.ppf(q_clipped)
                 elif _jp_cdf_use_ladder(kappa_val, psi_val):
-                    # deep ψ < 0: table-initialized exact solve (P1-C) —
+                    # deep ψ < 0: table-initialized exact solve —
                     # the generic Newton scaffold cannot land inside a
                     # sub-resolution spike from a uniform start
                     theta_vals[interior] = _jp_ppf_ladder(
@@ -8395,7 +8381,7 @@ def _jp_sample_table(kappa, psi, total, rng):
     return _jp_table_invert(rng.random(total), kappa, psi)
 
 
-# --- deep-spike cdf/ppf branch (methods-parity P1-C) --------------------------
+# --- deep-spike cdf/ppf branch ------------------------------------------------
 # The series cdf path (4096-point coefficient grid, ≤ 256 harmonics) cannot
 # represent ψ < 0 spikes much narrower than the harmonic cap resolves:
 # probed 2026-06-11, its cdf error is ≤ 4e-11 at κψ = −3 for ψ ∈
@@ -8604,7 +8590,7 @@ def _jp_log_c(kappa: float, psi: float) -> float:
     **entirely in log space** with the kernel's peak value e^κ factored
     out: the raw kernel
     maximum is exp(κ) for every ψ, so any linear-space evaluation turns
-    the whole JP clan's pdf into nan for κ ≳ 709 (methods-parity P1).
+    the whole JP clan's pdf into nan for κ ≳ 709.
     The general branch integrates e^{h−κ} ≤ 1 by composite Gauss–Legendre
     on ``_jp_gl_panels`` — the same engine as the regression moment
     machinery (``_jp_logZ_moments``), which retired the per-call adaptive
@@ -8822,7 +8808,7 @@ def _jp_logZ_moments(kappa: float, psi: float):
     2e^{−|A|}, which the kernel *and* the moment integrands (T swings
     1 → −1 there) inherit; a coarse panel straddling it is only ~1e-7
     accurate). One node sweep serves all five integrands — the "one
-    numeric expectation per unique parameter tuple" cost of the plan,
+    numeric expectation per unique parameter tuple" cost,
     cached per (κ, ψ) so ``dlogpdf``/``d2logpdf`` within one ``ll()``
     evaluation share the work.
 
@@ -8919,12 +8905,12 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
     Implementation based on Section 4.3.11 of Pewsey et al. (2013)
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names xi/kappa/psi/lmbd are preserved. The sine-skew factor
     # 1 + λ sin(θ−ξ) leaves the JP normalizer c(κ, ψ) untouched, so a λ
     # linear predictor costs nothing beyond its trivial derivative terms —
-    # this is the recommended asymmetric response family of the regression
-    # plan. λ ∈ (−1, 1) rides the tanh link. Caveat (book §4.3.11): once
+    # this is the recommended asymmetric response family. λ ∈ (−1, 1) rides the
+    # tanh link. Caveat (book §4.3.11): once
     # λ ≠ 0, ξ is the *mode anchor*, not the mean direction — the engine's
     # fitted-direction report inherits that reading. At |λ| → 1 the density
     # touches 0 where λ sin(θ−ξ) = −1 (logpdf → −∞; the link keeps λ
@@ -9033,7 +9019,7 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
 
         if any(v is None for v in (xi_scalar, kappa_scalar, psi_scalar, lmbd_scalar)):
             # Per-observation parameters — regression contract path,
-            # assembled in log space like the base JP (methods-parity P1).
+            # assembled in log space like the base JP.
             xi_b, kappa_b, psi_b, lmbd_b = np.broadcast_arrays(
                 *(np.asarray(a, dtype=float) for a in (xi, kappa, psi, lmbd))
             )
@@ -9098,7 +9084,7 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         return super().pdf(x, xi, kappa, psi, lmbd, *args, **kwargs)
 
     def _logpdf(self, x, xi, kappa, psi, lmbd):
-        # base-JP log density + log1p(λ sin φ) (P2), mirroring ``_pdf``
+        # base-JP log density + log1p(λ sin φ), mirroring ``_pdf``
         # branch-for-branch incl. the per-observation regression path;
         # −inf only at the honest sine-skew zero (|λ| = 1 at sin φ = ∓1)
         x = np.asarray(x, dtype=float)
@@ -9234,7 +9220,7 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
 
         if _jp_cdf_use_ladder(kappa_val, psi_val):
             # deep ψ < 0: exact ladder cumulatives for both the base and
-            # the sine-skew term (P1-C)
+            # the sine-skew term
             H_s, J_s = _jp_cum01(np.array([phi_start]), kappa_val, psi_val)
             H_start, J_start = float(H_s[0]), float(J_s[0])
             H_end, J_end = _jp_cum01(phi_end, kappa_val, psi_val)
@@ -9314,7 +9300,7 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
                         q_clipped, mu=xi_val, kappa=kappa_val, psi=psi_val
                     )
                 elif _jp_cdf_use_ladder(kappa_val, psi_val):
-                    # deep ψ < 0: table-initialized exact solve (P1-C)
+                    # deep ψ < 0: table-initialized exact solve
                     theta_vals[interior] = _jp_ppf_ladder_sineskewed(
                         q_clipped, xi_val, kappa_val, psi_val, lmbd_val
                     )
@@ -9652,7 +9638,7 @@ class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
     from 4.3.12 of Pewsey et al. (2013).
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names xi/kappa/psi/nu preserved. The asymmetry warps the JP
     # kernel argument *forward*, g = φ + ν cosφ (φ = θ − ξ), so the score
     # reuses jplss's `_jp_score_terms` chained through g (g_φ = 1 − ν sinφ,
@@ -9841,7 +9827,7 @@ class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
     def _logpdf(self, x, xi, kappa, psi, nu):
         # the log-space assembly ``_pdf`` exponentiates (stable kernel h at
         # the warped angle g(φ) plus the u-substituted log-normalizer),
-        # returned before the exp so deep-spike tails stay finite (P2)
+        # returned before the exp so deep-spike tails stay finite
         if any(_jp_as_scalar(v) is None for v in (xi, kappa, psi, nu)):
             # per-observation parameters — regression contract path
             return _ajp_logpdf_vec(x, xi, kappa, psi, nu)
@@ -9914,7 +9900,7 @@ class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
         phi_end = (flat - xi_val) % two_pi
 
         if _jp_cdf_use_ladder(kappa_val, psi_val):
-            # deep ψ < 0: exact u-space ladder cumulative (P1-C) — the
+            # deep ψ < 0: exact u-space ladder cumulative — the
             # uniform 4096-point table cannot resolve the spike there
             H_start = float(
                 _jp_cum01_asym(np.array([phi_start]), kappa_val, psi_val, nu_val)[0]
@@ -9981,7 +9967,6 @@ class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
                     theta_vals[interior] = two_pi * q_clipped
                 elif _jp_cdf_use_ladder(kappa_val, psi_val):
                     # deep ψ < 0: table-initialized exact u-space solve
-                    # (P1-C)
                     theta_vals[interior] = _jp_ppf_ladder_asym(
                         q_clipped, xi_val, kappa_val, psi_val, nu_val
                     )
@@ -10750,7 +10735,7 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
         Moments or maximum-likelihood parameter estimation.
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only). Book names ξ/κ/ν/λ preserved. The density warps θ *forward* into
     # the von-Mises kernel via the two inverse maps t_ν⁻¹, s_λ⁻¹ (the vectorized
     # `_solve_monotone_increasing` solver), so the per-observation score is
@@ -10758,8 +10743,8 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
     # their slopes. ν (skewness) and λ (peakedness) both ride the tanh link;
     # ξ = tanhalf, κ = log. Reduction member ν=λ=0 is the von Mises (vmlss).
     # The normalizer c(κ,λ) = (1−λ)/[(1+λ)·2π·I0(κ) − 2λ·∫e^{κcos B}] is numeric;
-    # its κ,λ gradient is finite-differenced off the tested `_c_invbatschelet`
-    # (see `dev/plans/vectorize-distributions-and-ibslss.md` §5.2). The *lss
+    # its κ,λ gradient is finite-differenced off the tested `_c_invbatschelet`.
+    # The *lss
     # alias is the module-level `ibslss`. ---
     param_roles = {
         "xi": "location",
@@ -10822,7 +10807,7 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
           :func:`_invbat_logc_hess_vec`, direct second differences of log c.
 
         EFS-grade Hessian; the end-to-end gate is intercept-only parity vs
-        ``inverse_batschelet.fit`` (dev/plans §7). Returns a book-named dict
+        ``inverse_batschelet.fit``. Returns a book-named dict
         keyed by unordered parameter pairs.
         """
         x, xi, kappa, nu, lmbd = np.broadcast_arrays(
@@ -10980,7 +10965,7 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
 
     def _logpdf(self, x, xi, kappa, nu, lmbd):
         # log(normalizer) + log-kernel — the assembly ``_pdf`` exponentiates
-        # (P2): the warped vM kernel underflows from κ ≈ 360 at the
+        # the warped vM kernel underflows from κ ≈ 360 at the
         # antipodal flank while the log form stays finite across the
         # κ ≤ 700 range
         scalar_input = np.isscalar(x)
@@ -11761,7 +11746,7 @@ def _solve_monotone_increasing(rhs, g, gprime, *, lo=-np.pi, hi=np.pi,
     warps used to run (≈10⁵ scalar root-finds per ``fit``): one warp call is
     now a handful of array ops. Returns ``(y, gprime(y))`` — the root and its
     local slope, the latter being the Jacobian factor the ``ibslss`` score
-    reuses (see ``dev/plans/vectorize-distributions-and-ibslss.md`` §5)."""
+    reuses."""
     rhs = np.asarray(rhs, dtype=float)
     y = (np.clip(rhs, lo, hi).copy() if x0 is None
          else np.clip(np.broadcast_to(x0, rhs.shape).astype(float), lo, hi))
@@ -12286,7 +12271,7 @@ class wrapstable_gen(CircularContinuous):
 
     def _logpdf(self, x, delta, alpha, beta, gamma):
         # log of the Fourier-series density, floored at float-tiny
-        # (methods-parity §6 decision 2): the series is a truncated trig
+        # the series is a truncated trig
         # polynomial whose ringing noise is the density's own accuracy
         # floor, so values below ~2.2e-308 are not meaningful — the floor
         # keeps the log finite (≈ −708) instead of nan on a noise-negative
@@ -12955,7 +12940,7 @@ def _wrapstable_sample_linear(alpha, beta, gamma, delta, *, size, rng):
 
 def _kj_cart_scores(x, mu, gamma, a, b, second=True):
     r"""Derivatives of the Kato–Jones log-density in Cartesian shape
-    coordinates ``(a, b) = (ρ cos λ, ρ sin λ)`` (regression plan §3.4).
+    coordinates ``(a, b) = (ρ cos λ, ρ sin λ)``.
 
     In these coordinates the log-density is elementary:
 
@@ -13077,9 +13062,9 @@ class katojones_gen(_RegressionReady, CircularContinuous):
       102(1), 181-190.
     """
 
-    # --- regression overlay (Phase 1 contract; read by the regression engine
+    # --- regression overlay (read by the regression engine
     # only — descriptive use keeps the book parameterization (mu, gamma, rho,
-    # lam)). The regression coordinates are the **disc chart** of plan §3.4:
+    # lam)). The regression coordinates are the **disc chart**:
     # the Theorem-1 feasible set for the Cartesian shape pair
     # (a, b) = (ρ cos λ, ρ sin λ) is the closed disc of center (γ, 0) and
     # radius 1−γ, and the chart
@@ -13108,7 +13093,7 @@ class katojones_gen(_RegressionReady, CircularContinuous):
     @staticmethod
     def disc_chart(gamma, u1, u2):
         """Map unconstrained chart coordinates ``u`` to the Cartesian shape
-        pair ``(a, b)`` strictly inside the Theorem-1 disc (plan §3.4)."""
+        pair ``(a, b)`` strictly inside the Theorem-1 disc."""
         gamma, u1, u2 = (np.asarray(v, dtype=float) for v in (gamma, u1, u2))
         r = np.sqrt(1.0 + u1 * u1 + u2 * u2)
         om = 1.0 - gamma

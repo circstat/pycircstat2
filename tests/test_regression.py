@@ -1598,25 +1598,69 @@ from pycircstat2.regression import circ_gam, circ_lm  # noqa: E402
 
 def test_circ_gam_b2_twin_and_knot_defaults():
     """The circlss §4 twin call fits through circ_gam with family/method
-    defaulted; with knots omitted, cyclic boundaries default to the full
-    period; a single formula auto-expands to a constant second LP."""
+    defaulted and **knots omitted**: ``phi`` on [0, 2π] (pycircstat2's
+    convention) auto-pins its cyclic knots to the period, and a single formula
+    auto-expands to a constant second LP."""
     rng = np.random.default_rng(8)
     n = 400
-    phi = rng.uniform(-np.pi, np.pi, n)
+    phi = rng.uniform(0, 2 * np.pi, n)
     mu_true = np.pi / 2 + 1.2 * np.sin(phi)
     theta = np.mod(mu_true + rng.vonmises(0.0, 4.0, n), 2 * np.pi)
     df = pl.DataFrame({"theta": theta, "phi": phi})
 
-    b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"], df,
-                  knots={"phi": [-np.pi, np.pi]})
+    # phi on [0, 2π], no explicit knots — the default brackets it to the period
+    b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"], df)
     assert b2.converged
     fv = np.asarray(b2.fitted_values)
     err = np.abs(np.angle(np.exp(1j * (np.mod(fv[:, 0], 2 * np.pi) - mu_true))))
     assert err.mean() < 0.15
 
-    df2 = pl.DataFrame({"theta": theta, "phi": np.mod(phi, 2 * np.pi)})
-    m = circ_gam("theta ~ s(phi, bs='cc')", df2)
+    # a single formula auto-expands the constant second LP
+    m = circ_gam("theta ~ s(phi, bs='cc')", df)
     assert m.converged
+
+
+def test_circ_gam_cyclic_knots_default_and_guard():
+    """``_resolve_cyclic_knots_data`` pins each cyclic covariate to the
+    [0, 2π] period (pycircstat2's convention), honors user knots, and rejects
+    covariates that fall outside [0, 2π] (a wrong-branch footgun)."""
+    from pycircstat2.regression import _resolve_cyclic_knots_data
+
+    pos = pl.DataFrame({"phi": np.linspace(0.0, 2 * np.pi, 50)})
+    f = ["theta ~ s(phi, bs='cc')", "~ 1"]
+
+    assert _resolve_cyclic_knots_data(f, pos, None) == {"phi": [0.0, 2 * np.pi]}
+    # user knots always win
+    assert _resolve_cyclic_knots_data(f, pos, {"phi": [0.0, 12.0]}) == {
+        "phi": [0.0, 12.0]
+    }
+    # a plain (non-cyclic) smooth gets no default knots
+    assert _resolve_cyclic_knots_data(["theta ~ s(phi)", "~ 1"], pos, None) is None
+
+    # off-branch covariates are rejected (signed, or beyond 2π)
+    for bad in (np.linspace(-np.pi, np.pi, 50), np.linspace(0.0, 7.0, 50)):
+        with pytest.raises(ValueError, match=r"outside \[0, 2π\]"):
+            _resolve_cyclic_knots_data(f, pl.DataFrame({"phi": bad}), None)
+
+
+def test_circ_gam_new_families_by_name_and_fill():
+    """The flat-top / asymmetric-JP / inverse-Batschelet families (shipped in
+    distributions.py) resolve by name, and a single formula fills the extra
+    shape LPs with ``~ 1`` up to the family's parameter count."""
+    from pycircstat2.regression import _resolve_gam_family
+    from pycircstat2.distributions import vmftlss, ajplss, ibslss
+
+    for name, fam in [("vmftlss", vmftlss), ("ajplss", ajplss),
+                      ("ibslss", ibslss)]:
+        assert _resolve_gam_family(name) is fam
+        assert _resolve_gam_family(fam.dist.name) is fam  # distribution name too
+
+    # vmftlss is 3-LP: a single formula expands to mu-smooth + two ~ 1 LPs
+    rng = np.random.default_rng(7)
+    theta = np.mod(rng.vonmises(0.5, 3.0, 80), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta})
+    m = circ_gam("theta ~ 1", df, family="vmftlss")
+    assert np.isfinite(float(m.logLik))
 
 
 def test_circ_gam_matches_clregression_gam_backend():

@@ -4,26 +4,27 @@ from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
-from hea.models import gam as _hea_gam, lm as _hea_lm
+from hea.models import gam, lm
 from scipy.special import expit, i0e
 from scipy.stats import chi2, norm, t as student_t
 
-# CircularLL / KatoJonesLL and the *lss aliases live in distributions.py
-# (the §3.5 move of dev/plans/distribution-validation.md: the Phase-1
-# contract and its Phase-2 reader belong together); the classes are
-# re-exported here via __all__ for compatibility.
+# Circular family classes + *lss instances used internally by CLRegression
+# and circ_gam.
 from .distributions import (
     CircularLL,
     KatoJonesLL,
     _circular_family,
+    ajplss,
     cardlss,
     cartlss,
     get_link,
+    ibslss,
     jplss,
     katojones,
     kjlss,
     pnlss,
     ssjplss,
+    vmftlss,
     vmlss,
     vonmises,
     wclss,
@@ -31,8 +32,8 @@ from .distributions import (
 )
 from .utils import A1, A1inv, A1prime, significance_code
 
-__all__ = ["CircularLL", "KatoJonesLL", "CLRegression", "CCRegression",
-           "LCRegression", "circ_gam"]
+__all__ = ["CLRegression", "CCRegression", "LCRegression",
+           "circ_gam", "circ_lm"]
 
 
 def _to_polars(data) -> "pl.DataFrame":
@@ -338,7 +339,7 @@ class CLRegression:
         self.tol = tol
         self.max_iter = max_iter
 
-        # --- backend resolution (plan §5). One formula grammar, two engines:
+        # --- backend resolution. One formula grammar, two engines:
         #   • "fisher-lee" — von Mises MLE with the tan-half link and the
         #     offset *outside* (μ = μ₀ + 2·atan(Xβ); Fisher & Lee 1992 /
         #     Fisher 1993 §6.4). Fast, R-validated; ties μ and κ to one shared
@@ -492,7 +493,7 @@ class CLRegression:
         LP (``"~ 1"``) — smooth μ(x), constant concentration."""
         if family is None:
             # the vmlss alias (≡ CircularLL(vonmises)): stateless across
-            # fits (n_theta = 0; §3.5 item 2), and summaries print the
+            # fits (n_theta = 0), and summaries print the
             # cross-language family name.
             family = vmlss
         elif not isinstance(family, CircularLL):
@@ -527,7 +528,7 @@ class CLRegression:
         if knots:
             merged.update(knots)
 
-        self.gam_fit = _hea_gam(
+        self.gam_fit = gam(
             formulas,
             self.data,
             family=family,
@@ -591,7 +592,7 @@ class CLRegression:
 
     def shape_inference(self, data=None, *, level=0.95, cov="Vp"):
         r"""Delta-method SEs and CIs for the Kato–Jones shape parameters
-        (gam backend, ``family=kjlss`` — plan §3.4's deferred item).
+        (gam backend, ``family=kjlss``).
 
         The fitted shape lives in η-space as ``(logit γ, u₁, u₂)`` with
         joint coefficient covariance ``V`` from the gam fit; this pushes
@@ -636,8 +637,7 @@ class CLRegression:
         coefficient posterior is approximately Gaussian on the η-scale,
         the same caveat as every mgcv-style interval. Near the feasibility
         boundary (‖u‖ → ∞, the logistic-separation analog) they will
-        understate the asymmetry — judge such fits by likelihood, as the
-        §3.4 smoke notes already advise.
+        understate the asymmetry — judge such fits by likelihood.
         """
         if self.backend != "gam":
             raise ValueError("shape_inference() is for the gam backend.")
@@ -818,7 +818,7 @@ class CLRegression:
         theta = self.theta
         n = len(theta)
         X = self.X
-        X1 = np.column_stack((np.ones(n), X))  # Add intercept
+        X1 = np.column_stack((np.ones(n), X))
         beta, alpha, gamma = self.beta, self.alpha, self.gamma
         diff = self.tol + 1
         log_likelihood_old = -np.inf
@@ -839,7 +839,7 @@ class CLRegression:
                 mu = np.arctan2(S, C)
 
                 # Step 2: Update beta. Score from the von Mises regression
-                # contract (vonmises.dlogpdf — the §3.2 lift); the IRLS weight
+                # contract (vonmises.dlogpdf); the IRLS weight
                 # is the *expected* (Fisher) information −E[∂²_{μμ}ℓ] = κ A1(κ),
                 # distinct from the observed d2logpdf. G = ∂μ/∂β chains the
                 # link's mu_eta through the design.
@@ -991,7 +991,7 @@ class CLRegression:
 
         elif self.model_type == "kappa":
             # Concentration Parameter Model
-            X1 = np.column_stack((np.ones(n), X))  # Add intercept
+            X1 = np.column_stack((np.ones(n), X))
             weights = (kappa**2) * A1prime(kappa)
             XtWX = X1.T @ (weights[:, None] * X1)
 
@@ -1023,7 +1023,7 @@ class CLRegression:
             cov_beta = _safe_inverse(XtGKGX)
             se_beta = np.sqrt(np.diag(cov_beta))
 
-            X1 = np.column_stack((np.ones(n), X))  # Add intercept
+            X1 = np.column_stack((np.ones(n), X))
             weights_gamma = (kappa**2) * A1prime(kappa)
             XtWX_gamma = X1.T @ (weights_gamma[:, None] * X1)
 
@@ -1556,7 +1556,6 @@ class CLRegression:
                 )
             return
 
-        # Title based on model type
         if self.model_type == "mean":
             print("\nCircular Regression for the Mean Direction\n")
         elif self.model_type == "kappa":
@@ -1564,7 +1563,6 @@ class CLRegression:
         elif self.model_type == "mixed":
             print("\nMixed Circular-Linear Regression\n")
 
-        # Call
         print("Call:")
         print(f"  CLRegression(model_type='{self.model_type}')\n")
 
@@ -1646,12 +1644,11 @@ class CLRegression:
         print("\nModel Fit Metrics:\n")
         print(f"{'Metric':<12} {'Value':<12}")
         log_likelihood = self.result.get("log_likelihood", float("nan"))
-        nll = -log_likelihood  # Negative log-likelihood
+        nll = -log_likelihood
         print(f"{'nLL':<12} {nll:<12.5f}")
         print(f"{'AIC':<12} {self.AIC():<12.5f}")
         print(f"{'BIC':<12} {self.BIC():<12.5f}")
 
-        # Notes
         print("\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
         print("p-values are approximated using the normal distribution.\n")
 
@@ -1820,7 +1817,6 @@ class CCRegression:
                     f"(got {self.theta.size}); reduce `order` or provide more data."
                 )
 
-        # Fit the model
         self.result = self._fit()
 
     @staticmethod
@@ -1892,8 +1888,8 @@ class CCRegression:
         rhs = " + ".join(
             f"harmonic({f}, k={order}, period={2 * np.pi})" for f in feats
         )
-        self._lm_cos = _hea_lm(f"cos_t ~ {rhs}", df_fit)
-        self._lm_sin = _hea_lm(f"sin_t ~ {rhs}", df_fit)
+        self._lm_cos = lm(f"cos_t ~ {rhs}", df_fit)
+        self._lm_sin = lm(f"sin_t ~ {rhs}", df_fit)
         self._feature_cols = feats
 
         beta_cos = _harmonic_block_order(
@@ -1965,7 +1961,6 @@ class CCRegression:
         else:
             p_values = np.array([np.nan, np.nan], dtype=float)
 
-        # Message about higher-order terms
         if np.all(np.isnan(p_values)):
             message = "No additional harmonics available for testing."
         elif np.all(p_values > self.level):
@@ -2024,11 +2019,11 @@ class CCRegression:
         df_fit = self.data.with_columns(
             pl.Series("cos_t", Y_cos), pl.Series("sin_t", Y_sin)
         )
-        self._gam_cos = _hea_gam(
+        self._gam_cos = gam(
             f"cos_t ~ {self._gam_rhs}", df_fit,
             knots=self._knots, method=self._method, **self._gam_kwargs,
         )
-        self._gam_sin = _hea_gam(
+        self._gam_sin = gam(
             f"sin_t ~ {self._gam_rhs}", df_fit,
             knots=self._knots, method=self._method, **self._gam_kwargs,
         )
@@ -2550,7 +2545,7 @@ class LCRegression:
         self.backend = "gam" if _has_smooth(self.expanded_formula) else "lm"
         if self.backend == "gam":
             self.lm_fit = None
-            self.gam_fit = _hea_gam(
+            self.gam_fit = gam(
                 self.expanded_formula,
                 self.data,
                 knots=_resolve_cyclic_knots(self.expanded_formula, knots),
@@ -2564,7 +2559,7 @@ class LCRegression:
                     "(s()/te()/…); this parametric formula uses hea.lm."
                 )
             self.gam_fit = None
-            self.lm_fit = _hea_lm(self.expanded_formula, self.data)
+            self.lm_fit = lm(self.expanded_formula, self.data)
         self.result = self._build_result()
 
     @staticmethod
@@ -3005,7 +3000,6 @@ class LCRegression:
 # --- unified front doors --------------------------------------------------
 # circ_gam = the distributional grammar (hea.models.gam + circular defaults);
 # circ_lm = the classical Fisher-Lee/Pewsey-era fitters under one entry.
-# Design + sequencing: dev/plans/circ_gam_unified_api.md.
 
 
 def _lss_catalog() -> dict:
@@ -3014,7 +3008,7 @@ def _lss_catalog() -> dict:
     name (``"vonmises"``)."""
     cat: dict = {}
     for fam in (vmlss, wclss, pnlss, cardlss, cartlss, wnlss,
-                jplss, ssjplss, kjlss):
+                jplss, ssjplss, kjlss, vmftlss, ajplss, ibslss):
         cat[fam.name.lower()] = fam
         cat[fam.dist.name.lower()] = fam
     return cat
@@ -3054,6 +3048,52 @@ def _resolve_gam_family(family):
     return family
 
 
+def _resolve_cyclic_knots_data(formulas, data, user_knots):
+    """``circ_gam``'s cyclic-knot defaulting.
+
+    For every cyclic smooth (``bs='cc'``/``'cp'``) whose knots the caller did
+    not pin, set the boundary knots to the full circular period ``[0, 2π]`` —
+    pycircstat2's angle convention (the branch ``Circular``/``angmod`` wrap
+    to) — so the basis wraps at the true period, not the observed data range.
+    A cyclic covariate must already be on ``[0, 2π]``: this raises (pointing at
+    the wrapping helpers) when one falls outside it, rather than silently
+    fitting a basis whose period is misaligned with the data. Explicit
+    ``user_knots`` win per variable; returns ``None`` when nothing is set.
+
+    (circlss's R twin instead brackets signed covariates with ``[-π, π]`` — the
+    R/``atan2`` convention; the call shape is shared, the branch differs by
+    ecosystem. The trio's ``_resolve_cyclic_knots`` stays data-blind and is
+    byte-frozen.)
+    """
+    cyclic = []
+    for f in formulas:
+        rhs = f.split("~", 1)[1] if "~" in f else f
+        cyclic.extend(_cyclic_smooth_vars(rhs))
+    cyclic = list(dict.fromkeys(cyclic))  # unique, formula order
+    knots = dict(user_knots) if user_knots else {}
+    if not cyclic:
+        return knots or None
+    cols = set(data.columns)
+    period = 2 * np.pi
+    for v in cyclic:
+        if v in knots or v not in cols:
+            continue  # user knots win; an absent var is left for hea to report
+        x = np.asarray(data[v].to_numpy(), dtype=float)
+        x = x[np.isfinite(x)]
+        if x.size == 0:
+            continue
+        lo, hi = float(x.min()), float(x.max())
+        if lo < -1e-6 or hi > period + 1e-6:
+            raise ValueError(
+                f"cyclic covariate {v!r} lies outside [0, 2π] (range "
+                f"[{lo:.3f}, {hi:.3f}]); pycircstat2 expects angles on that "
+                "branch. Wrap it (pycircstat2.utils.angmod / data2rad, or the "
+                f"Circular class) or pass knots={{{v!r}: [...]}} explicitly."
+            )
+        knots[v] = [0.0, period]
+    return knots or None
+
+
 def circ_gam(formula, data, family=None, knots=None, method="REML",
              **gam_kwargs):
     """Circular GAM — ``hea.models.gam`` with circular defaults.
@@ -3065,24 +3105,30 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
     - ``family=vmlss`` (distributional von Mises) and ``method="REML"``
       unless overridden.
     - Cyclic smooths (``bs='cc'``/``'cp'``) default their boundary knots to
-      the full period ``[0, 2π]``; explicit ``knots=`` wins per variable —
-      mgcv's ``knots=list(phi=c(-pi, pi))`` semantics.
+      the full circular period ``[0, 2π]`` — pycircstat2's angle convention
+      (the branch ``Circular``/``angmod`` wrap to) — so the basis wraps at the
+      true period, not the observed data range. Explicit ``knots=`` wins per
+      variable (mgcv's ``knots=list(...)`` semantics). A cyclic covariate must
+      already be on ``[0, 2π]``; otherwise ``circ_gam`` raises, pointing you to
+      :func:`pycircstat2.utils.angmod` / :func:`~pycircstat2.utils.data2rad`
+      (or the :class:`~pycircstat2.base.Circular` class) to wrap it.
     - ``family`` may be a ``*lss`` instance, a regression-ready circular
       distribution (auto-wrapped; ``katojones`` → :class:`KatoJonesLL`), a
       string (``"vmlss"``/``"vonmises"``, … or any hea family name such as
       ``"gaussian"``), or any hea family object — non-circular responses
       pass through untouched, so the old LC-smooth case is simply
       ``circ_gam("y ~ s(phi, bs='cc')", df, family="gaussian")``.
-    - A single formula auto-expands to ``[formula, "~ 1"]`` for 2-LP
-      circular families (constant second parameter).
+    - Fewer formulas than the family has parameters: the remaining linear
+      predictors are filled with ``~ 1`` (held constant), so
+      ``circ_gam("theta ~ s(x)", df, family="jplss")`` smooths μ and pins
+      κ, ψ. The first formula must name the response.
 
-    The circlss/mgcv twin call::
+    The circlss/mgcv twin call — cyclic knots auto-pinned to the period::
 
         # R:  b2 <- gam(list(theta ~ s(phi, bs="cc"), ~ s(phi, bs="cc")),
-        #               family = vmlss(), data = dat, method = "REML",
-        #               knots = list(phi = c(-pi, pi)))
+        #               family = vmlss(), data = dat, method = "REML")
         b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
-                      data=dat, knots={"phi": [-np.pi, np.pi]})
+                      data=dat)   # phi on [0, 2π] → knots default to [0, 2π]
 
     Returns the fitted ``hea`` gam object (``summary()``, ``predict()``,
     ``AIC``, ``gam_check()`` are hea's own).
@@ -3116,21 +3162,23 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
     fam = _resolve_gam_family(family)
     formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
     if isinstance(fam, CircularLL):
-        if len(formulas) == 1 and fam.n_lp == 2:
-            formulas.append("~ 1")
-        if len(formulas) != fam.n_lp:
+        if "~" not in formulas[0] or not formulas[0].split("~", 1)[0].strip():
+            raise ValueError(
+                'the first formula must name the response, e.g. "theta ~ s(x)".'
+            )
+        if len(formulas) > fam.n_lp:
             raise ValueError(
                 f"{fam.name} has {fam.n_lp} linear predictors; got "
                 f"{len(formulas)} formulas."
             )
-    merged: dict = {}
-    for f in formulas:
-        merged.update(_resolve_cyclic_knots(f, None) or {})
-    if knots:
-        merged.update(knots)
+        # fewer formulas than parameters: hold the rest constant (~ 1), e.g.
+        # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
+        formulas += ["~ 1"] * (fam.n_lp - len(formulas))
+    df = _to_polars(data)
+    merged = _resolve_cyclic_knots_data(formulas, df, knots)
     payload = formulas if len(formulas) > 1 else formulas[0]
-    return _hea_gam(payload, _to_polars(data), family=fam,
-                    knots=merged or None, method=method, **gam_kwargs)
+    return gam(payload, df, family=fam,
+                    knots=merged, method=method, **gam_kwargs)
 
 
 def circ_lm(mode, *args, **kwargs):
