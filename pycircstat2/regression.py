@@ -2019,10 +2019,28 @@ def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None, main=No
     ref_x = xobs if xobs is not None else grid
     to_u, to_v, xyz, (mx, my, mz) = _surface_maps(surface, grid, ref_x, yspan)
     ax.plot_wireframe(mx, my, mz, color="0.85", linewidth=0.4)
+    # preserve the surface's true proportions (a flat donut / long tube) — else
+    # matplotlib stretches each axis to a cube and the torus reads as a ball.
+    ax.set_box_aspect((np.ptp(mx), np.ptp(my), np.ptp(mz)))
     if lo is not None and hi is not None:
-        band_u = np.vstack([to_u(grid), to_u(grid)])
-        band_v = np.vstack([to_v(lo), to_v(hi)])
-        bx, by, bz = xyz(band_u, band_v)
+        # Subdivide the band across its width into K strips so every quad hugs
+        # the tube's curvature — a single lo→hi quad would chord straight
+        # through the interior, since the cylinder/torus embedding is nonlinear
+        # in the tube angle. On a circular response, break the ribbon at the ±π
+        # direction wrap so adjacent columns don't sheet across the surface.
+        lo = np.asarray(lo, dtype=float)
+        hi = np.asarray(hi, dtype=float)
+        steps = np.linspace(0.0, 1.0, 9)[:, None]
+        vband = to_v(lo)[None, :] + (to_v(hi) - to_v(lo))[None, :] * steps
+        uband = np.broadcast_to(to_u(grid)[None, :], vband.shape)
+        # np.array (not asarray) → writable copies: the cylinder passes u
+        # straight through as x (a read-only broadcast), which the wrap-break
+        # NaN assignment below would otherwise reject.
+        bx, by, bz = (np.array(a, dtype=float) for a in xyz(uband, vband))
+        if surface != "can":
+            cut = np.where(np.abs(np.diff(np.asarray(zv, dtype=float))) > np.pi)[0]
+            for arr in (bx, by, bz):
+                arr[:, cut + 1] = np.nan
         ax.plot_surface(
             bx, by, bz, color="#c0392b", alpha=0.15, linewidth=0, shade=False
         )
@@ -2040,7 +2058,10 @@ def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None, main=No
             "can": "can · linear–circular",
         }[surface]
     )
-    ax.view_init(elev=22, azim=-60)
+    # per-surface view matching circlss's persp(phi=) elevation
+    elev, azim = {"torus": (40, -55), "cylinder": (16, -65),
+                  "can": (18, -55)}.get(surface, (25, -60))
+    ax.view_init(elev=elev, azim=azim)
 
 
 # ---- circ_check diagnostic-panel drawers ----------------------------------- #
