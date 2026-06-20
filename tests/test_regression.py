@@ -413,28 +413,32 @@ def test_circularll_postproc_binds_both_hea_conventions():
     assert old["null_deviance"] == pytest.approx(new["null_deviance"])
 
 
-def test_circularll_rejects_prior_weights():
-    """gam(weights=) must fail loudly: no mgcv gamlss family uses prior
-    weights in its ll, so a weighted circular fit would have no R
-    reference to pin against — refusing beats silently fitting
-    unweighted. Unit weights (hea's default when the caller passes
-    nothing) must keep fitting."""
+def test_circularll_honors_prior_weights():
+    """gam(weights=) is honored as a likelihood weight (the circlss contract:
+    weighting a row by w == duplicating that row w times — see the family-level
+    duplication-identity tests in test_distributions.py). A weighted fit
+    converges; a constant rescaling leaves the MLE unchanged (argmax of w·ℓ ==
+    argmax of ℓ for any constant w > 0), while a non-uniform weighting moves it.
+    The exact, machine-precision gate lives in test_distributions.py; this pins
+    the behaviour through the circ_gam/hea front door."""
     rng = np.random.default_rng(9)
     n = 120
-    theta = np.mod(rng.vonmises(1.0, 3.0, n), 2 * np.pi)
-    df = pl.DataFrame({"theta": theta})
-    with pytest.raises(NotImplementedError, match="prior weights"):
-        hea_gam(
-            ["theta ~ 1", "~ 1"],
-            data=df,
-            family=CircularLL(vonmises),
-            method="REML",
-            weights=np.full(n, 2.0),
-        )
-    m = hea_gam(
-        ["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises), method="REML"
-    )
-    assert m.converged
+    x = rng.uniform(-1.0, 1.0, n)
+    theta = np.mod(2 * np.arctan(0.8 * x) + rng.vonmises(0.0, 4.0, n), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta, "x": x})
+
+    base = hea_gam(["theta ~ x", "~ 1"], data=df,
+                   family=CircularLL(vonmises), method="REML")
+    const = hea_gam(["theta ~ x", "~ 1"], data=df, family=CircularLL(vonmises),
+                    method="REML", weights=np.full(n, 2.0))
+    nonunif = hea_gam(["theta ~ x", "~ 1"], data=df, family=CircularLL(vonmises),
+                      method="REML", weights=np.where(x > 0, 3.0, 0.5))
+    assert const.converged and nonunif.converged
+    # constant weight: same MLE as unit weights
+    np.testing.assert_allclose(np.asarray(const.coef), np.asarray(base.coef),
+                               atol=1e-6)
+    # non-uniform weighting genuinely takes effect
+    assert np.max(np.abs(np.asarray(nonunif.coef) - np.asarray(base.coef))) > 1e-3
 
 
 def _cl_gam_sim(n=900, seed=7):

@@ -9,21 +9,34 @@ from scipy.integrate import quad
 
 from pycircstat2.distributions import (
     _VMFT_KAPPA_UPPER,
+    ajplss,
     cardioid,
+    cardlss,
+    cartlss,
     cartwright,
     circularuniform,
+    ibslss,
     inverse_batschelet,
     jonespewsey,
     jonespewsey_asym,
     jonespewsey_sineskewed,
+    jplss,
     katojones,
+    kjlss,
+    pnlss,
+    ssjplss,
     triangular,
+    vmftlss,
+    vmlss,
     vonmises,
     vonmises_flattopped,
+    wclss,
+    wnlss,
     wrapcauchy,
     wrapnorm,
     wrapstable,
 )
+from pycircstat2.regression import circ_gam
 
 
 def _assert_monotonic_cdf_ppf(
@@ -3051,3 +3064,134 @@ def test_circularll_deviance_saturated_reference_is_density_peak():
     )
     assert l_peak > l_anchor + 1e-3  # the mode sits off the anchor
     assert l_peak == pytest.approx(grid_truth, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Prior-weights ("weighted likelihood") contract for the *lss general families.
+#
+# Ported from circlss tests/testthat/helper-weights.R + test-weights.R +
+# test-vmlss-weights.R. The contract: weighting a row by w is identical to
+# duplicating that row w times, which is what lets a weighted fit
+# (circ_gam(weights=), e.g. a finite-mixture EM M-step) reach the weighted MLE.
+# pycircstat2 has a single shared CircularLL.ll, so this one weighting path
+# covers every family (KatoJonesLL inherits it). Checked at the ll level (no
+# fitting) across all 12 families, plus one end-to-end fit-level identity.
+# ---------------------------------------------------------------------------
+
+_LSS_FAMILIES = {
+    "cardlss": cardlss, "cartlss": cartlss, "wnlss": wnlss, "wclss": wclss,
+    "vmlss": vmlss, "pnlss": pnlss, "vmftlss": vmftlss, "jplss": jplss,
+    "ssjplss": ssjplss, "ajplss": ajplss, "ibslss": ibslss, "kjlss": kjlss,
+}
+
+
+def _lss_weight_design(fam, n=40, seed=0):
+    """A stacked design (intercept + one covariate per LP), small random
+    coefficients (so the inverse-linked parameters stay well inside each
+    family's domain) and moderate circular responses. The exact identity below
+    is coefficient/data-agnostic, so any well-posed design exercises it."""
+    rng = np.random.default_rng(seed)
+    nlp = fam.n_lp
+    x = rng.standard_normal(n)
+    X = np.hstack([np.column_stack([np.ones(n), x]) for _ in range(nlp)])
+    lpi = [np.arange(2 * j, 2 * j + 2) for j in range(nlp)]
+    coef = rng.standard_normal(2 * nlp) * 0.1
+    y = rng.vonmises(0.0, 2.0, n)
+    return X, lpi, coef, y, rng
+
+
+@pytest.mark.parametrize("name", list(_LSS_FAMILIES), ids=list(_LSS_FAMILIES))
+def test_lss_weighted_ll_equals_row_duplication(name):
+    """EXACT gate: for positive integer weights w, ll(wt=w) on n rows equals
+    ll(wt=1) on the design with row i repeated w_i times -- objective l,
+    gradient lb and Hessian lbb, to floating point. An identity, not an
+    approximation, so it is robust even where the log-density is stiff."""
+    fam = _LSS_FAMILIES[name]
+    X, lpi, coef, y, rng = _lss_weight_design(fam)
+    w = rng.integers(1, 5, len(y)).astype(float)
+    idx = np.repeat(np.arange(len(y)), w.astype(int))
+
+    rw = fam.ll(y, X, coef, w, lpi=lpi, deriv=1)
+    rd = fam.ll(y[idx], X[idx], coef, np.ones(len(idx)), lpi=lpi, deriv=1)
+    assert rw["l"] == pytest.approx(rd["l"], abs=1e-8)
+    np.testing.assert_allclose(rw["lb"], rd["lb"], atol=1e-8)
+    np.testing.assert_allclose(
+        np.asarray(rw["lbb"]), np.asarray(rd["lbb"]), atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("name", list(_LSS_FAMILIES), ids=list(_LSS_FAMILIES))
+def test_lss_weighted_ll_l0_unweighted_and_none_noop(name):
+    """l0 is the per-observation log-density: it must NEVER be scaled by wt
+    (only the scalar objective l is), and a None wt must behave like unit
+    weights at deriv=1 (objective, gradient and Hessian)."""
+    fam = _LSS_FAMILIES[name]
+    X, lpi, coef, y, rng = _lss_weight_design(fam)
+    n = len(y)
+    wt = rng.uniform(0.2, 3.0, n)
+
+    r_w = fam.ll(y, X, coef, wt, lpi=lpi, deriv=0)
+    r_1 = fam.ll(y, X, coef, np.ones(n), lpi=lpi, deriv=0)
+    np.testing.assert_array_equal(r_w["l0"], r_1["l0"])          # l0 never scaled
+    assert r_w["l"] == pytest.approx(float(np.sum(wt * r_w["l0"])))  # l IS weighted
+    assert r_1["l"] == pytest.approx(float(np.sum(r_1["l0"])))
+
+    r_unit = fam.ll(y, X, coef, np.ones(n), lpi=lpi, deriv=1)
+    r_none = fam.ll(y, X, coef, None, lpi=lpi, deriv=1)
+    assert r_none["l"] == pytest.approx(r_unit["l"])
+    np.testing.assert_array_equal(r_none["lb"], r_unit["lb"])
+    np.testing.assert_array_equal(
+        np.asarray(r_none["lbb"]), np.asarray(r_unit["lbb"])
+    )
+
+
+def test_vmlss_weighted_gradient_finite_differences():
+    """Independent cross-check on a well-conditioned design: ll(deriv=1) lb/lbb
+    match central differences of the weighted objective ll(deriv=0).l."""
+    fam = vmlss
+    X, lpi, coef, y, rng = _lss_weight_design(fam, n=50, seed=3)
+    wt = rng.uniform(0.2, 3.0, len(y))
+    h = 1e-5
+    p = len(coef)
+
+    def L(b):
+        return fam.ll(y, X, b, wt, lpi=lpi, deriv=0)["l"]
+
+    ret = fam.ll(y, X, coef, wt, lpi=lpi, deriv=1)
+    eye = np.eye(p)
+    g_fd = np.array([(L(coef + h * eye[j]) - L(coef - h * eye[j])) / (2 * h)
+                     for j in range(p)])
+    np.testing.assert_allclose(ret["lb"], g_fd, atol=1e-5)
+
+    H_fd = np.zeros((p, p))
+    for j in range(p):
+        gp = fam.ll(y, X, coef + h * eye[j], wt, lpi=lpi, deriv=1)["lb"]
+        gm = fam.ll(y, X, coef - h * eye[j], wt, lpi=lpi, deriv=1)["lb"]
+        H_fd[:, j] = (gp - gm) / (2 * h)
+    np.testing.assert_allclose(
+        np.asarray(ret["lbb"]), (H_fd + H_fd.T) / 2, atol=1e-5
+    )
+
+
+def test_circ_gam_weighted_equals_duplicated_fit():
+    """End-to-end: an integer-weighted circ_gam fit equals the unweighted fit on
+    the row-duplicated frame. The comprehensive gate -- it drives gam.fit5's full
+    deriv<=4 path, so it validates the higher-order (l3/l4) weight scaling the
+    ll-level deriv=1 tests cannot reach on their own."""
+    import polars as pl
+
+    rng = np.random.default_rng(7)
+    n = 200
+    x = rng.uniform(-1.0, 1.0, n)
+    mu = 2.0 * np.arctan(0.9 + 2.0 * x)
+    y = np.mod(mu + rng.vonmises(0.0, 6.0, n), 2.0 * np.pi)
+    w = rng.integers(1, 4, n)
+    idx = np.repeat(np.arange(n), w)
+
+    fW = circ_gam("y ~ x", pl.DataFrame({"y": y, "x": x}),
+                  family="vmlss", weights=w.astype(float), method="ML")
+    fD = circ_gam("y ~ x", pl.DataFrame({"y": y[idx], "x": x[idx]}),
+                  family="vmlss", method="ML")
+    np.testing.assert_allclose(
+        np.asarray(fW.coef), np.asarray(fD.coef), atol=1e-6
+    )

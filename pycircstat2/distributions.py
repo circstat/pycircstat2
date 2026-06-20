@@ -583,25 +583,27 @@ class CircularLL(GeneralFamily):
 
     def ll(self, y, X, coef, wt=None, *, lpi, offset=None, deriv: int = 0,
            d1b=None, d2b=None, fh=None, D=None) -> dict:
-        # mgcv's gamlss lls receive prior weights but none uses them as a
-        # likelihood weight (gaulss/gammals/shash all drop wt), so a
-        # weighted circular fit would have no R reference to pin against.
-        # hea passes ones when the user gave no gam(weights=); anything
-        # else must fail loudly rather than silently fit unweighted.
-        if wt is not None and np.any(np.asarray(wt, dtype=float) != 1.0):
-            raise NotImplementedError(
-                f"{self.name}: prior weights (gam(weights=)) are not "
-                "supported by circular general families."
-            )
+        # Prior weights as a likelihood weight. mgcv's gamlss families receive
+        # `wt` but drop it; circlss makes it count and so do we: a weighted
+        # log-likelihood scales the objective and every per-observation
+        # derivative row by wt, so weighting a row by w is identical to
+        # duplicating that row w times -- which is what lets a weighted fit
+        # (gam(weights=), e.g. a finite-mixture EM M-step) reach the weighted
+        # MLE. hea passes ones when the user gave no gam(weights=). `l0` itself
+        # stays UNWEIGHTED: it is the per-observation log-density a downstream
+        # E-step reads (only the scalar objective `l` and the derivative blocks
+        # are weighted).
         y = np.asarray(y, dtype=float)
         X = np.asarray(X, dtype=float)
         coef = np.asarray(coef, dtype=float)
+        wt = (np.ones(y.shape, dtype=float) if wt is None
+              else np.broadcast_to(np.asarray(wt, dtype=float), y.shape))
         jj = [np.asarray(ix, dtype=int) for ix in lpi]
         etas = self._etas(X, coef, jj, offset)
         params = self._param_values(etas)
 
         l0 = self._loglik_values(y, params)
-        ret: dict = {"l": float(np.sum(l0)), "l0": l0}
+        ret: dict = {"l": float(np.sum(wt * l0)), "l0": l0}
         if deriv == 0:
             return ret
 
@@ -642,6 +644,18 @@ class CircularLL(GeneralFamily):
                 [link.d4link(params[name])
                  for link, name in zip(self.links, names)]
             )
+
+        # Scale the derivative blocks by the prior weights before the chain rule:
+        # gamlss_etamu is linear per row in (l1..l4), so weighting these inputs
+        # equals weighting the eta-space derivatives gamlss_gH assembles. Absent
+        # higher orders stay None.
+        w = wt[:, None]
+        l1 = l1 * w
+        l2 = l2 * w
+        if l3 is not None:
+            l3 = l3 * w
+        if l4 is not None:
+            l4 = l4 * w
 
         tri = self.tri
         de = gamlss_etamu(l1, l2, l3, l4, ig1, g2, g3, g4,
