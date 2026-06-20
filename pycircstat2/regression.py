@@ -2,9 +2,28 @@
 
 - :func:`circ_lm` — classical parametric circular regression: circular response
   on linear covariates (von Mises), circular on circular, and linear on circular
-  (harmonic), selected by ``type``.
+  (harmonic), selected by ``type``. Returns a :class:`CircLM`.
 - :func:`circ_gam` — penalized-smooth distributional circular regression via
-  ``hea.models.gam``.
+  ``hea.models.gam``. Returns a :class:`CircGAM`.
+
+Both result objects expose the underlying fit directly (``CircGAM`` *is* the hea
+gam, reclassed in place; ``CircLM`` carries the estimates as attributes and as
+mapping keys, delegating the lc leg's full interface to its wrapped ``lm``) and
+add a shared circular-diagnostic surface:
+
+- ``.summary()`` — the regression tables, in the R ``print.circ_lm`` /
+  ``summary.gam`` style shared with the circlss sibling package (prints; returns
+  ``None``).
+- ``.circ_resid(type=...)`` — circular residuals: ``"quantile"`` (analytic PIT),
+  ``"deviance"``, ``"angular"``, ``"pearson"``.
+- ``.circ_check(which=...)`` — the diagnostic-panel grid (rose, observed-vs-
+  fitted, residual-vs-covariate, quantile-residual Q-Q with the Watson U² test,
+  and the opt-in deviance/influence panels) + a printed goodness-of-fit table;
+  returns the matplotlib Figure.
+- ``.circ_plot(view="flat"|"geometry"|"both")`` — the effect display: one panel
+  per modelled parameter, and the fitted location curve on its natural surface
+  (cylinder for circular–linear, torus for circular–circular, upright can for
+  linear–circular).
 """
 
 import re
@@ -118,8 +137,9 @@ def _cyclic_smooth_vars(rhs: str) -> List[str]:
 # --------------------------------------------------------------------------- #
 # circ_lm — classical (parametric) circular regression
 # --------------------------------------------------------------------------- #
-def circ_lm(formula, data, type="cl", order=1, init=None, tol=1e-8,
-            maxit=100, verbose=False):
+def circ_lm(
+    formula, data, type="cl", order=1, init=None, tol=1e-8, maxit=100, verbose=False
+):
     """Classical (parametric) circular regression.
 
     ``type`` selects the fit (hyphenated spellings such as ``"c-l"`` accepted):
@@ -215,11 +235,13 @@ def _circ_lm_type(type) -> str:
 
 def _circ_lm_no_smooth(formulas) -> None:
     """Reject mgcv smooth constructors on any RHS — circ_lm is parametric only."""
-    bad = sorted({
-        m.group(0).split("(")[0].strip()
-        for f in formulas
-        for m in _SMOOTH_RE.finditer(f.split("~", 1)[1] if "~" in f else f)
-    })
+    bad = sorted(
+        {
+            m.group(0).split("(")[0].strip()
+            for f in formulas
+            for m in _SMOOTH_RE.finditer(f.split("~", 1)[1] if "~" in f else f)
+        }
+    )
     if bad:
         terms = ", ".join(f"{b}()" for b in bad)
         raise ValueError(
@@ -268,8 +290,7 @@ def _circ_lm_one_predictor(formula, data):
     if len(vars_) != 1:
         found = ", ".join(repr(v) for v in vars_) if vars_ else "none"
         raise ValueError(
-            "circ_lm(type='cc') takes exactly one angular predictor; got "
-            f"{found}."
+            f"circ_lm(type='cc') takes exactly one angular predictor; got {found}."
         )
     var = vars_[0]
     y = np.asarray(data[resp].to_numpy(), dtype=float)
@@ -343,20 +364,29 @@ def _circ_lm_cl(formulas, data, init, tol, maxit, verbose) -> dict:
     # and circ_check can place the residual-vs-covariate panel.
     rhs_vars = _circ_lm_rhs_vars([mu_f, kappa_f], data)
     frame = pl.DataFrame(
-        {**{v: np.asarray(data[v].to_numpy(), dtype=float) for v in rhs_vars},
-         response: theta}
+        {
+            **{v: np.asarray(data[v].to_numpy(), dtype=float) for v in rhs_vars},
+            response: theta,
+        }
     )
-    fit.update({
-        "model": model, "n": n, "npar": npar,
-        "aic": -2.0 * fit["loglik"] + 2.0 * npar,
-        "bic": -2.0 * fit["loglik"] + np.log(n) * npar,
-        "response": response, "mu_formula": mu_f, "kappa_formula": kappa_f,
-        "mu_terms": mu_terms, "kappa_terms": kappa_terms,
-        "fitted": fitted,
-        "residuals": np.angle(np.exp(1j * (theta - fitted))),
-        "frame": frame,
-        "covariate": rhs_vars[0] if len(rhs_vars) == 1 else None,
-    })
+    fit.update(
+        {
+            "model": model,
+            "n": n,
+            "npar": npar,
+            "aic": -2.0 * fit["loglik"] + 2.0 * npar,
+            "bic": -2.0 * fit["loglik"] + np.log(n) * npar,
+            "response": response,
+            "mu_formula": mu_f,
+            "kappa_formula": kappa_f,
+            "mu_terms": mu_terms,
+            "kappa_terms": kappa_terms,
+            "fitted": fitted,
+            "residuals": np.angle(np.exp(1j * (theta - fitted))),
+            "frame": frame,
+            "covariate": rhs_vars[0] if len(rhs_vars) == 1 else None,
+        }
+    )
     return fit
 
 
@@ -404,8 +434,9 @@ def _circ_lm_cl_fit(theta, x, model, init, tol, maxit, verbose) -> dict:
 
         elif model == "kappa":
             kappa = np.exp(np.clip(alpha + x @ gamma, -50.0, 50.0))
-            mu = np.arctan2(np.sum(kappa * np.sin(theta)),
-                            np.sum(kappa * np.cos(theta)))
+            mu = np.arctan2(
+                np.sum(kappa * np.sin(theta)), np.sum(kappa * np.cos(theta))
+            )
             a1p = np.maximum(A1prime(kappa), 1e-12)
             y = (np.cos(theta - mu) - A1(kappa)) / (a1p * kappa)
             w = kappa**2 * a1p
@@ -418,13 +449,13 @@ def _circ_lm_cl_fit(theta, x, model, init, tol, maxit, verbose) -> dict:
             kappa = np.exp(np.clip(alpha + x @ gamma, -50.0, 50.0))
             eta = x @ beta
             rdev = theta - 2.0 * np.arctan(eta)
-            mu = np.arctan2(np.sum(kappa * np.sin(rdev)),
-                            np.sum(kappa * np.cos(rdev)))
+            mu = np.arctan2(np.sum(kappa * np.sin(rdev)), np.sum(kappa * np.cos(rdev)))
             g = (2.0 / (1.0 + eta**2))[:, None] * x
             wb = kappa * A1(kappa)
             gtwg = g.T @ (wb[:, None] * g)
-            beta = _safe_solve(gtwg + ridge_x,
-                               g.T @ (kappa * np.sin(rdev - mu)) + gtwg @ beta)
+            beta = _safe_solve(
+                gtwg + ridge_x, g.T @ (kappa * np.sin(rdev - mu)) + gtwg @ beta
+            )
             a1p = np.maximum(A1prime(kappa), 1e-12)
             y = (np.cos(rdev - mu) - A1(kappa)) / (a1p * kappa)
             wg = kappa**2 * a1p
@@ -445,7 +476,8 @@ def _circ_lm_cl_fit(theta, x, model, init, tol, maxit, verbose) -> dict:
         warnings.warn(
             f"circ_lm(type='cl') did not converge in {maxit} iterations "
             f"(last diff={diff:.2e}, tol={tol:.2e}).",
-            RuntimeWarning, stacklevel=2,
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     # mu/kappa/loglik evaluated at the converged coefficients (the loop carries
@@ -466,8 +498,12 @@ def _circ_lm_cl_fit(theta, x, model, init, tol, maxit, verbose) -> dict:
     return {
         "mu": float(mu),
         "kappa": float(kappa) if np.ndim(kappa) == 0 else kappa,
-        "beta": beta, "alpha": float(alpha), "gamma": gamma,
-        "loglik": float(ll), "iter": it, "converged": bool(converged),
+        "beta": beta,
+        "alpha": float(alpha),
+        "gamma": gamma,
+        "loglik": float(ll),
+        "iter": it,
+        "converged": bool(converged),
         **se,
     }
 
@@ -481,8 +517,13 @@ def _circ_lm_cl_se(theta, x, model, beta, alpha, gamma, kappa, mu) -> dict:
     x1 = np.column_stack((np.ones(n), x))
     # Vbeta / Vag are the coefficient covariances the flat-panel delta-method
     # bands need (G Vbeta Gᵀ for the mean direction; Z Vag Zᵀ on the log-κ scale).
-    out: dict = {"se_beta": None, "se_alpha": None, "se_gamma": None,
-                 "Vbeta": None, "Vag": None}
+    out: dict = {
+        "se_beta": None,
+        "se_alpha": None,
+        "se_gamma": None,
+        "Vbeta": None,
+        "Vag": None,
+    }
     if model == "mean":
         eta = x @ beta
         g = (2.0 / (1.0 + eta**2))[:, None] * x
@@ -491,8 +532,9 @@ def _circ_lm_cl_se(theta, x, model, beta, alpha, gamma, kappa, mu) -> dict:
         out["Vbeta"] = cov_b
         out["se_beta"] = np.sqrt(np.clip(np.diag(cov_b), 0.0, None))
         out["se_mu"] = 1.0 / np.sqrt(max((n - p) * w, 1e-12))
-        out["se_kappa"] = float(np.sqrt(
-            1.0 / max(n * (1 - A1(kappa) ** 2 - A1(kappa) / kappa), 1e-12)))
+        out["se_kappa"] = float(
+            np.sqrt(1.0 / max(n * (1 - A1(kappa) ** 2 - A1(kappa) / kappa), 1e-12))
+        )
     else:
         if model == "mixed":
             eta = x @ beta
@@ -505,8 +547,7 @@ def _circ_lm_cl_se(theta, x, model, beta, alpha, gamma, kappa, mu) -> dict:
         out["Vag"] = cov_ag
         out["se_alpha"] = float(np.sqrt(max(cov_ag[0, 0], 0.0)))
         out["se_gamma"] = np.sqrt(np.clip(np.diag(cov_ag)[1:], 0.0, None))
-        out["se_mu"] = 1.0 / np.sqrt(
-            max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12))
+        out["se_mu"] = 1.0 / np.sqrt(max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12))
         quad = np.einsum("ij,ij->i", x1 @ cov_ag, x1)
         out["se_kappa"] = kappa * np.sqrt(np.clip(quad, 0.0, None))
     return out
@@ -536,7 +577,8 @@ def _circ_lm_cc(formulas, data, order) -> dict:
         warnings.warn(
             "mean residual cosine is negative; residuals anti-align with the fit "
             "(kappa clamped to 0). Check for misspecification.",
-            UserWarning, stacklevel=3,
+            UserWarning,
+            stacklevel=3,
         )
     kappa = float(A1inv(a_k))
 
@@ -554,12 +596,22 @@ def _circ_lm_cc(formulas, data, order) -> dict:
     p_values = np.array([1.0 - chi2.cdf(t1, 2), 1.0 - chi2.cdf(t2, 2)], dtype=float)
 
     return {
-        "var": var, "response": response, "order": int(order), "n": n,
-        "coefficients": {"cos": np.asarray(cos_lm.bhat.row(0), dtype=float),
-                         "sin": np.asarray(sin_lm.bhat.row(0), dtype=float)},
-        "rho": rho, "A_k": a_k, "kappa": kappa,
-        "fitted": fitted, "residuals": residuals, "p_values": p_values,
-        "cos_lm": cos_lm, "sin_lm": sin_lm,
+        "var": var,
+        "response": response,
+        "order": int(order),
+        "n": n,
+        "coefficients": {
+            "cos": np.asarray(cos_lm.bhat.row(0), dtype=float),
+            "sin": np.asarray(sin_lm.bhat.row(0), dtype=float),
+        },
+        "rho": rho,
+        "A_k": a_k,
+        "kappa": kappa,
+        "fitted": fitted,
+        "residuals": residuals,
+        "p_values": p_values,
+        "cos_lm": cos_lm,
+        "sin_lm": sin_lm,
         "frame": pl.DataFrame({var: x, response: y}),
         "covariate": var,
     }
@@ -609,13 +661,23 @@ def _circ_lm_harmonics_table(fit) -> list:
         if cov is not None and amp > 0 and cn in idx and sn in idx:
             ic, isn = idx[cn], idx[sn]
             vc, vs, cs = cov[ic, ic], cov[isn, isn], cov[ic, isn]
-            se_amp = float(np.sqrt(max((a * a * vc + 2 * a * b * cs
-                                        + b * b * vs) / amp**2, 0.0)))
-            se_phase = float(np.sqrt(max((b * b * vc - 2 * a * b * cs
-                                          + a * a * vs) / amp**4, 0.0)))
-        rows.append({"term": expr, "cos": float(a), "sin": float(b),
-                     "amplitude": amp, "phase": float(np.arctan2(b, a)),
-                     "se_amplitude": se_amp, "se_phase": se_phase})
+            se_amp = float(
+                np.sqrt(max((a * a * vc + 2 * a * b * cs + b * b * vs) / amp**2, 0.0))
+            )
+            se_phase = float(
+                np.sqrt(max((b * b * vc - 2 * a * b * cs + a * a * vs) / amp**4, 0.0))
+            )
+        rows.append(
+            {
+                "term": expr,
+                "cos": float(a),
+                "sin": float(b),
+                "amplitude": amp,
+                "phase": float(np.arctan2(b, a)),
+                "se_amplitude": se_amp,
+                "se_phase": se_phase,
+            }
+        )
     return rows
 
 
@@ -627,8 +689,7 @@ def _circ_lm_lc(formulas, data) -> dict:
     least-squares fit metrics."""
     if len(formulas) != 1:
         raise ValueError(
-            "circ_lm(type='lc') takes a single formula, e.g. "
-            "'y ~ cos(phi) + sin(phi)'."
+            "circ_lm(type='lc') takes a single formula, e.g. 'y ~ cos(phi) + sin(phi)'."
         )
     formula = formulas[0]
     response = formula.split("~", 1)[0].strip()
@@ -644,13 +705,21 @@ def _circ_lm_lc(formulas, data) -> dict:
         x = np.mod(np.asarray(data[var].to_numpy(), dtype=float), 2.0 * np.pi)
         frame = pl.DataFrame({var: x, response: yhat + resid})
     return {
-        "lm": fit, "var": var, "response": response,
-        "coefficients": dict(zip(fit.column_names,
-                                 np.asarray(fit.bhat.row(0), dtype=float))),
+        "lm": fit,
+        "var": var,
+        "response": response,
+        "coefficients": dict(
+            zip(fit.column_names, np.asarray(fit.bhat.row(0), dtype=float))
+        ),
         "harmonics": _circ_lm_harmonics_table(fit),
-        "sigma": float(fit.sigma), "r_squared": float(fit.r_squared),
-        "aic": float(fit.AIC), "bic": float(fit.BIC),
-        "fitted": yhat, "residuals": resid, "frame": frame, "covariate": var,
+        "sigma": float(fit.sigma),
+        "r_squared": float(fit.r_squared),
+        "aic": float(fit.AIC),
+        "bic": float(fit.BIC),
+        "fitted": yhat,
+        "residuals": resid,
+        "frame": frame,
+        "covariate": var,
     }
 
 
@@ -662,8 +731,20 @@ def _lss_catalog() -> dict:
     (``"vmlss"`` — shared with the circlss R package) and the distribution
     name (``"vonmises"``)."""
     cat: dict = {}
-    for fam in (vmlss, wclss, pnlss, cardlss, cartlss, wnlss,
-                jplss, ssjplss, kjlss, vmftlss, ajplss, ibslss):
+    for fam in (
+        vmlss,
+        wclss,
+        pnlss,
+        cardlss,
+        cartlss,
+        wnlss,
+        jplss,
+        ssjplss,
+        kjlss,
+        vmftlss,
+        ajplss,
+        ibslss,
+    ):
         cat[fam.name.lower()] = fam
         cat[fam.dist.name.lower()] = fam
     return cat
@@ -748,8 +829,7 @@ def _resolve_cyclic_knots_data(formulas, data, user_knots):
     return knots or None
 
 
-def circ_gam(formula, data, family=None, knots=None, method="REML",
-             **gam_kwargs):
+def circ_gam(formula, data, family=None, knots=None, method="REML", **gam_kwargs):
     """Circular GAM — ``hea.models.gam`` with circular defaults.
 
     A deliberately thin front door: everything forwards to
@@ -833,8 +913,7 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
     df = _to_polars(data)
     merged = _resolve_cyclic_knots_data(formulas, df, knots)
     payload = formulas if len(formulas) > 1 else formulas[0]
-    fit = gam(payload, df, family=fam,
-              knots=merged, method=method, **gam_kwargs)
+    fit = gam(payload, df, family=fam, knots=merged, method=method, **gam_kwargs)
     # reclass in place into the circular result object (the Python analog of R's
     # `class(fit) <- c("circ_gam", class(fit))`): every hea gam attribute/method
     # stays directly reachable, plus the circular circ_plot/circ_check/circ_resid.
@@ -882,11 +961,14 @@ def _watson_u2(u):
     n = u.size
     i = np.arange(1, n + 1)
     ubar = float(u.mean())
-    stat = float(np.sum((u - (2 * i - 1) / (2 * n)) ** 2)
-                 - n * (ubar - 0.5) ** 2 + 1.0 / (12 * n))
+    stat = float(
+        np.sum((u - (2 * i - 1) / (2 * n)) ** 2)
+        - n * (ubar - 0.5) ** 2
+        + 1.0 / (12 * n)
+    )
     p = 0.0
     for m in range(1, 51):
-        term = (-1) ** (m - 1) * np.exp(-2.0 * m * m * np.pi ** 2 * stat)
+        term = (-1) ** (m - 1) * np.exp(-2.0 * m * m * np.pi**2 * stat)
         p += term
         if abs(term) < 1e-12:
             break
@@ -941,29 +1023,32 @@ class _CircRegressionMixin:
         elif type == "pearson":
             fn = parts.get("resid_pearson")
             if fn is None:
-                raise ValueError(
-                    "Pearson residuals are not available for this fit.")
+                raise ValueError("Pearson residuals are not available for this fit.")
             r = fn()
         elif type == "quantile":
             r = self._quantile_resid(parts, scale)
         else:
             raise ValueError(
                 "type must be 'quantile', 'deviance', 'angular' or 'pearson'; "
-                f"got {type!r}.")
-        return _ResidArray(np.asarray(r, dtype=float), type=type,
-                           scale=scale if type == "quantile" else None)
+                f"got {type!r}."
+            )
+        return _ResidArray(
+            np.asarray(r, dtype=float),
+            type=type,
+            scale=scale if type == "quantile" else None,
+        )
 
     def _quantile_resid(self, parts, scale):
         cdf = parts.get("cdf")
         if cdf is None:
             raise ValueError(
                 f"no distribution function for {parts['family_label']}; cannot "
-                "form a quantile residual.")
+                "form a quantile residual."
+            )
         u = np.clip(np.asarray(cdf(), dtype=float), 1e-6, 1.0 - 1e-6)
         return norm.ppf(u) if scale == "normal" else u
 
-    def circ_check(self, which=None, nsim=1000, rug=True, seed=None,
-                   figsize=None):
+    def circ_check(self, which=None, nsim=1000, rug=True, seed=None, figsize=None):
         """Diagnostic-panel display (the circular ``gam.check`` / ``plot.lm``
         analogue, and the companion to ``circ_plot``): lays out the residual
         panel grid, prints the goodness-of-fit table, and returns the matplotlib
@@ -979,30 +1064,36 @@ class _CircRegressionMixin:
         parts = self._resid_parts()
         keys, warn_rose = _check_keys(which, parts["response_circular"])
         if warn_rose:
-            print("circ_check: panel 'rose' needs a circular response; "
-                  "dropping it.")
+            print("circ_check: panel 'rose' needs a circular response; dropping it.")
         lev = self._leverage() if "cook" in keys else None
         if "cook" in keys and lev is None:
-            print("circ_check: per-observation leverage is unavailable for this "
-                  "fit; dropping the 'cook' panel.")
+            print(
+                "circ_check: per-observation leverage is unavailable for this "
+                "fit; dropping the 'cook' panel."
+            )
             keys = [k for k in keys if k != "cook"]
         ang = parts["resid_response"]()
         u = self._quantile_resid(parts, "uniform")
         watson = _watson_u2(u)
-        dev = (parts["resid_deviance"]()
-               if any(k in keys for k in ("qq.norm", "scaleloc", "hist", "cook"))
-               else None)
+        dev = (
+            parts["resid_deviance"]()
+            if any(k in keys for k in ("qq.norm", "scaleloc", "hist", "cook"))
+            else None
+        )
         cinfo = self._check_cov() or {
-            "name": "fitted direction", "values": parts["fitted_dir"],
-            "circular": parts["response_circular"]}
+            "name": "fitted direction",
+            "values": parts["fitted_dir"],
+            "circular": parts["response_circular"],
+        }
         self._print_check_table(parts, ang, watson)
 
         ncol = int(np.ceil(np.sqrt(len(keys))))
         nrow = int(np.ceil(len(keys) / ncol))
         fig = plt.figure(figsize=figsize or (4.8 * ncol, 4.2 * nrow))
         for i, key in enumerate(keys):
-            ax = fig.add_subplot(nrow, ncol, i + 1,
-                                 projection="polar" if key == "rose" else None)
+            ax = fig.add_subplot(
+                nrow, ncol, i + 1, projection="polar" if key == "rose" else None
+            )
             if key == "rose":
                 _panel_rose(ax, ang)
             elif key == "obsfit":
@@ -1014,8 +1105,9 @@ class _CircRegressionMixin:
             elif key == "qq.norm":
                 _panel_qqnorm(ax, dev)
             elif key == "scaleloc":
-                _panel_scaleloc(ax, dev, parts["fitted_dir"],
-                                parts["response_circular"])
+                _panel_scaleloc(
+                    ax, dev, parts["fitted_dir"], parts["response_circular"]
+                )
             elif key == "hist":
                 _panel_hist(ax, dev)
             elif key == "cook":
@@ -1030,50 +1122,59 @@ class _CircRegressionMixin:
         print(f"\ncirc_check: {parts['family_label']}   n = {parts['n']}")
         if parts["response_circular"]:
             sb, cb = float(np.mean(np.sin(ang))), float(np.mean(np.cos(ang)))
-            print(f"  residual mean direction = {np.arctan2(sb, cb):+.4f} rad"
-                  f"   resultant length = {np.hypot(sb, cb):.4f}")
+            print(
+                f"  residual mean direction = {np.arctan2(sb, cb):+.4f} rad"
+                f"   resultant length = {np.hypot(sb, cb):.4f}"
+            )
         else:
-            print(f"  residual mean = {np.mean(ang):+.4f}   "
-                  f"sd = {np.std(ang, ddof=1):.4f}")
-        print(f"  Watson U2 (PIT uniformity) = {watson['stat']:.4f}   "
-              f"p = {watson['p']:.4f}")
+            print(
+                f"  residual mean = {np.mean(ang):+.4f}   "
+                f"sd = {np.std(ang, ddof=1):.4f}"
+            )
+        print(
+            f"  Watson U2 (PIT uniformity) = {watson['stat']:.4f}   "
+            f"p = {watson['p']:.4f}"
+        )
         backend = self._check_backend()
         if "edf" in backend:
             print(f"  effective degrees of freedom = {backend['edf']:.3f}")
         elif "p_values" in backend and backend["p_values"] is not None:
             pv = backend["p_values"]
-            print(f"  higher-order harmonic test: p(cos) = {pv[0]:.4f}   "
-                  f"p(sin) = {pv[1]:.4f}")
+            print(
+                f"  higher-order harmonic test: p(cos) = {pv[0]:.4f}   "
+                f"p(sin) = {pv[1]:.4f}"
+            )
         elif "r_squared" in backend:
-            print(f"  R-squared = {backend['r_squared']:.4f}   "
-                  f"residual sigma = {backend['sigma']:.4f}")
+            print(
+                f"  R-squared = {backend['r_squared']:.4f}   "
+                f"residual sigma = {backend['sigma']:.4f}"
+            )
         elif "converged" in backend:
             kap = backend["kappa"]
-            kstr = (f"= {kap:.3f}" if np.isscalar(kap)
-                    else f"in [{kap[0]:.3f}, {kap[1]:.3f}]")
+            kstr = (
+                f"= {kap:.3f}"
+                if np.isscalar(kap)
+                else f"in [{kap[0]:.3f}, {kap[1]:.3f}]"
+            )
             print(f"  converged = {backend['converged']}   kappa {kstr}")
 
-    def circ_plot(self, view="flat", n=200, se=True, rug=True, figsize=None):
+    def circ_plot(self, view="both", n=200, se=True, rug=True, figsize=None):
         """Circular effect display — the geometry-aware counterpart to the
-        per-term plots. ``view``: ``"flat"`` (default) draws one response-scale
-        panel per modelled parameter against the covariate (a circular location
-        broken at the ±π jump, a 2-SE band, the observed responses overlaid);
-        ``"geometry"`` draws the fitted location curve on its natural surface — a
-        cylinder (circular~linear), torus (circular~circular) or upright can
-        (linear~circular); ``"both"`` places the surface and the location panel
-        side by side. Returns the matplotlib Figure. A fit with no single
-        covariate axis defers (to hea's per-term ``plot`` for a CircGAM, else a
-        message pointing at ``coef``/``predict``/``summary``)."""
+        per-term plots. ``view``: ``"both"`` (default) places the fitted location
+        curve on its natural surface beside the flat location panel;
+        ``"geometry"`` draws only that surface — a cylinder (circular~linear),
+        torus (circular~circular) or upright can (linear~circular); ``"flat"``
+        draws one response-scale panel per modelled parameter against the
+        covariate (a circular location broken at the ±π jump, a 2-SE band, the
+        observed responses overlaid). A surface-less fit falls back to the flat
+        view. Returns the matplotlib Figure. A fit with no single covariate axis
+        defers (to hea's per-term ``plot`` for a CircGAM, else a message pointing
+        at ``coef``/``predict``/``summary``)."""
         import matplotlib.pyplot as plt
 
         kind, resp_circular, cov_circular, cov = self._geometry()
         if cov is None:
-            if isinstance(self, CircGAM):
-                return self.plot()
-            print("circ_plot: the geometry/flat views need exactly one "
-                  "covariate; this is a multi-covariate fit. Use "
-                  "coef()/predict()/summary().")
-            return None
+            return self._plot_fallback()
         xv = np.asarray(self._model_frame()[cov].to_numpy(), dtype=float)
         if cov_circular:
             rng = (-np.pi, np.pi) if np.nanmin(xv) < 0 else (0.0, 2.0 * np.pi)
@@ -1083,14 +1184,19 @@ class _CircRegressionMixin:
         nd = pl.DataFrame({cov: grid})
         panels = self._flat_panels(grid, nd)
         if panels is None:
-            print("circ_plot: this is a multi-covariate cl fit; use "
-                  "coef()/predict()/summary().")
+            print(
+                "circ_plot: this is a multi-covariate cl fit; use "
+                "coef()/predict()/summary()."
+            )
             return None
         rv = np.asarray(self._response_values(), dtype=float)
         yobs = _wrap(rv) if resp_circular else rv
         surface = {"cl": "cylinder", "cc": "torus", "lc": "can"}.get(kind)
-        surf_idx = (next((i for i, p in enumerate(panels) if p.get("circular")), 0)
-                    if resp_circular else 0)
+        surf_idx = (
+            next((i for i, p in enumerate(panels) if p.get("circular")), 0)
+            if resp_circular
+            else 0
+        )
         if view != "flat" and surface is None:
             print("circ_plot: no surface for this fit; drawing the flat view.")
             view = "flat"
@@ -1100,13 +1206,20 @@ class _CircRegressionMixin:
             ncol = int(np.ceil(np.sqrt(npan)))
             nrow = int(np.ceil(npan / ncol))
             fig, axes = plt.subplots(
-                nrow, ncol, figsize=figsize or (5.0 * ncol, 4.0 * nrow),
-                squeeze=False)
+                nrow, ncol, figsize=figsize or (5.0 * ncol, 4.0 * nrow), squeeze=False
+            )
             axes = axes.ravel()
             for i, p in enumerate(panels):
-                _flat_panel(axes[i], grid, p, cov, se,
-                            xv if i == surf_idx else None,
-                            yobs if i == surf_idx else None, rug)
+                _flat_panel(
+                    axes[i],
+                    grid,
+                    p,
+                    cov,
+                    se,
+                    xv if i == surf_idx else None,
+                    yobs if i == surf_idx else None,
+                    rug,
+                )
             for j in range(npan, len(axes)):
                 axes[j].axis("off")
             fig.tight_layout()
@@ -1153,23 +1266,30 @@ class CircGAM(_CircRegressionMixin, gam):
         if isinstance(fam, CircularLL):
             direction = np.asarray(fam._fitted_direction(fm), dtype=float)
             if getattr(fam.dist, "name", "") == "vonmises":
+
                 def cdf():
                     return _pvonmises(y, direction, fm[:, 1])
             else:
                 params = {
-                    nm: (np.mod(fm[:, j], 2.0 * np.pi)
-                         if fam.links[j].name == "tanhalf" else fm[:, j])
+                    nm: (
+                        np.mod(fm[:, j], 2.0 * np.pi)
+                        if fam.links[j].name == "tanhalf"
+                        else fm[:, j]
+                    )
                     for j, nm in enumerate(fam.params)
                 }
 
                 def cdf():
                     return np.clip(
-                        np.asarray(fam.dist.cdf(y, **params), dtype=float),
-                        0.0, 1.0)
+                        np.asarray(fam.dist.cdf(y, **params), dtype=float), 0.0, 1.0
+                    )
 
             return {
-                "y": _wrap(y), "response_circular": True,
-                "fitted_dir": _wrap(direction), "n": n, "family_label": fam.name,
+                "y": _wrap(y),
+                "response_circular": True,
+                "fitted_dir": _wrap(direction),
+                "n": n,
+                "family_label": fam.name,
                 "resid_response": lambda: fam.residuals(y, fm, type="response"),
                 "resid_deviance": lambda: fam.residuals(y, fm, type="deviance"),
                 "resid_pearson": lambda: fam.residuals(y, fm, type="pearson"),
@@ -1180,7 +1300,10 @@ class CircGAM(_CircRegressionMixin, gam):
         mean = fm[:, 0]
         sigma = np.sqrt(float(getattr(self, "scale", 1.0) or 1.0))
         return {
-            "y": y, "response_circular": False, "fitted_dir": mean, "n": n,
+            "y": y,
+            "response_circular": False,
+            "fitted_dir": mean,
+            "n": n,
             "family_label": getattr(fam, "name", type(fam).__name__),
             "resid_response": lambda: _ravel(self.residuals_of("response")),
             "resid_deviance": lambda: _ravel(self.residuals_of("deviance")),
@@ -1199,18 +1322,25 @@ class CircGAM(_CircRegressionMixin, gam):
         return self.data
 
     def _response_values(self):
-        return np.asarray(self.data[self._response_name()].to_numpy(),
-                          dtype=float)
+        return np.asarray(self.data[self._response_name()].to_numpy(), dtype=float)
+
+    def _plot_fallback(self):
+        # no single covariate axis for the circular display: defer to hea's
+        # per-term plot.gam on the un-reclassed object (mgcv's term plots).
+        return self.plot()
 
     def _covariate(self):
-        fl = self.formula if isinstance(self.formula, (list, tuple)) else \
-            [self.formula]
+        fl = self.formula if isinstance(self.formula, (list, tuple)) else [self.formula]
         resp = self._response_name()
         cols = set(self.data.columns)
         seen, out = set(), []
         for f in fl:
             rhs = f.split("~", 1)[1] if "~" in f else f
-            for tok in re.findall(r"[A-Za-z_]\w*", rhs):
+            # Unicode-aware identifier (matches Greek covariate names like ``θ``;
+            # forbids a leading digit) — an ASCII-only class would miss θ and
+            # leave the fit looking covariate-less, collapsing circ_plot to the
+            # mgcv term-plot fallback.
+            for tok in re.findall(r"[^\W\d_]\w*", rhs):
                 if tok in cols and tok != resp and tok not in seen:
                     seen.add(tok)
                     out.append(tok)
@@ -1220,12 +1350,10 @@ class CircGAM(_CircRegressionMixin, gam):
         fam = self.family
         resp_circular = isinstance(fam, CircularLL)
         cov = self._covariate()
-        fl = self.formula if isinstance(self.formula, (list, tuple)) else \
-            [self.formula]
+        fl = self.formula if isinstance(self.formula, (list, tuple)) else [self.formula]
         cyclic = set()
         for f in fl:
-            cyclic |= set(_cyclic_smooth_vars(
-                f.split("~", 1)[1] if "~" in f else f))
+            cyclic |= set(_cyclic_smooth_vars(f.split("~", 1)[1] if "~" in f else f))
         cov_circular = cov is not None and cov in cyclic
         if cov is None:
             kind = None
@@ -1242,25 +1370,38 @@ class CircGAM(_CircRegressionMixin, gam):
     def _flat_panels(self, grid, nd):
         fam = self.family
         if not isinstance(fam, CircularLL):
-            return [{"name": self._response_name(), "circular": False,
-                     "mid": _ravel(self.predict(nd, type="response")),
-                     "lo": None, "hi": None}]
+            # linear-response gam (e.g. gaussian on a cyclic covariate): the
+            # response-scale mean with its 2-SE band.
+            pr = self.predict(nd, type="response", se_fit=True)
+            mid = pr["fit"].to_numpy()
+            se = pr["se.fit"].to_numpy()
+            return [
+                {
+                    "name": self._response_name(),
+                    "circular": False,
+                    "mid": mid,
+                    "lo": mid - 2.0 * se,
+                    "hi": mid + 2.0 * se,
+                }
+            ]
         pr = self.predict(nd, type="link", se_fit=True).to_numpy()
         nlp = fam.n_lp
-        eta, seta = pr[:, :nlp], pr[:, nlp:2 * nlp]
+        eta, seta = pr[:, :nlp], pr[:, nlp : 2 * nlp]
         resp_fit = np.empty((nd.height, nlp))
         panels = []
         for j in range(nlp):
             li = fam.links[j].linkinv
             mid = np.asarray(li(eta[:, j]), dtype=float)
             resp_fit[:, j] = mid
-            panels.append({
-                "name": fam.params[j],
-                "circular": fam.links[j].name == "tanhalf",
-                "mid": mid,
-                "lo": np.asarray(li(eta[:, j] - 2 * seta[:, j]), dtype=float),
-                "hi": np.asarray(li(eta[:, j] + 2 * seta[:, j]), dtype=float),
-            })
+            panels.append(
+                {
+                    "name": fam.params[j],
+                    "circular": fam.links[j].name == "tanhalf",
+                    "mid": mid,
+                    "lo": np.asarray(li(eta[:, j] - 2 * seta[:, j]), dtype=float),
+                    "hi": np.asarray(li(eta[:, j] + 2 * seta[:, j]), dtype=float),
+                }
+            )
         # derived mean direction (e.g. pnlss's atan2(mu2, mu1)): a function of
         # two LPs at once, so its band is the joint delta-method interval.
         loc = fam.dist.params_by_role().get("location", [])
@@ -1268,8 +1409,15 @@ class CircGAM(_CircRegressionMixin, gam):
             i1, i2 = (fam.params.index(loc[0]), fam.params.index(loc[1]))
             mid = np.arctan2(resp_fit[:, i2], resp_fit[:, i1])
             sed = self._direction_band(nd, resp_fit[:, i1], resp_fit[:, i2])
-            panels.append({"name": "direction", "circular": True, "mid": mid,
-                           "lo": mid - 2 * sed, "hi": mid + 2 * sed})
+            panels.append(
+                {
+                    "name": "direction",
+                    "circular": True,
+                    "mid": mid,
+                    "lo": mid - 2 * sed,
+                    "hi": mid + 2 * sed,
+                }
+            )
         return panels
 
     def _direction_band(self, nd, m1, m2):
@@ -1283,18 +1431,22 @@ class CircGAM(_CircRegressionMixin, gam):
         v11 = np.sum((x1 @ vp[np.ix_(i1, i1)]) * x1, axis=1)
         v22 = np.sum((x2 @ vp[np.ix_(i2, i2)]) * x2, axis=1)
         v12 = np.sum((x1 @ vp[np.ix_(i1, i2)]) * x2, axis=1)
-        r2 = np.maximum(m1 ** 2 + m2 ** 2, 1e-8)
-        return np.sqrt(np.clip(m2**2 * v11 + m1**2 * v22 - 2 * m1 * m2 * v12,
-                               0.0, None)) / r2
+        r2 = np.maximum(m1**2 + m2**2, 1e-8)
+        return (
+            np.sqrt(np.clip(m2**2 * v11 + m1**2 * v22 - 2 * m1 * m2 * v12, 0.0, None))
+            / r2
+        )
 
     def _check_cov(self):
         cov = self._covariate()
         if cov is None:
             return None
         _, _, cov_circular, _ = self._geometry()
-        return {"name": cov,
-                "values": np.asarray(self.data[cov].to_numpy(), dtype=float),
-                "circular": cov_circular}
+        return {
+            "name": cov,
+            "values": np.asarray(self.data[cov].to_numpy(), dtype=float),
+            "circular": cov_circular,
+        }
 
     def _leverage(self):
         # a general-family GAM exposes no per-observation hat (mgcv/hea); the
@@ -1302,8 +1454,10 @@ class CircGAM(_CircRegressionMixin, gam):
         # cook panel is dropped (R-faithful).
         h = getattr(self, "hat", None)
         if h is not None and np.asarray(h).size:
-            return {"h": np.asarray(h, dtype=float),
-                    "p": float(np.sum(np.asarray(self.edf, dtype=float)))}
+            return {
+                "h": np.asarray(h, dtype=float),
+                "p": float(np.sum(np.asarray(self.edf, dtype=float))),
+            }
         return None
 
 
@@ -1350,8 +1504,9 @@ class CircLM(_CircRegressionMixin):
     def _parts_vm(self):
         y = self._obs_response()
         direction = np.asarray(self.fitted, dtype=float)
-        kappa = np.broadcast_to(np.asarray(self.kappa, dtype=float),
-                                y.shape).astype(float)
+        kappa = np.broadcast_to(np.asarray(self.kappa, dtype=float), y.shape).astype(
+            float
+        )
         yw, dw = _wrap(y), _wrap(direction)
 
         def ang():
@@ -1360,7 +1515,8 @@ class CircLM(_CircRegressionMixin):
         def dev():
             d = ang()
             return np.sign(np.sin(d)) * np.sqrt(
-                np.clip(2.0 * kappa * (1.0 - np.cos(d)), 0.0, None))
+                np.clip(2.0 * kappa * (1.0 - np.cos(d)), 0.0, None)
+            )
 
         def pear():
             d = ang()
@@ -1369,9 +1525,14 @@ class CircLM(_CircRegressionMixin):
             return np.sin(d) / np.sqrt(v)
 
         return {
-            "y": yw, "response_circular": True, "fitted_dir": dw, "n": y.size,
+            "y": yw,
+            "response_circular": True,
+            "fitted_dir": dw,
+            "n": y.size,
             "family_label": f"circ_lm:{self.type}",
-            "resid_response": ang, "resid_deviance": dev, "resid_pearson": pear,
+            "resid_response": ang,
+            "resid_deviance": dev,
+            "resid_pearson": pear,
             "cdf": lambda: _pvonmises(y, direction, kappa),
         }
 
@@ -1380,8 +1541,11 @@ class CircLM(_CircRegressionMixin):
         resid = np.asarray(self.residuals, dtype=float)
         sigma = float(self.sigma)
         return {
-            "y": fit + resid, "response_circular": False, "fitted_dir": fit,
-            "n": fit.size, "family_label": "circ_lm:lc",
+            "y": fit + resid,
+            "response_circular": False,
+            "fitted_dir": fit,
+            "n": fit.size,
+            "family_label": "circ_lm:lc",
             "resid_response": lambda: resid,
             "resid_deviance": lambda: resid / sigma,
             "resid_pearson": lambda: resid / sigma,
@@ -1394,10 +1558,12 @@ class CircLM(_CircRegressionMixin):
         if self.type == "lc":
             return {"r_squared": float(self.r_squared), "sigma": float(self.sigma)}
         kappa = np.asarray(self.kappa, dtype=float)
-        krange = (float(kappa) if kappa.size == 1
-                  else (float(np.min(kappa)), float(np.max(kappa))))
-        return {"converged": bool(self._fields.get("converged", True)),
-                "kappa": krange}
+        krange = (
+            float(kappa)
+            if kappa.size == 1
+            else (float(np.min(kappa)), float(np.max(kappa)))
+        )
+        return {"converged": bool(self._fields.get("converged", True)), "kappa": krange}
 
     # ---- plotting hooks (the mixin's circ_plot drives off these) --------- #
     def _model_frame(self):
@@ -1406,21 +1572,34 @@ class CircLM(_CircRegressionMixin):
     def _response_values(self):
         return np.asarray(self.frame[self.response].to_numpy(), dtype=float)
 
+    def _plot_fallback(self):
+        # no single covariate axis (a multi-covariate cl fit): there is no
+        # geometry/flat view to draw — point at the numeric accessors.
+        print(
+            "circ_plot: the geometry/flat views need exactly one covariate; "
+            "this is a multi-covariate fit. Use coef()/predict()/summary()."
+        )
+        return None
+
     def _geometry(self):
-        return (self.type, self.type in ("cl", "cc"),
-                self.type in ("cc", "lc"), self.covariate)
+        return (
+            self.type,
+            self.type in ("cl", "cc"),
+            self.type in ("cc", "lc"),
+            self.covariate,
+        )
 
     def _flat_panels(self, grid, nd):
         if self.covariate is None:
             return None
         if self.type == "lc":
-            return [{"name": self.response, "circular": False,
-                     **self._lc_loc(grid)}]
+            return [{"name": self.response, "circular": False, **self._lc_loc(grid)}]
         if self.type == "cc":
-            return [{"name": self.response, "circular": True,
-                     **self._cc_loc(grid)}]
-        return [{"name": self.response, "circular": True, **self._cl_mu(nd)},
-                {"name": "kappa", "circular": False, **self._cl_kappa(nd)}]
+            return [{"name": self.response, "circular": True, **self._cc_loc(grid)}]
+        return [
+            {"name": self.response, "circular": True, **self._cl_mu(nd)},
+            {"name": "kappa", "circular": False, **self._cl_kappa(nd)},
+        ]
 
     def _cl_mu(self, nd):
         """Fisher–Lee mean direction μ = μ0 + 2·atan(Xβ) with its delta-method
@@ -1428,10 +1607,10 @@ class CircLM(_CircRegressionMixin):
         xn, _ = _circ_lm_design(self.mu_formula, nd, self.response)
         eta = xn @ self.beta if xn.shape[1] else np.zeros(nd.height)
         mid = _wrap(self.mu + 2.0 * np.arctan(eta))
-        v_level = self.se_mu ** 2 if self.se_mu is not None else 0.0
+        v_level = self.se_mu**2 if self.se_mu is not None else 0.0
         vbeta = self._fields.get("Vbeta")
         if xn.shape[1] and vbeta is not None:
-            g = (2.0 / (1.0 + eta ** 2))[:, None] * xn
+            g = (2.0 / (1.0 + eta**2))[:, None] * xn
             v_beta = np.sum((g @ vbeta) * g, axis=1)
         else:
             v_beta = 0.0
@@ -1454,8 +1633,11 @@ class CircLM(_CircRegressionMixin):
             return {"mid": np.exp(eta), "lo": None, "hi": None}
         z1 = np.column_stack([np.ones(nd.height), zn])
         se_eta = np.sqrt(np.clip(np.sum((z1 @ vag) * z1, axis=1), 0.0, None))
-        return {"mid": np.exp(eta), "lo": np.exp(eta - 2.0 * se_eta),
-                "hi": np.exp(eta + 2.0 * se_eta)}
+        return {
+            "mid": np.exp(eta),
+            "lo": np.exp(eta - 2.0 * se_eta),
+            "hi": np.exp(eta + 2.0 * se_eta),
+        }
 
     def _cc_loc(self, grid):
         """Harmonic circular–circular location atan2(ŝ, ĉ) with the delta-method
@@ -1470,10 +1652,11 @@ class CircLM(_CircRegressionMixin):
         rc, rs = _ravel(self.cos_lm.residuals), _ravel(self.sin_lm.residuals)
         shp = np.asarray(self.cos_lm.X.to_numpy()).shape
         scs = float(rc @ rs) / max(shp[0] - shp[1], 1)
-        cv = (vc / sc ** 2) * scs                       # leverage h = vc/σ_cos²
-        r2 = np.maximum(cf ** 2 + sf ** 2, 1e-8)
-        sd = np.sqrt(np.clip(
-            (sf**2 * vc + cf**2 * vs - 2 * sf * cf * cv) / r2 ** 2, 0.0, None))
+        cv = (vc / sc**2) * scs  # leverage h = vc/σ_cos²
+        r2 = np.maximum(cf**2 + sf**2, 1e-8)
+        sd = np.sqrt(
+            np.clip((sf**2 * vc + cf**2 * vs - 2 * sf * cf * cv) / r2**2, 0.0, None)
+        )
         mid = np.arctan2(sf, cf)
         return {"mid": mid, "lo": mid - 2.0 * sd, "hi": mid + 2.0 * sd}
 
@@ -1488,10 +1671,11 @@ class CircLM(_CircRegressionMixin):
     def _check_cov(self):
         if self.covariate is None:
             return None
-        return {"name": self.covariate,
-                "values": np.asarray(self.frame[self.covariate].to_numpy(),
-                                     dtype=float),
-                "circular": self.type in ("cc", "lc")}
+        return {
+            "name": self.covariate,
+            "values": np.asarray(self.frame[self.covariate].to_numpy(), dtype=float),
+            "circular": self.type in ("cc", "lc"),
+        }
 
     def _leverage(self):
         """Per-observation leverage for the influence panel: lc/cc are ordinary
@@ -1500,8 +1684,9 @@ class CircLM(_CircRegressionMixin):
         coefficient covariance."""
         if self.type == "cl":
             return self._cl_leverage()
-        x = np.asarray((self.lm if self.type == "lc" else self.cos_lm).X.to_numpy(),
-                       dtype=float)
+        x = np.asarray(
+            (self.lm if self.type == "lc" else self.cos_lm).X.to_numpy(), dtype=float
+        )
         hat = np.sum((x @ _safe_inverse(x.T @ x)) * x, axis=1)
         return {"h": np.clip(hat, 0.0, 1.0), "p": float(x.shape[1])}
 
@@ -1512,17 +1697,17 @@ class CircLM(_CircRegressionMixin):
             if not x.shape[1]:
                 return None
             eta = x @ self.beta
-            g = (2.0 / (1.0 + eta ** 2))[:, None] * x
+            g = (2.0 / (1.0 + eta**2))[:, None] * x
             kap = np.broadcast_to(np.asarray(self.kappa, dtype=float), eta.shape)
             h = (kap * A1(kap)) * np.sum((g @ self._fields["Vbeta"]) * g, axis=1)
             return {"h": np.asarray(h, dtype=float), "p": float(g.shape[1])}
         if self.model == "kappa" and self._fields.get("Vag") is not None:
             z, _ = _circ_lm_design(self.kappa_formula, fr, self.response)
             z1 = np.column_stack([np.ones(z.shape[0]), z])
-            kap = np.broadcast_to(np.asarray(self.kappa, dtype=float),
-                                  (z1.shape[0],))
-            h = (kap ** 2 * A1prime(kap)) * np.sum(
-                (z1 @ self._fields["Vag"]) * z1, axis=1)
+            kap = np.broadcast_to(np.asarray(self.kappa, dtype=float), (z1.shape[0],))
+            h = (kap**2 * A1prime(kap)) * np.sum(
+                (z1 @ self._fields["Vag"]) * z1, axis=1
+            )
             return {"h": np.asarray(h, dtype=float), "p": float(z1.shape[1])}
         return None
 
@@ -1559,7 +1744,8 @@ class CircLM(_CircRegressionMixin):
         if self.type == "cc":
             raise ValueError(
                 "type='cc' is two separate least-squares fits and has no single "
-                "log-likelihood.")
+                "log-likelihood."
+            )
         return float(self.loglik)
 
     @staticmethod
@@ -1570,27 +1756,31 @@ class CircLM(_CircRegressionMixin):
         se = np.atleast_1d(np.asarray(se, dtype=float))
         names = [str(nm) for nm in names]
         w = max([11, *(len(nm) for nm in names)])
-        print(f"{'':<{w}}  {'Estimate':>11}  {'Std. Error':>11}  "
-              f"{'z value':>9}  {'Pr(>|z|)':>10}")
+        print(
+            f"{'':<{w}}  {'Estimate':>11}  {'Std. Error':>11}  "
+            f"{'z value':>9}  {'Pr(>|z|)':>10}"
+        )
         for nm, e, s in zip(names, est, se):
             z = e / s if s and np.isfinite(s) and s > 0 else np.nan
             p = 2.0 * float(norm.cdf(-abs(z))) if np.isfinite(z) else np.nan
             stars = significance_code(p) if np.isfinite(p) else ""
-            print(f"{nm:<{w}}  {e:>11.5f}  {s:>11.5f}  {z:>9.3f}  "
-                  f"{p:>10.3g} {stars}")
+            print(f"{nm:<{w}}  {e:>11.5f}  {s:>11.5f}  {z:>9.3f}  {p:>10.3g} {stars}")
 
     def _print_harmonics(self):
         print("\nHarmonic amplitude / phase:")
-        hdr = (f"{'term':<16}  {'amplitude':>10}  {'se':>9}  "
-               f"{'phase':>10}  {'se':>9}")
+        hdr = f"{'term':<16}  {'amplitude':>10}  {'se':>9}  {'phase':>10}  {'se':>9}"
         print(hdr)
         print("-" * len(hdr))
         for h in self.harmonics:
-            print(f"{h['term']:<16}  {h['amplitude']:>10.4f}  "
-                  f"{h['se_amplitude']:>9.4f}  {h['phase']:>10.4f}  "
-                  f"{h['se_phase']:>9.4f}")
-        print("Phase in radians; SEs from the delta method on the (cos, sin) "
-              "coefficients.")
+            print(
+                f"{h['term']:<16}  {h['amplitude']:>10.4f}  "
+                f"{h['se_amplitude']:>9.4f}  {h['phase']:>10.4f}  "
+                f"{h['se_phase']:>9.4f}"
+            )
+        print(
+            "Phase in radians; SEs from the delta method on the (cos, sin) "
+            "coefficients."
+        )
 
     def summary(self):
         """Print the regression summary in the R ``print.circ_lm`` style shared
@@ -1604,7 +1794,7 @@ class CircLM(_CircRegressionMixin):
                 "mean": "Circular-linear regression (Fisher–Lee), mean direction",
                 "kappa": "Circular-linear regression (Fisher–Lee), concentration",
                 "mixed": "Circular-linear regression (Fisher–Lee), mean and "
-                         "concentration",
+                "concentration",
             }[self.model]
             print(f"\n{head}\n")
             if self.model in ("mean", "mixed"):
@@ -1615,25 +1805,28 @@ class CircLM(_CircRegressionMixin):
                 print("Concentration   log(kappa) = alpha + Z gamma:")
                 self._print_coefmat(
                     np.concatenate([[self.alpha], np.atleast_1d(self.gamma)]),
-                    np.concatenate([[self.se_alpha],
-                                    np.atleast_1d(self.se_gamma)]),
-                    ["(Intercept)", *self.kappa_terms])
+                    np.concatenate([[self.se_alpha], np.atleast_1d(self.se_gamma)]),
+                    ["(Intercept)", *self.kappa_terms],
+                )
                 print()
             kap = np.asarray(self.kappa, dtype=float)
             if kap.size == 1:
-                sk = (float(np.atleast_1d(self.se_kappa)[0])
-                      if self.se_kappa is not None else float("nan"))
+                sk = (
+                    float(np.atleast_1d(self.se_kappa)[0])
+                    if self.se_kappa is not None
+                    else float("nan")
+                )
                 kline = f"kappa: {float(kap):.4f} ({sk:.4f})"
             else:
-                kline = (f"kappa: {kap.min():.4f} to {kap.max():.4f} "
-                         "(per observation)")
+                kline = f"kappa: {kap.min():.4f} to {kap.max():.4f} (per observation)"
             print(f"mu0: {self.mu:.4f} ({self.se_mu:.4f})    {kline}")
-            print(f"logLik: {self.loglik:.4f}   AIC: {self.aic:.4f}   "
-                  f"BIC: {self.bic:.4f}   n: {self.n}")
+            print(
+                f"logLik: {self.loglik:.4f}   AIC: {self.aic:.4f}   "
+                f"BIC: {self.bic:.4f}   n: {self.n}"
+            )
             if not self._fields.get("converged", True):
                 print("** did not converge **")
-            print("\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 "
-                  "' ' 1")
+            print("\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
             print("p-values use the normal approximation.")
         elif self.type == "cc":
             print(f"\nCircular-circular regression (harmonic, order {self.order})")
@@ -1646,13 +1839,19 @@ class CircLM(_CircRegressionMixin):
             print(f"{'':<{w}}  {'cos':>11}  {'sin':>11}")
             for nm, c, s in zip(labels, cos, sin):
                 print(f"{nm:<{w}}  {c:>11.5f}  {s:>11.5f}")
-            print(f"\nrho: {self.rho:.4f}    residual kappa: {self.kappa:.4f} "
-                  f"(A_k = {self.A_k:.4f})")
-            print(f"Higher-order test p-values:  cos = {self.p_values[0]:.4f}, "
-                  f"sin = {self.p_values[1]:.4f}")
-            print("Higher-order terms not significant at the 0.05 level."
-                  if np.all(np.asarray(self.p_values) > 0.05)
-                  else "Higher-order terms significant at the 0.05 level.")
+            print(
+                f"\nrho: {self.rho:.4f}    residual kappa: {self.kappa:.4f} "
+                f"(A_k = {self.A_k:.4f})"
+            )
+            print(
+                f"Higher-order test p-values:  cos = {self.p_values[0]:.4f}, "
+                f"sin = {self.p_values[1]:.4f}"
+            )
+            print(
+                "Higher-order terms not significant at the 0.05 level."
+                if np.all(np.asarray(self.p_values) > 0.05)
+                else "Higher-order terms significant at the 0.05 level."
+            )
         else:  # lc — hea's R-style least-squares block + the harmonic table
             print("\nLinear-circular regression (harmonic)")
             print(f"  {self.response} ~ {self.var}   n = {self.n}\n")
@@ -1665,13 +1864,13 @@ class CircLM(_CircRegressionMixin):
 
     def __repr__(self):
         if self.type == "cl":
-            return (f"CircLM(cl, model={self.model!r}, mu={self.mu:.4f}, "
-                    f"n={self.n})")
+            return f"CircLM(cl, model={self.model!r}, mu={self.mu:.4f}, n={self.n})"
         if self.type == "cc":
-            return (f"CircLM(cc, {self.response} ~ {self.var}, "
-                    f"order={self.order}, rho={self.rho:.4f}, n={self.n})")
-        return (f"CircLM(lc, {self.response} ~ {self.var}, "
-                f"R²={self.r_squared:.4f})")
+            return (
+                f"CircLM(cc, {self.response} ~ {self.var}, "
+                f"order={self.order}, rho={self.rho:.4f}, n={self.n})"
+            )
+        return f"CircLM(lc, {self.response} ~ {self.var}, R²={self.r_squared:.4f})"
 
 
 # --------------------------------------------------------------------------- #
@@ -1695,8 +1894,16 @@ def _band_fill(ax, grid, lo, hi):
     lo = np.asarray(lo, dtype=float)
     hi = np.asarray(hi, dtype=float)
     ok = np.isfinite(lo) & np.isfinite(hi)
-    ax.fill_between(grid, lo, hi, where=ok, color="steelblue", alpha=0.25,
-                    linewidth=0.0, interpolate=False)
+    ax.fill_between(
+        grid,
+        lo,
+        hi,
+        where=ok,
+        color="steelblue",
+        alpha=0.25,
+        linewidth=0.0,
+        interpolate=False,
+    )
 
 
 def _flat_panel(ax, grid, panel, xlab, se, xobs, yobs, rug):
@@ -1713,16 +1920,21 @@ def _flat_panel(ax, grid, panel, xlab, se, xobs, yobs, rug):
         cat = np.concatenate(stack)
         ylim = [float(np.nanmin(cat)), float(np.nanmax(cat))]
     if yobs is not None and len(yobs):
-        ylim = [min(ylim[0], float(np.min(yobs))),
-                max(ylim[1], float(np.max(yobs)))]
+        ylim = [min(ylim[0], float(np.min(yobs))), max(ylim[1], float(np.max(yobs)))]
     if xobs is not None and yobs is not None:
         ax.scatter(xobs, yobs, s=6, c="black", alpha=0.25, edgecolors="none")
     if se and lo is not None and hi is not None:
         _band_fill(ax, grid, lo, hi)
     ax.plot(grid, mid, color="steelblue", lw=2)
     if rug and xobs is not None:
-        ax.plot(xobs, np.full(len(xobs), ylim[0]), "|", color="black",
-                alpha=0.3, markersize=6)
+        ax.plot(
+            xobs,
+            np.full(len(xobs), ylim[0]),
+            "|",
+            color="black",
+            alpha=0.3,
+            markersize=6,
+        )
     ax.set_xlabel(xlab)
     ax.set_ylabel(panel["name"])
     ax.set_title(panel["name"])
@@ -1747,8 +1959,11 @@ def _surface_maps(kind, grid, xobs, yspan):
 
         def xyz(u, v):
             u, v = np.asarray(u, float), np.asarray(v, float)
-            return ((big_r + r * np.cos(v)) * np.cos(u),
-                    (big_r + r * np.cos(v)) * np.sin(u), r * np.sin(v))
+            return (
+                (big_r + r * np.cos(v)) * np.cos(u),
+                (big_r + r * np.cos(v)) * np.sin(u),
+                r * np.sin(v),
+            )
 
         to_u = to_v = _coord
         uu, vv = np.linspace(-np.pi, np.pi, 49), np.linspace(-np.pi, np.pi, 37)
@@ -1769,8 +1984,11 @@ def _surface_maps(kind, grid, xobs, yspan):
         uu, vv = np.linspace(-axlen, axlen, 25), np.linspace(-np.pi, np.pi, 37)
     else:  # can
         r, height = 1.0, 1.5
-        ys = (np.asarray(yspan, float) if yspan is not None and len(yspan)
-              else np.array([-1.0, 1.0]))
+        ys = (
+            np.asarray(yspan, float)
+            if yspan is not None and len(yspan)
+            else np.array([-1.0, 1.0])
+        )
         ylo, yhi = float(np.nanmin(ys)), float(np.nanmax(ys))
         yspw = (yhi - ylo) or 1.0
 
@@ -1787,8 +2005,7 @@ def _surface_maps(kind, grid, xobs, yspan):
     return to_u, to_v, xyz, xyz(grid_u, grid_v)
 
 
-def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None,
-                    main=None):
+def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None, main=None):
     """Draw the fitted location curve on its natural surface (the 3-D
     counterpart of the flat location panel): wireframe canvas, optional 2-SE
     ribbon, the fitted curve, and the observed points."""
@@ -1806,18 +2023,23 @@ def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None,
         band_u = np.vstack([to_u(grid), to_u(grid)])
         band_v = np.vstack([to_v(lo), to_v(hi)])
         bx, by, bz = xyz(band_u, band_v)
-        ax.plot_surface(bx, by, bz, color="#c0392b", alpha=0.15, linewidth=0,
-                        shade=False)
+        ax.plot_surface(
+            bx, by, bz, color="#c0392b", alpha=0.15, linewidth=0, shade=False
+        )
     cx, cy, cz = xyz(to_u(grid), to_v(zv))
     ax.plot(cx, cy, cz, color="#c0392b", lw=3)
     if xobs is not None and yobs is not None:
         ox, oy, oz = xyz(to_u(xobs), to_v(yobs))
         ax.scatter(ox, oy, oz, c="#1f4e79", s=8, alpha=0.6)
     ax.set_axis_off()
-    ax.set_title(main or {
-        "torus": "torus · circular–circular",
-        "cylinder": "cylinder · circular–linear",
-        "can": "can · linear–circular"}[surface])
+    ax.set_title(
+        main
+        or {
+            "torus": "torus · circular–circular",
+            "cylinder": "cylinder · circular–linear",
+            "can": "can · linear–circular",
+        }[surface]
+    )
     ax.view_init(elev=22, azim=-60)
 
 
@@ -1826,8 +2048,16 @@ def _check_keys(which, response_circular):
     """Resolve the circ_check panel keys: ``None`` → the response-appropriate
     default, ``"all"`` → every panel, else the given key(s) (validated). ``rose``
     is dropped for a linear response (it needs an angular residual)."""
-    known = ["rose", "obsfit", "residcov", "qq.unif", "qq.norm", "scaleloc",
-             "hist", "cook"]
+    known = [
+        "rose",
+        "obsfit",
+        "residcov",
+        "qq.unif",
+        "qq.norm",
+        "scaleloc",
+        "hist",
+        "cook",
+    ]
     default = ["rose", "obsfit", "residcov", "qq.unif"]
     if which is None:
         keys = list(default)
@@ -1839,10 +2069,13 @@ def _check_keys(which, response_circular):
         keys = list(which)
     bad = [k for k in keys if k not in known]
     if bad:
-        raise ValueError(
-            f"unknown panel key(s): {bad}. Available: {known} (or 'all').")
-    warn_rose = (not response_circular and which is not None
-                 and which != "all" and "rose" in keys)
+        raise ValueError(f"unknown panel key(s): {bad}. Available: {known} (or 'all').")
+    warn_rose = (
+        not response_circular
+        and which is not None
+        and which != "all"
+        and "rose" in keys
+    )
     if not response_circular:
         keys = [k for k in keys if k != "rose"]
     if not keys:
@@ -1859,13 +2092,24 @@ def _panel_rose(ax, ang, nbins=24):
     counts, _ = np.histogram(ang, bins=edges)
     rad = np.sqrt(counts / counts.max()) if counts.max() > 0 else counts.astype(float)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    ax.bar(centers, rad, width=2 * np.pi / nbins, color="steelblue", alpha=0.5,
-           edgecolor="steelblue", linewidth=0.6)
+    ax.bar(
+        centers,
+        rad,
+        width=2 * np.pi / nbins,
+        color="steelblue",
+        alpha=0.5,
+        edgecolor="steelblue",
+        linewidth=0.6,
+    )
     sb, cb = float(np.mean(np.sin(ang))), float(np.mean(np.cos(ang)))
     rbar = np.hypot(sb, cb)
     if rbar > 1e-8:
-        ax.annotate("", xy=(np.arctan2(sb, cb), rbar), xytext=(0, 0),
-                    arrowprops=dict(color="firebrick", lw=2, arrowstyle="-|>"))
+        ax.annotate(
+            "",
+            xy=(np.arctan2(sb, cb), rbar),
+            xytext=(0, 0),
+            arrowprops=dict(color="firebrick", lw=2, arrowstyle="-|>"),
+        )
     ax.set_yticklabels([])
     ax.set_title("angular residuals")
 
@@ -1881,8 +2125,13 @@ def _panel_obsfit(ax, parts):
         ax.set_ylim(-np.pi, np.pi)
         ax.set_aspect("equal")
         for off in (-2 * np.pi, 0.0, 2 * np.pi):
-            ax.plot([-np.pi, np.pi], [-np.pi + off, np.pi + off],
-                    color="steelblue", lw=1, ls="-" if off == 0 else "--")
+            ax.plot(
+                [-np.pi, np.pi],
+                [-np.pi + off, np.pi + off],
+                color="steelblue",
+                lw=1,
+                ls="-" if off == 0 else "--",
+            )
         ax.set_xlabel("fitted direction")
     else:
         lim = [float(min(np.min(f), np.min(y))), float(max(np.max(f), np.max(y)))]
@@ -1902,8 +2151,14 @@ def _panel_residcov(ax, resid, cinfo, resid_circular, rug):
     if cinfo["circular"]:
         ax.set_xlim((-np.pi, np.pi) if np.nanmin(x) < 0 else (0.0, 2 * np.pi))
     if rug:
-        ax.plot(x, np.full(x.size, ax.get_ylim()[0]), "|", color="black",
-                alpha=0.3, markersize=5)
+        ax.plot(
+            x,
+            np.full(x.size, ax.get_ylim()[0]),
+            "|",
+            color="black",
+            alpha=0.3,
+            markersize=5,
+        )
     ax.set_xlabel(cinfo["name"])
     ax.set_ylabel("angular residual" if resid_circular else "residual")
     ax.set_title("residual vs covariate")
@@ -1924,14 +2179,21 @@ def _panel_qqunif(ax, u, watson):
     ax.set_xlabel("theoretical U(0, 1) quantile")
     ax.set_ylabel("ordered PIT residual")
     ax.set_title("quantile-residual Q-Q")
-    ax.text(0.04, 0.92, f"Watson U2 = {watson['stat']:.3f}\np = {watson['p']:.3f}",
-            transform=ax.transAxes, fontsize=8, va="top")
+    ax.text(
+        0.04,
+        0.92,
+        f"Watson U2 = {watson['stat']:.3f}\np = {watson['p']:.3f}",
+        transform=ax.transAxes,
+        fontsize=8,
+        va="top",
+    )
 
 
 def _panel_qqnorm(ax, dev):
     """Normal Q-Q of the deviance residuals — holds on the circle because the
     deviance residual is constructed ≈ N(0, 1)."""
     from scipy.stats import probplot
+
     probplot(np.asarray(dev, dtype=float), dist="norm", plot=ax)
     ax.set_title("deviance-residual normal Q-Q")
 
@@ -1951,8 +2213,9 @@ def _panel_scaleloc(ax, dev, fitted, resp_circular):
 def _panel_hist(ax, dev):
     """Histogram of the deviance residuals with the standard-normal reference."""
     dev = np.asarray(dev, dtype=float)
-    ax.hist(dev, bins="fd", density=True, color="steelblue", alpha=0.4,
-            edgecolor="white")
+    ax.hist(
+        dev, bins="fd", density=True, color="steelblue", alpha=0.4, edgecolor="white"
+    )
     xs = np.linspace(float(dev.min()), float(dev.max()), 200)
     ax.plot(xs, norm.pdf(xs), color="firebrick", lw=1.5)
     ax.set_xlabel("deviance residual")
@@ -1966,7 +2229,7 @@ def _panel_cook(ax, dev, lev):
     h = np.asarray(lev["h"], dtype=float)
     p = float(lev["p"])
     rstd = dev / np.sqrt(np.clip(1.0 - h, 1e-8, None))
-    cooks = rstd ** 2 * h / (p * np.clip(1.0 - h, 1e-8, None))
+    cooks = rstd**2 * h / (p * np.clip(1.0 - h, 1e-8, None))
     ax.scatter(h, rstd, s=6, c="black", alpha=0.45, edgecolors="none")
     ax.axhline(0.0, color="steelblue", ls="--", lw=1)
     flagged = np.where(cooks > 4.0 / h.size)[0]

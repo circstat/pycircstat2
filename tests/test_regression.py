@@ -1288,3 +1288,29 @@ def test_circ_plot_smoke_all_views_and_legs():
     fig = gp.circ_plot(view="flat")  # mu1, mu2, direction panels
     assert sum(ax.get_title() == "direction" for ax in fig.axes) == 1
     plt.close(fig)
+
+
+def test_circ_plot_unicode_covariate_uses_geometry_not_term_fallback():
+    """A Greek covariate name (θ) must be detected as the single covariate so
+    circ_plot draws the geometry/both view — an ASCII-only identifier regex
+    missed it and silently collapsed to mgcv's term-plot fallback (CircGAM) or
+    a 'multi-covariate' message (CircLM)."""
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+
+    rng = np.random.default_rng(0)
+    n = 150
+    θ = rng.uniform(0, 2 * np.pi, n)
+    y = 2 + 1.5 * np.sin(θ) + rng.normal(0, 0.3, n)
+    g = circ_gam("y ~ s(θ, bs='cc')", family="gaussian", data=pl.DataFrame({"y": y, "θ": θ}))
+    assert g._geometry() == ("lc", False, True, "θ")
+    fig = g.circ_plot()  # default "both" → can surface + flat panel
+    assert any(isinstance(ax, Axes3D) for ax in fig.axes)
+    plt.close(fig)
+
+    # circ_lm legs already use a Unicode-safe parser; confirm θ works there too
+    ψ = np.mod(θ / 2 + rng.vonmises(0, 5, n), 2 * np.pi)
+    m = circ_lm("ψ ~ θ", pl.DataFrame({"ψ": ψ, "θ": θ}), type="cc", order=1)
+    fig = m.circ_plot()
+    assert any(isinstance(ax, Axes3D) for ax in fig.axes)
+    plt.close(fig)
