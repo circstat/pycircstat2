@@ -2275,7 +2275,7 @@ def test_vonmises_derivatives_vectorize_over_per_obs_params():
 
 def test_vonmises_dlogpdf_equals_CL_inline_score():
     """Pins the §3.2 equivalence: the distribution's scores are exactly the
-    expressions CLRegression computes inline (κ sin(θ−μ); cos(θ−μ) − A1(κ))."""
+    expressions circ_lm(type="cl") computes inline (κ sin(θ−μ); cos(θ−μ) − A1(κ))."""
     rng = np.random.default_rng(1)
     x = rng.uniform(0, 2 * np.pi, 40)
     mu, kappa = 1.3, 3.7

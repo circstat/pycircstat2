@@ -191,14 +191,14 @@ class _RegressionReady:
 # --- links (the contract's other half: resolving ``default_links`` names) ----
 # A link maps a parameter onto the unconstrained linear-predictor scale,
 # η = g(param). Every link resolved here is a ``hea.family.Link``, so one
-# authored object serves both regression consumers: the parametric
-# ``CLRegression`` reads ``linkinv`` (η → parameter) and ``mu_eta`` (∂param/∂η)
-# for Fisher scoring; the hea general-family bridge hands the same
-# object to ``hea.gam``, whose ``gamlss_etamu`` chain rule additionally
-# consumes ``link`` (g) and ``d2link``/``d3link``/``d4link`` (g″, g‴, g⁗ —
-# derivatives w.r.t. the *parameter*, mgcv convention). hea's catalog already
-# carries those hooks for log/logit/identity, so only the circular-specific
-# tan-half link — which hea must not learn — is authored here.
+# authored object feeds the hea general-family bridge: ``CircularLL`` hands it
+# to ``hea.gam``, whose ``gamlss_etamu`` chain rule consumes ``link`` (g),
+# ``linkinv`` (η → parameter), ``mu_eta`` (∂param/∂η) and
+# ``d2link``/``d3link``/``d4link`` (g″, g‴, g⁗ — derivatives w.r.t. the
+# *parameter*, mgcv convention). hea's catalog already carries those hooks for
+# log/logit/identity, so only the circular-specific tan-half link — which hea
+# must not learn — is authored here. (``circ_lm``'s parametric von Mises fit
+# inlines the tan-half link directly, so it consults no link object.)
 
 
 class TanHalfLink(Link):
@@ -435,7 +435,7 @@ class CircularLL(GeneralFamily):
     instance — only when overriding the declared default links.
 
     Note the mgcv parameterization: every LP's intercept lives *inside* the
-    link — μ = 2·atan(β₀ + …) — unlike the fisher-lee ``CLRegression``'s
+    link — μ = 2·atan(β₀ + …) — unlike ``circ_lm(type="cl")``'s
     Fisher–Lee offset ``μ₀ + 2·atan(Xβ)``. The two coincide for
     intercept-only models; with covariates they are different (both valid)
     parameterizations, so compare fitted curves, not coefficients.
@@ -855,7 +855,7 @@ class KatoJonesLL(CircularLL):
 
 # Distributions whose regression (LP) coordinates are not their own logpdf
 # parameters, keyed by distribution name → the dedicated family class.
-# Consulted by `_circular_family` (the `CLRegression` auto-route) and by the
+# Consulted by `_circular_family` (the `circ_gam` family auto-route) and by the
 # `CircularLL.__init__` fail-fast guard's error hint.
 _LL_BY_DIST = {"katojones": KatoJonesLL}
 
@@ -5042,7 +5042,7 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
           \partial^2_{\kappa\kappa}\ell = -A_1'(\kappa).$$
 
         (The von Mises Fisher information for ``μ`` is ``κ A_1(κ) =
-        −E[∂²_{μμ}ℓ]``; ``CLRegression`` uses that expected form for Fisher
+        −E[∂²_{μμ}ℓ]``; ``circ_lm(type="cl")`` uses that expected form for Fisher
         scoring. The contract exposes the honest observed derivatives, which is
         what a general-likelihood Newton step — and hea's ``gam.fit5`` — want.)
         """
