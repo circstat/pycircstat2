@@ -1,14 +1,17 @@
 import numpy as np
 import polars as pl
 import pytest
-from pycircstat2.utils import A1, A1inv
 from hea.models import gam as hea_gam  # noqa: E402
+
 from pycircstat2.distributions import (  # noqa: E402
+    CircularLL,  # noqa: E402
     projectednormal,
     vonmises,
     wrapcauchy,
 )
-from pycircstat2.distributions import CircularLL  # noqa: E402
+from pycircstat2.utils import A1, A1inv
+
+
 def test_circularll_requires_regression_ready():
     # triangular stays off the regression contract (no location parameter,
     # non-smooth density — see the regression plan's "not worth promoting")
@@ -16,6 +19,8 @@ def test_circularll_requires_regression_ready():
 
     with pytest.raises(TypeError, match="regression-ready"):
         CircularLL(triangular)
+
+
 def test_lss_alias_surface():
     """The *lss instance aliases (validation plan §3.5): module-level
     pre-built families sharing the circlss names — ``family=vmlss`` is the
@@ -25,19 +30,25 @@ def test_lss_alias_surface():
     from pycircstat2 import distributions as D
 
     aliases = {
-        "cardlss": D.cardioid, "cartlss": D.cartwright, "wnlss": D.wrapnorm,
-        "wclss": D.wrapcauchy, "vmlss": D.vonmises,
-        "pnlss": D.projectednormal, "jplss": D.jonespewsey,
-        "ssjplss": D.jonespewsey_sineskewed, "kjlss": D.katojones,
-        "ibslss": D.inverse_batschelet, "vmftlss": D.vonmises_flattopped,
+        "cardlss": D.cardioid,
+        "cartlss": D.cartwright,
+        "wnlss": D.wrapnorm,
+        "wclss": D.wrapcauchy,
+        "vmlss": D.vonmises,
+        "pnlss": D.projectednormal,
+        "jplss": D.jonespewsey,
+        "ssjplss": D.jonespewsey_sineskewed,
+        "kjlss": D.katojones,
+        "ibslss": D.inverse_batschelet,
+        "vmftlss": D.vonmises_flattopped,
         "ajplss": D.jonespewsey_asym,
     }
     for name, dist in aliases.items():
         fam = getattr(D, name)
         assert isinstance(fam, D.CircularLL)
         assert fam.dist is dist
-        assert fam.name == name           # circlss family$family parity
-        assert fam.n_theta == 0           # the shared-instance safety condition
+        assert fam.name == name  # circlss family$family parity
+        assert fam.n_theta == 0  # the shared-instance safety condition
         assert fam.n_lp == len(dist.param_roles)
     assert isinstance(D.kjlss, D.KatoJonesLL)  # disc-chart routing baked in
 
@@ -48,11 +59,13 @@ def test_lss_alias_surface():
     assert [lnk.name for lnk in clone.links] == ["identity", "log"]
     assert [lnk.name for lnk in D.vmlss.links] == ["tanhalf", "log"]
     assert clone.name == "vmlss"
-    fresh = D.vmlss()                     # the R parens spelling, verbatim
+    fresh = D.vmlss()  # the R parens spelling, verbatim
     assert fresh is not D.vmlss
     assert [lnk.name for lnk in fresh.links] == ["tanhalf", "log"]
     kj = D.kjlss()
     assert type(kj) is D.KatoJonesLL and kj.name == "kjlss"
+
+
 def test_ibslss_intercept_only_matches_marginal_mle():
     """The M3 end-to-end gate for the inverse-Batschelet *lss family: an
     intercept-only ``ibslss`` fit must reproduce ``inverse_batschelet.fit``
@@ -69,18 +82,18 @@ def test_ibslss_intercept_only_matches_marginal_mle():
         xi=2.3, kappa=2.5, nu=0.35, lmbd=-0.3, size=4000, random_state=7
     )
     df = pl.DataFrame({"theta": data})
-    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=ibslss,
-                 method="REML")
-    pred = np.asarray(
-        g.predict(pl.DataFrame({"_dummy": [0.0]}), type="response")
-    )[0]
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=ibslss, method="REML")
+    pred = np.asarray(g.predict(pl.DataFrame({"_dummy": [0.0]}), type="response"))[0]
     xi_g, kappa_g, nu_g, lmbd_g = pred
     xi_m, kappa_m, nu_m, lmbd_m = inverse_batschelet.fit(data)
 
     ang = (xi_g - xi_m + np.pi) % (2.0 * np.pi) - np.pi
     assert abs(ang) < 1e-3
-    np.testing.assert_allclose([kappa_g, nu_g, lmbd_g],
-                               [kappa_m, nu_m, lmbd_m], atol=1e-3, rtol=0.0)
+    np.testing.assert_allclose(
+        [kappa_g, nu_g, lmbd_g], [kappa_m, nu_m, lmbd_m], atol=1e-3, rtol=0.0
+    )
+
+
 def test_ibslss_recovers_covariate_location():
     """M4: an ``ibslss`` GAM with a covariate-driven location exercises the
     per-observation (array) parameter path — the one intercept-only parity
@@ -94,23 +107,31 @@ def test_ibslss_recovers_covariate_location():
     n = 1500
     x = np.sort(rng.uniform(0.0, 2.0 * np.pi, n))
     xi_true = 1.5 * np.sin(x)
-    base = inverse_batschelet.rvs(xi=0.0, kappa=4.0, nu=0.3, lmbd=-0.2,
-                                  size=n, random_state=rng)
+    base = inverse_batschelet.rvs(
+        xi=0.0, kappa=4.0, nu=0.3, lmbd=-0.2, size=n, random_state=rng
+    )
     theta = np.mod(base + xi_true, 2.0 * np.pi)
     df = pl.DataFrame({"theta": theta, "x": x})
 
-    g = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family=ibslss,
-                 method="REML")
+    g = circ_gam(
+        ["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family=ibslss, method="REML"
+    )
     assert g.converged
     grid = np.linspace(x.min(), x.max(), 200)
-    mu = np.angle(np.exp(1j * np.asarray(
-        g.predict(pl.DataFrame({"x": grid}), type="response"))[:, 0]))
+    mu = np.angle(
+        np.exp(
+            1j * np.asarray(g.predict(pl.DataFrame({"x": grid}), type="response"))[:, 0]
+        )
+    )
     truth = 1.5 * np.sin(grid)
     a = mu - np.angle(np.mean(np.exp(1j * mu)))
     b = truth - np.angle(np.mean(np.exp(1j * truth)))
-    corr = (np.sum(np.sin(a) * np.sin(b))
-            / np.sqrt(np.sum(np.sin(a) ** 2) * np.sum(np.sin(b) ** 2)))
+    corr = np.sum(np.sin(a) * np.sin(b)) / np.sqrt(
+        np.sum(np.sin(a) ** 2) * np.sum(np.sin(b) ** 2)
+    )
     assert corr > 0.95
+
+
 def test_ibslss_recovers_covariate_concentration():
     """A *distributional* `ibslss` smooth — κ(x) on the log link — is the only
     fit that drives the per-observation normalizer derivative (the location
@@ -133,18 +154,22 @@ def test_ibslss_recovers_covariate_concentration():
         if not m.any():
             continue
         kb = float(np.exp(0.7 + 0.9 * np.sin(x[m].mean())))
-        theta[m] = inverse_batschelet.rvs(xi=0.4, kappa=kb, nu=0.2, lmbd=-0.2,
-                                          size=int(m.sum()), random_state=rng)
+        theta[m] = inverse_batschelet.rvs(
+            xi=0.4, kappa=kb, nu=0.2, lmbd=-0.2, size=int(m.sum()), random_state=rng
+        )
     df = pl.DataFrame({"theta": np.mod(theta, 2.0 * np.pi), "x": x})
 
-    g = circ_gam(["theta ~ 1", "~ s(x)", "~ 1", "~ 1"], df, family=ibslss,
-                 method="REML")
+    g = circ_gam(
+        ["theta ~ 1", "~ s(x)", "~ 1", "~ 1"], df, family=ibslss, method="REML"
+    )
     assert g.converged
     grid = np.linspace(x.min(), x.max(), 150)
     eta_k = np.asarray(g.predict(pl.DataFrame({"x": grid}), type="link"))[:, 1]
     log_k_true = 0.7 + 0.9 * np.sin(grid)
     corr = np.corrcoef(eta_k, log_k_true)[0, 1]
     assert corr > 0.9
+
+
 def test_vmftlss_intercept_only_matches_marginal_mle():
     """The end-to-end gate for the flat-topped von Mises *lss family: an
     intercept-only `vmftlss` fit must reproduce `vonmises_flattopped.fit`
@@ -155,11 +180,11 @@ def test_vmftlss_intercept_only_matches_marginal_mle():
     from pycircstat2.regression import circ_gam
 
     rng = np.random.default_rng(3)
-    theta = vonmises_flattopped.rvs(mu=2.0, kappa=3.0, nu=0.4, size=4000,
-                                    random_state=rng)
+    theta = vonmises_flattopped.rvs(
+        mu=2.0, kappa=3.0, nu=0.4, size=4000, random_state=rng
+    )
     df = pl.DataFrame({"theta": np.mod(theta, 2.0 * np.pi)})
-    g = circ_gam(["theta ~ 1", "~ 1", "~ 1"], df, family=vmftlss,
-                 method="REML")
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1"], df, family=vmftlss, method="REML")
     assert g.converged
     resp = np.asarray(g.predict(df.head(1), type="response"))[0]
     mle = vonmises_flattopped.fit(np.mod(theta, 2.0 * np.pi))
@@ -167,6 +192,8 @@ def test_vmftlss_intercept_only_matches_marginal_mle():
     assert abs(np.angle(np.exp(1j * (resp[0] - mle[0])))) < 1e-3
     assert resp[1] == pytest.approx(mle[1], abs=1e-3)
     assert resp[2] == pytest.approx(mle[2], abs=1e-3)
+
+
 def test_vmftlss_recovers_covariate_shape():
     """A *distributional* `vmftlss` smooth — the peakedness ν(x) on the tanh
     link — drives the per-observation normalizer expectations
@@ -187,18 +214,21 @@ def test_vmftlss_recovers_covariate_shape():
         if not m.any():
             continue
         nub = float(0.6 * np.sin(x[m].mean()))
-        theta[m] = vonmises_flattopped.rvs(mu=1.0, kappa=3.0, nu=nub,
-                                           size=int(m.sum()), random_state=rng)
+        theta[m] = vonmises_flattopped.rvs(
+            mu=1.0, kappa=3.0, nu=nub, size=int(m.sum()), random_state=rng
+        )
     df = pl.DataFrame({"theta": np.mod(theta, 2.0 * np.pi), "x": x})
 
-    g = circ_gam(["theta ~ 1", "~ 1", "~ s(x)"], df, family=vmftlss,
-                 method="REML")
+    g = circ_gam(["theta ~ 1", "~ 1", "~ s(x)"], df, family=vmftlss, method="REML")
     assert g.converged
     grid = np.linspace(x.min(), x.max(), 150)
     nu_fit = np.tanh(
-        np.asarray(g.predict(pl.DataFrame({"x": grid}), type="link"))[:, 2])
+        np.asarray(g.predict(pl.DataFrame({"x": grid}), type="link"))[:, 2]
+    )
     nu_true = 0.6 * np.sin(grid)
     assert np.corrcoef(nu_fit, nu_true)[0, 1] > 0.9
+
+
 def test_ajplss_intercept_only_is_mle():
     """End-to-end gate for the asymmetric-extended JP *lss family. The marginal
     `jonespewsey_asym.fit` is an unreliable reference here — its generic
@@ -213,26 +243,31 @@ def test_ajplss_intercept_only_is_mle():
 
     rng = np.random.default_rng(3)
     truth = dict(xi=2.0, kappa=3.0, psi=0.6, nu=0.4)
-    theta = np.mod(jonespewsey_asym.rvs(**truth, size=3000, random_state=rng),
-                   2.0 * np.pi)
+    theta = np.mod(
+        jonespewsey_asym.rvs(**truth, size=3000, random_state=rng), 2.0 * np.pi
+    )
     df = pl.DataFrame({"theta": theta})
-    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=ajplss,
-                 method="REML")
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=ajplss, method="REML")
     assert g.converged
     fit = np.asarray(g.predict(df.head(1), type="response"))[0]
 
     def ll(p):
-        return float(np.sum(jonespewsey_asym.logpdf(
-            theta, xi=p[0], kappa=p[1], psi=p[2], nu=p[3])))
+        return float(
+            np.sum(
+                jonespewsey_asym.logpdf(theta, xi=p[0], kappa=p[1], psi=p[2], nu=p[3])
+            )
+        )
 
     ll_gam = ll(fit)
     ll_truth = ll([truth["xi"], truth["kappa"], truth["psi"], truth["nu"]])
     ll_marg = ll(list(jonespewsey_asym.fit(theta)))
-    assert ll_gam >= ll_truth - 1e-3      # MLE dominates the generating params
-    assert ll_gam >= ll_marg - 1e-3       # ... and the marginal fitter
+    assert ll_gam >= ll_truth - 1e-3  # MLE dominates the generating params
+    assert ll_gam >= ll_marg - 1e-3  # ... and the marginal fitter
     # recovers the true asymmetry/shape (not a degenerate symmetric optimum)
     assert abs(fit[2] - truth["psi"]) < 0.25
     assert abs(fit[3] - truth["nu"]) < 0.2
+
+
 def test_ajplss_recovers_covariate_location():
     """An `ajplss` GAM with a covariate-driven location exercises the
     per-observation array log-density path (`_ajp_logpdf_vec`) — the warped
@@ -246,22 +281,30 @@ def test_ajplss_recovers_covariate_location():
     rng = np.random.default_rng(8)
     n = 1500
     x = np.sort(rng.uniform(-np.pi, np.pi, n))
-    base = jonespewsey_asym.rvs(xi=0.0, kappa=3.0, psi=0.5, nu=0.4, size=n,
-                                random_state=rng)
+    base = jonespewsey_asym.rvs(
+        xi=0.0, kappa=3.0, psi=0.5, nu=0.4, size=n, random_state=rng
+    )
     theta = np.mod(base + 1.3 * np.sin(x), 2.0 * np.pi)
     df = pl.DataFrame({"theta": theta, "x": x})
-    g = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family=ajplss,
-                 method="REML")
+    g = circ_gam(
+        ["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family=ajplss, method="REML"
+    )
     assert g.converged
     grid = np.linspace(x.min(), x.max(), 200)
-    mu = np.angle(np.exp(1j * np.asarray(
-        g.predict(pl.DataFrame({"x": grid}), type="response"))[:, 0]))
+    mu = np.angle(
+        np.exp(
+            1j * np.asarray(g.predict(pl.DataFrame({"x": grid}), type="response"))[:, 0]
+        )
+    )
     truth = 1.3 * np.sin(grid)
     a = mu - np.angle(np.mean(np.exp(1j * mu)))
     b = truth - np.angle(np.mean(np.exp(1j * truth)))
-    corr = (np.sum(np.sin(a) * np.sin(b))
-            / np.sqrt(np.sum(np.sin(a) ** 2) * np.sum(np.sin(b) ** 2)))
+    corr = np.sum(np.sin(a) * np.sin(b)) / np.sqrt(
+        np.sum(np.sin(a) ** 2) * np.sum(np.sin(b) ** 2)
+    )
     assert corr > 0.95
+
+
 def test_circularll_vonmises_intercept_only_matches_mle():
     """gam(["theta ~ 1", "~ 1"], family=CircularLL(vonmises)) is the
     unpenalized von Mises MLE — pins the whole ll() derivative stack
@@ -277,6 +320,8 @@ def test_circularll_vonmises_intercept_only_matches_mle():
     mu_mle, kappa_mle = vonmises.fit(theta)
     assert np.mod(2 * np.arctan(coef[0]), 2 * np.pi) == pytest.approx(mu_mle, abs=1e-4)
     assert np.exp(coef[1]) == pytest.approx(kappa_mle, rel=1e-3)
+
+
 def test_circularll_wrapcauchy_intercept_only_matches_mle():
     """Same MLE-equivalence through the logit-linked wrapped Cauchy."""
     theta = np.asarray(wrapcauchy.rvs(2.2, 0.55, size=800, random_state=11))
@@ -289,6 +334,8 @@ def test_circularll_wrapcauchy_intercept_only_matches_mle():
     mu_mle, rho_mle = wrapcauchy.fit(theta)
     assert np.mod(2 * np.arctan(coef[0]), 2 * np.pi) == pytest.approx(mu_mle, abs=1e-3)
     assert 1.0 / (1.0 + np.exp(-coef[1])) == pytest.approx(rho_mle, abs=1e-3)
+
+
 def test_circularll_vonmises_recovers_smooth_mu_and_kappa():
     """The §5 target: smooth μ(x) AND log κ(z) by REML, jointly. True curves
     stay inside the tanhalf principal branch (the link cannot cross ±π)."""
@@ -302,7 +349,9 @@ def test_circularll_vonmises_recovers_smooth_mu_and_kappa():
     df = pl.DataFrame({"theta": theta, "x": x, "z": z})
 
     m = hea_gam(
-        ["theta ~ s(x)", "~ s(z)"], data=df, family=CircularLL(vonmises),
+        ["theta ~ s(x)", "~ s(z)"],
+        data=df,
+        family=CircularLL(vonmises),
         method="REML",
     )
     assert m.converged
@@ -311,6 +360,8 @@ def test_circularll_vonmises_recovers_smooth_mu_and_kappa():
     logk_err = np.abs(np.log(fv[:, 1]) - np.log(kap_true))
     assert circ_err.mean() < 0.08
     assert logk_err.mean() < 0.10
+
+
 def test_circularll_projectednormal_fits_full_circle_sweep():
     """A full-circle μ(x) sweep — unrepresentable through tanhalf (pole at
     ±π) — fits cleanly through the projected normal's two identity LPs."""
@@ -325,8 +376,10 @@ def test_circularll_projectednormal_fits_full_circle_sweep():
     )
     df = pl.DataFrame({"theta": theta, "x": x})
     m = hea_gam(
-        ["theta ~ s(x)", "~ s(x)"], data=df,
-        family=CircularLL(projectednormal), method="REML",
+        ["theta ~ s(x)", "~ s(x)"],
+        data=df,
+        family=CircularLL(projectednormal),
+        method="REML",
     )
     assert m.converged
     fv = np.asarray(m.fitted_values)
@@ -334,6 +387,8 @@ def test_circularll_projectednormal_fits_full_circle_sweep():
     dir_true = np.arctan2(mu2, mu1)
     err = np.abs(np.angle(np.exp(1j * (dir_hat - dir_true))))
     assert err.mean() < 0.05
+
+
 def test_circularll_postproc_binds_both_hea_conventions():
     """The seam moved under us once (hea unified postproc on mgcv's 6-arg
     hook) — pin that our signature binds BOTH calling conventions: hea
@@ -346,12 +401,18 @@ def test_circularll_postproc_binds_both_hea_conventions():
     fam = CircularLL(vonmises)
     fitted = np.column_stack([np.full(n, 1.0), np.full(n, 2.0)])
     old = fam.postproc(theta, fitted)  # hea 0.1.4 call shape
-    new = fam.postproc(                # hea > 0.1.4 (mgcv 6-arg hook)
-        theta, prior_weights=np.ones(n), fitted=fitted,
-        linear_predictors=fitted, offset=None, intercept=True,
+    new = fam.postproc(  # hea > 0.1.4 (mgcv 6-arg hook)
+        theta,
+        prior_weights=np.ones(n),
+        fitted=fitted,
+        linear_predictors=fitted,
+        offset=None,
+        intercept=True,
     )
     assert np.isfinite(old["null_deviance"])
     assert old["null_deviance"] == pytest.approx(new["null_deviance"])
+
+
 def test_circularll_rejects_prior_weights():
     """gam(weights=) must fail loudly: no mgcv gamlss family uses prior
     weights in its ll, so a weighted circular fit would have no R
@@ -363,11 +424,19 @@ def test_circularll_rejects_prior_weights():
     theta = np.mod(rng.vonmises(1.0, 3.0, n), 2 * np.pi)
     df = pl.DataFrame({"theta": theta})
     with pytest.raises(NotImplementedError, match="prior weights"):
-        hea_gam(["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises),
-                method="REML", weights=np.full(n, 2.0))
-    m = hea_gam(["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises),
-                method="REML")
+        hea_gam(
+            ["theta ~ 1", "~ 1"],
+            data=df,
+            family=CircularLL(vonmises),
+            method="REML",
+            weights=np.full(n, 2.0),
+        )
+    m = hea_gam(
+        ["theta ~ 1", "~ 1"], data=df, family=CircularLL(vonmises), method="REML"
+    )
     assert m.converged
+
+
 def _cl_gam_sim(n=900, seed=7):
     rng = np.random.default_rng(seed)
     x = rng.uniform(0, 1, n)
@@ -376,8 +445,12 @@ def _cl_gam_sim(n=900, seed=7):
     kap = np.exp(0.8 + 1.2 * z)
     theta = np.mod(mu + rng.vonmises(0.0, kap, n), 2 * np.pi)
     return pl.DataFrame({"theta": theta, "x": x, "z": z}), mu
+
+
 from pycircstat2.distributions import vmlss  # noqa: E402
 from pycircstat2.regression import circ_gam  # noqa: E402
+
+
 def test_circ_gam_b2_twin_and_knot_defaults():
     """The circlss §4 twin call fits through circ_gam with family/method
     defaulted and **knots omitted**: ``phi`` on [0, 2π] (pycircstat2's
@@ -400,6 +473,8 @@ def test_circ_gam_b2_twin_and_knot_defaults():
     # a single formula auto-expands the constant second LP
     m = circ_gam("theta ~ s(phi, bs='cc')", df)
     assert m.converged
+
+
 def test_circ_gam_cyclic_knots_default_and_guard():
     """``_resolve_cyclic_knots_data`` pins each cyclic covariate to the
     [0, 2π] period (pycircstat2's convention), honors user knots, and rejects
@@ -421,15 +496,16 @@ def test_circ_gam_cyclic_knots_default_and_guard():
     for bad in (np.linspace(-np.pi, np.pi, 50), np.linspace(0.0, 7.0, 50)):
         with pytest.raises(ValueError, match=r"outside \[0, 2π\]"):
             _resolve_cyclic_knots_data(f, pl.DataFrame({"phi": bad}), None)
+
+
 def test_circ_gam_new_families_by_name_and_fill():
     """The flat-top / asymmetric-JP / inverse-Batschelet families (shipped in
     distributions.py) resolve by name, and a single formula fills the extra
     shape LPs with ``~ 1`` up to the family's parameter count."""
+    from pycircstat2.distributions import ajplss, ibslss, vmftlss
     from pycircstat2.regression import _resolve_gam_family
-    from pycircstat2.distributions import vmftlss, ajplss, ibslss
 
-    for name, fam in [("vmftlss", vmftlss), ("ajplss", ajplss),
-                      ("ibslss", ibslss)]:
+    for name, fam in [("vmftlss", vmftlss), ("ajplss", ajplss), ("ibslss", ibslss)]:
         assert _resolve_gam_family(name) is fam
         assert _resolve_gam_family(fam.dist.name) is fam  # distribution name too
 
@@ -439,6 +515,8 @@ def test_circ_gam_new_families_by_name_and_fill():
     df = pl.DataFrame({"theta": theta})
     m = circ_gam("theta ~ 1", df, family="vmftlss")
     assert np.isfinite(float(m.logLik))
+
+
 def test_circ_gam_family_resolution():
     """Strings resolve through the circular catalog (alias or distribution
     name); unknown names raise with guidance."""
@@ -448,6 +526,8 @@ def test_circ_gam_family_resolution():
     assert float(a.logLik) == pytest.approx(float(b.logLik), rel=1e-10)
     with pytest.raises(ValueError, match="unknown family"):
         circ_gam("theta ~ s(x)", df, family="nope")
+
+
 def test_circ_gam_gaussian_passthrough():
     """No gatekeeping: a linear response rides through to hea untouched
     (the old LC-smooth case), with the period-knot default still applied."""
@@ -459,9 +539,16 @@ def test_circ_gam_gaussian_passthrough():
     y = 2.0 + np.sin(phi) + rng.normal(0, 0.3, n)
     df = pl.DataFrame({"y": y, "phi": phi})
     g = circ_gam("y ~ s(phi, bs='cc')", df, family="gaussian")
-    direct = hea_gam("y ~ s(phi, bs='cc')", df, family=hea_family.gaussian,
-                     knots={"phi": [0.0, 2 * np.pi]}, method="REML")
+    direct = hea_gam(
+        "y ~ s(phi, bs='cc')",
+        df,
+        family=hea_family.gaussian,
+        knots={"phi": [0.0, 2 * np.pi]},
+        method="REML",
+    )
     assert float(g.AIC) == pytest.approx(float(direct.AIC), rel=1e-12)
+
+
 def test_circ_gam_k3_k4_families_post_gate():
     """jplss (3-LP) and kjlss (4-LP) ride hea's efsud K=3/4 paths — now
     R-pinned hea-side (twlss/shash landed) — through circ_gam by name."""
@@ -472,6 +559,8 @@ def test_circ_gam_k3_k4_families_post_gate():
     assert np.isfinite(float(j.logLik))
     k = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family="kjlss")
     assert np.isfinite(float(k.logLik))
+
+
 def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
     """Closed-form null start in ``CircularLL._null_params`` (the circlss
     ``initialize`` convention): location = mean direction, concentration =
@@ -502,7 +591,8 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
     )
     # von Mises concentration start is exactly Fisher's A1-inverse, clamped
     assert D.vmlss._null_params(y)[1] == pytest.approx(
-        float(np.clip(A1inv(Rbar), 0.01, 500.0)), abs=1e-12)
+        float(np.clip(A1inv(Rbar), 0.01, 500.0)), abs=1e-12
+    )
     # the 2-component projected normal has no concentration hook -> MLE fallback
     assert len(D.pnlss._null_params(y)) == 2
 
@@ -517,10 +607,24 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
     n = 500
     x = np.sort(rng.uniform(0.0, 1.0, n))
     mu = np.mod(2.0 * np.arctan(2.0 * np.sin(2 * np.pi * x)), 2 * np.pi)
-    th = np.mod(np.array([
-        float(D.jonespewsey_sineskewed.rvs(
-            xi=float(m), kappa=2.0, psi=0.5, lmbd=0.6, size=1, random_state=rng)[0])
-        for m in mu]), 2 * np.pi)
+    th = np.mod(
+        np.array(
+            [
+                float(
+                    D.jonespewsey_sineskewed.rvs(
+                        xi=float(m),
+                        kappa=2.0,
+                        psi=0.5,
+                        lmbd=0.6,
+                        size=1,
+                        random_state=rng,
+                    )[0]
+                )
+                for m in mu
+            ]
+        ),
+        2 * np.pi,
+    )
     df = pl.DataFrame({"theta": th, "x": x})
     g = circ_gam(["theta ~ s(x)", "~ 1", "~ 1", "~ 1"], df, family="ssjplss")
     assert np.isfinite(float(g.logLik)) and g.converged
@@ -537,15 +641,31 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
     n = 200
     x = rng.uniform(0.0, 1.0, n)
     mu = np.mod(2 * np.pi * x, 2 * np.pi)
-    th = np.mod(np.array([
-        float(D.katojones.rvs(mu=float(m), gamma=0.4, rho=0.3, lam=0.5,
-                              size=1, random_state=rng)[0])
-        for m in mu]), 2 * np.pi)
+    th = np.mod(
+        np.array(
+            [
+                float(
+                    D.katojones.rvs(
+                        mu=float(m),
+                        gamma=0.4,
+                        rho=0.3,
+                        lam=0.5,
+                        size=1,
+                        random_state=rng,
+                    )[0]
+                )
+                for m in mu
+            ]
+        ),
+        2 * np.pi,
+    )
     g0, rho0, lam0 = D.katojones.fit(th, method="moments")[1:]
     u1, u2 = D.katojones.disc_chart_inverse(g0, rho0, lam0)
-    assert np.hypot(float(u1), float(u2)) > 1e3      # uncapped: ~2e4 → crash
-    u_start = D.kjlss._null_params(th)[2:]            # the capped chart coords
-    assert np.hypot(*u_start) == pytest.approx(8.0)   # clamped to the |u| <= 8 bound
+    assert np.hypot(float(u1), float(u2)) > 1e3  # uncapped: ~2e4 → crash
+    u_start = D.kjlss._null_params(th)[2:]  # the capped chart coords
+    assert np.hypot(*u_start) == pytest.approx(8.0)  # clamped to the |u| <= 8 bound
+
+
 def test_circ_gam_cartlss_location_warm_start_recovers_wiggly_mu():
     """Role-aware location warm start in ``CircularLL.initialize_coef``.
 
@@ -563,21 +683,30 @@ def test_circ_gam_cartlss_location_warm_start_recovers_wiggly_mu():
     n = 600
     x = rng.uniform(0.0, 1.0, n)
     mu_true = np.mod(2.0 * np.arctan(np.sin(2.0 * np.pi * x)), 2 * np.pi)
-    theta = np.mod(np.array([
-        float(cartwright.rvs(mu=float(m), zeta=0.5, size=1, random_state=rng)[0])
-        for m in mu_true
-    ]), 2 * np.pi)
+    theta = np.mod(
+        np.array(
+            [
+                float(
+                    cartwright.rvs(mu=float(m), zeta=0.5, size=1, random_state=rng)[0]
+                )
+                for m in mu_true
+            ]
+        ),
+        2 * np.pi,
+    )
     df = pl.DataFrame({"theta": theta, "x": x})
 
     g = circ_gam(["theta ~ s(x)", "~ 1"], df, family="cartlss")
     assert g.converged
     mu_fit = np.mod(np.asarray(g.fitted_values)[:, 0], 2 * np.pi)
     err = np.abs(np.angle(np.exp(1j * (mu_fit - mu_true))))
-    assert err.mean() < 0.3                      # ≈ 1.0 without the pilot
+    assert err.mean() < 0.3  # ≈ 1.0 without the pilot
     # fitted μ is not collapsed to a constant: its circular dispersion
     # (1 − R̄) tracks the truth's (≈ 0.58) instead of falling toward 0
     fit_disp = 1.0 - np.abs(np.mean(np.exp(1j * mu_fit)))
     assert fit_disp > 0.4
+
+
 def test_circ_gam_cyclic_summary_general_family(capsys):
     """summary() on a fully-penalized smooth (bs='cc' → penalty null space
     0 → hea's reTest/_recov path) under a general family. Crashed with
@@ -587,8 +716,7 @@ def test_circ_gam_cyclic_summary_general_family(capsys):
     rng = np.random.default_rng(8)
     n = 150
     phi = rng.uniform(0, 2 * np.pi, n)
-    theta = np.mod(np.pi / 2 + np.sin(phi) + rng.vonmises(0.0, 4.0, n),
-                   2 * np.pi)
+    theta = np.mod(np.pi / 2 + np.sin(phi) + rng.vonmises(0.0, 4.0, n), 2 * np.pi)
     df = pl.DataFrame({"theta": theta, "phi": phi})
     m = circ_gam("theta ~ s(phi, bs='cc')", df)
     assert m.converged
@@ -613,11 +741,16 @@ def test_katojones_family_dispatch():
     assert isinstance(_resolve_gam_family(katojones), KatoJonesLL)
 
     rng = np.random.default_rng(3)
-    theta = np.array([
-        float(katojones.rvs(mu=2.0, gamma=0.4, rho=0.3, lam=0.5,
-                            size=1, random_state=rng)[0])
-        for _ in range(80)
-    ])
+    theta = np.array(
+        [
+            float(
+                katojones.rvs(
+                    mu=2.0, gamma=0.4, rho=0.3, lam=0.5, size=1, random_state=rng
+                )[0]
+            )
+            for _ in range(80)
+        ]
+    )
     df = pl.DataFrame({"theta": theta})
     g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"], df, family=katojones)
     assert np.isfinite(float(g.logLik))
@@ -661,9 +794,7 @@ def _lung_dataframe() -> "pl.DataFrame":
     df = load_data("lung_deaths", source="pewsey")
     df = df.with_columns(((np.pi / 6) * pl.col("month")).alias("theta"))
     df = df.rename({"deaths": "y"})
-    return df.filter(
-        ~((pl.col("month") == 2) & pl.col("year").is_in([1976, 1979]))
-    )
+    return df.filter(~((pl.col("month") == 2) & pl.col("year").is_in([1976, 1979])))
 
 
 def _simulate_cl(seed: int = 0, n: int = 400):
@@ -685,8 +816,10 @@ def _cl_frame() -> "pl.DataFrame":
 def _milwaukee_frame() -> "pl.DataFrame":
     df = load_data("milwaukee", source="jammalamadaka")
     return pl.DataFrame(
-        {"theta": np.deg2rad(df["theta"].to_numpy()),
-         "psi": np.deg2rad(df["psi"].to_numpy())}
+        {
+            "theta": np.deg2rad(df["theta"].to_numpy()),
+            "psi": np.deg2rad(df["psi"].to_numpy()),
+        }
     )
 
 
@@ -718,8 +851,8 @@ def test_circ_lm_cl_kappa_matches_circular_not_circlss():
     (3.224), differing from circlss (3.241) at the approximation's ~1e-2 level;
     beta/mu/loglik match both to ~1e-3."""
     m = circ_lm("theta ~ X", _cl_frame(), type="cl", tol=1e-10)
-    assert np.isclose(m["kappa"], 3.224, atol=3e-3)        # circular value
-    assert not np.isclose(m["kappa"], 3.2406, atol=3e-3)   # circlss machine-precision
+    assert np.isclose(m["kappa"], 3.224, atol=3e-3)  # circular value
+    assert not np.isclose(m["kappa"], 3.2406, atol=3e-3)  # circlss machine-precision
 
 
 def test_circ_lm_cl_single_formula_is_mean_model():
@@ -789,7 +922,8 @@ def test_circ_lm_cl_kappa_model():
     # kappa at X=0 equals exp(alpha)
     i0 = int(np.argmin(np.abs(x[:, 0])))
     np.testing.assert_allclose(
-        m["kappa"][i0], np.exp(m["alpha"] + m["gamma"][0] * x[i0, 0]), rtol=1e-8)
+        m["kappa"][i0], np.exp(m["alpha"] + m["gamma"][0] * x[i0, 0]), rtol=1e-8
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -803,10 +937,14 @@ def test_circ_lm_cc_against_circlss():
     np.testing.assert_allclose(c2["rho"], 0.6358710, atol=1e-5)
     np.testing.assert_allclose(
         c2["coefficients"]["cos"],
-        [0.1441268, 0.6414811, 0.2171076, 0.1165915, -0.4374547], atol=1e-5)
+        [0.1441268, 0.6414811, 0.2171076, 0.1165915, -0.4374547],
+        atol=1e-5,
+    )
     np.testing.assert_allclose(
         c2["coefficients"]["sin"],
-        [-0.2191974, -0.4509745, 0.2225796, 0.1831359, 0.2924121], atol=1e-5)
+        [-0.2191974, -0.4509745, 0.2225796, 0.1831359, 0.2924121],
+        atol=1e-5,
+    )
     np.testing.assert_allclose(c2["p_values"], [0.8645504, 0.2263628], atol=1e-5)
     np.testing.assert_allclose(c2["A_k"], 0.6131735, atol=1e-5)
 
@@ -834,8 +972,9 @@ def test_circ_lm_lc_manual_harmonics_pewsey():
     """The §8.4.1 reduced extended model, written with explicit harmonic terms
     (the manually-written-harmonic case): fed straight to hea.lm, reproduces
     Pewsey et al. (2013)."""
-    m = circ_lm("y ~ cos(theta) + sin(theta) + sin(2*theta)",
-                _lung_dataframe(), type="lc")
+    m = circ_lm(
+        "y ~ cos(theta) + sin(theta) + sin(2*theta)", _lung_dataframe(), type="lc"
+    )
     c = _coefs(m)
     assert np.isclose(c["(Intercept)"], 2125.12, atol=1e-1)
     assert np.isclose(c["cos(theta)"], 454.18, atol=1e-1)
@@ -848,8 +987,11 @@ def test_circ_lm_lc_manual_harmonics_pewsey():
 def test_circ_lm_lc_full_order2_matches_circlss():
     """Full order-2 harmonic regression reproduces circlss's lc to machine
     precision (it is the same OLS)."""
-    m = circ_lm("y ~ cos(theta) + sin(theta) + cos(2*theta) + sin(2*theta)",
-                _lung_dataframe(), type="lc")
+    m = circ_lm(
+        "y ~ cos(theta) + sin(theta) + cos(2*theta) + sin(2*theta)",
+        _lung_dataframe(),
+        type="lc",
+    )
     c = _coefs(m)
     assert np.isclose(c["(Intercept)"], 2125.1789, atol=1e-2)
     assert np.isclose(c["cos(theta)"], 454.2394, atol=1e-2)
@@ -865,8 +1007,17 @@ def test_circ_lm_lc_full_order2_matches_circlss():
 def test_circ_lm_lc_is_hea_lm_with_full_interface():
     """lc returns hea's lm object: predict, summary, plot, coefficients, AIC."""
     m = circ_lm("y ~ cos(theta) + sin(theta)", _lung_dataframe(), type="lc")
-    for attr in ("predict", "summary", "plot", "coefficients", "AIC", "BIC",
-                 "sigma", "r_squared", "ci_bhat"):
+    for attr in (
+        "predict",
+        "summary",
+        "plot",
+        "coefficients",
+        "AIC",
+        "BIC",
+        "sigma",
+        "r_squared",
+        "ci_bhat",
+    ):
         assert hasattr(m, attr), attr
 
 
@@ -881,7 +1032,8 @@ def test_circ_lm_lc_predict_round_trip():
     m = circ_lm("y ~ cos(theta) + sin(theta) + sin(2*theta)", lung, type="lc")
     pred = m.predict(lung.select("theta"))
     np.testing.assert_allclose(
-        pred["fit"].to_numpy(), m.yhat["fit"].to_numpy(), atol=1e-9)
+        pred["fit"].to_numpy(), m.yhat["fit"].to_numpy(), atol=1e-9
+    )
 
 
 def test_circ_lm_lc_amplitude_phase_recovery():
@@ -892,8 +1044,9 @@ def test_circ_lm_lc_amplitude_phase_recovery():
     theta = rng.uniform(0, 2 * np.pi, n)
     true_amp, true_phase = 2.5, 0.9
     y = 5.0 + true_amp * np.cos(theta - true_phase) + rng.normal(0, 0.1, n)
-    m = circ_lm("y ~ cos(theta) + sin(theta)",
-                pl.DataFrame({"y": y, "theta": theta}), type="lc")
+    m = circ_lm(
+        "y ~ cos(theta) + sin(theta)", pl.DataFrame({"y": y, "theta": theta}), type="lc"
+    )
     c = _coefs(m)
     amp = np.hypot(c["cos(theta)"], c["sin(theta)"])
     phase = np.arctan2(c["sin(theta)"], c["cos(theta)"])
@@ -926,8 +1079,13 @@ def test_circ_lm_rejects_smooth_terms():
 
 
 def test_circ_lm_cc_requires_one_predictor():
-    d = pl.DataFrame({"y": [0.1, 1.0, 2.0, 3.0], "a": [0.0, 1.0, 2.0, 3.0],
-                      "b": [1.0, 1.0, 2.0, 2.0]})
+    d = pl.DataFrame(
+        {
+            "y": [0.1, 1.0, 2.0, 3.0],
+            "a": [0.0, 1.0, 2.0, 3.0],
+            "b": [1.0, 1.0, 2.0, 2.0],
+        }
+    )
     with pytest.raises(ValueError, match="exactly one"):
         circ_lm("y ~ a + b", d, type="cc")
 
