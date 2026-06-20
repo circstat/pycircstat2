@@ -2924,3 +2924,130 @@ def test_projectednormal_fit_recovers_truth():
     assert m2 == pytest.approx(mu2, abs=0.12)
     with pytest.raises(ValueError, match="method"):
         projectednormal.fit(s, method="moments")
+
+
+# ===========================================================================
+# CircularLL residual contract: pearson standardization + saturated-reference
+# deviance (the family-layer quantities circ_resid / circ_check are built on)
+# ===========================================================================
+def test_circularll_pearson_residual_closed_forms():
+    """The circular Pearson residual is sin(y-mu)/sqrt(Var sin), with
+    Var(sin(y-mu)) = (1-alpha2)/2 read from the family's centered 2nd cosine
+    moment. The closed-form families pin it exactly: von Mises -> A1(k)/k,
+    wrapped Cauchy -> (1-rho^2)/2, cardioid -> 1/2 (first-harmonic only)."""
+    from pycircstat2.distributions import cardlss, vmlss, wclss
+    from pycircstat2.utils import A1
+
+    rng = np.random.default_rng(0)
+    y = np.mod(rng.uniform(0, 2 * np.pi, 256), 2 * np.pi)
+    col = lambda v: np.full(y.size, v)  # noqa: E731
+
+    mu, k = 1.1, 2.7
+    d = np.angle(np.exp(1j * (y - mu)))
+    np.testing.assert_allclose(
+        vmlss.residuals(y, np.column_stack([col(mu), col(k)]), type="pearson"),
+        np.sin(d) / np.sqrt(float(A1(k)) / k), atol=1e-12,
+    )
+
+    mu, rho = 0.6, 0.55
+    d = np.angle(np.exp(1j * (y - mu)))
+    np.testing.assert_allclose(
+        wclss.residuals(y, np.column_stack([col(mu), col(rho)]), type="pearson"),
+        np.sin(d) / np.sqrt((1 - rho**2) / 2), atol=1e-9,
+    )
+
+    mu, rho = 0.3, 0.2
+    d = np.angle(np.exp(1j * (y - mu)))
+    np.testing.assert_allclose(
+        cardlss.residuals(y, np.column_stack([col(mu), col(rho)]), type="pearson"),
+        np.sin(d) / np.sqrt(0.5), atol=1e-9,
+    )
+
+
+def test_circularll_pearson_aliases_deviance_for_cartesian_location():
+    """A family with no single circular location (the projected normal's
+    Cartesian mu1/mu2 pair) has no sin-residual standardization, so the Pearson
+    residual aliases the deviance residual -- circlss's pnlss convention."""
+    from pycircstat2.distributions import pnlss
+
+    rng = np.random.default_rng(1)
+    y = np.mod(rng.uniform(0, 2 * np.pi, 200), 2 * np.pi)
+    fit = np.column_stack([np.full(y.size, 1.5), np.full(y.size, 0.8)])
+    np.testing.assert_allclose(
+        pnlss.residuals(y, fit, type="pearson"),
+        pnlss.residuals(y, fit, type="deviance"), atol=1e-12,
+    )
+
+
+def test_katojones_pearson_uses_gamma_scale():
+    """KatoJonesLL regresses in chart coordinates that are not the
+    distribution's book parameters, so the generic centered-moment path cannot
+    apply; its Pearson variance is the wrapped-Cauchy first-moment scale
+    (1-gamma^2)/2 (gamma the concentration LP), matching circlss."""
+    from pycircstat2.distributions import kjlss
+
+    rng = np.random.default_rng(2)
+    y = np.mod(rng.uniform(0, 2 * np.pi, 200), 2 * np.pi)
+    mu, g = 1.0, 0.4
+    fit = np.column_stack(
+        [np.full(y.size, mu), np.full(y.size, g),
+         np.full(y.size, 0.2), np.full(y.size, -0.1)]
+    )
+    d = np.angle(np.exp(1j * (y - mu)))
+    np.testing.assert_allclose(
+        kjlss.residuals(y, fit, type="pearson"),
+        np.sin(d) / np.sqrt((1 - g * g) / 2), atol=1e-9,
+    )
+
+
+def test_circularll_deviance_saturated_reference_is_density_peak():
+    """The deviance residual's saturated reference is the true density peak
+    (max_theta logpdf), not the value at the location anchor. A symmetric
+    family (mode == location) is unchanged; a skewed family (sine-skewed JP)
+    takes the off-anchor peak, matching a fine-grid maximum."""
+    from pycircstat2.distributions import (
+        jonespewsey_sineskewed,
+        ssjplss,
+        vmlss,
+    )
+
+    rng = np.random.default_rng(3)
+    y = np.mod(rng.uniform(0, 2 * np.pi, 200), 2 * np.pi)
+
+    # symmetric von Mises: deviance equals the anchor-reference value, since the
+    # mode IS the location (no change from the previous convention).
+    mu, k = 1.2, 3.0
+    params = {"mu": np.full(y.size, mu), "kappa": np.full(y.size, k)}
+    l_obs = vmlss._loglik_values(y, params)
+    l_loc = vmlss._loglik_values(np.full(y.size, mu), params)
+    anchor = np.sign(np.angle(np.exp(1j * (y - mu)))) * np.sqrt(
+        2 * np.clip(l_loc - l_obs, 0, None)
+    )
+    fit = np.column_stack([params["mu"], params["kappa"]])
+    np.testing.assert_allclose(
+        vmlss.residuals(y, fit, type="deviance"), anchor, atol=1e-7
+    )
+
+    # skewed sine-skewed JP: the saturated reference exceeds the anchor value
+    # and matches a dense-grid maximum of the log-density.
+    xi, kap, psi, lmbd = 1.0, 2.0, 0.5, 0.6
+    ps = {
+        "xi": np.full(3, xi), "kappa": np.full(3, kap),
+        "psi": np.full(3, psi), "lmbd": np.full(3, lmbd),
+    }
+    l_peak = float(ssjplss._peak_loglik(ps, "xi")[0])
+    l_anchor = float(
+        jonespewsey_sineskewed.logpdf(
+            np.array([xi]), xi=xi, kappa=kap, psi=psi, lmbd=lmbd
+        )[0]
+    )
+    grid_truth = float(
+        np.max(
+            jonespewsey_sineskewed.logpdf(
+                np.linspace(0, 2 * np.pi, 40001),
+                xi=xi, kappa=kap, psi=psi, lmbd=lmbd,
+            )
+        )
+    )
+    assert l_peak > l_anchor + 1e-3  # the mode sits off the anchor
+    assert l_peak == pytest.approx(grid_truth, abs=1e-4)

@@ -1115,3 +1115,176 @@ def test_a1_stable_at_extreme_kappa():
         val = float(A1(k))
         assert np.isfinite(val)
         assert 0.0 < val < 1.0
+
+
+# ===========================================================================
+# circ_resid / circ_check diagnostics + the CircGAM / CircLM result objects
+# ===========================================================================
+def test_pvonmises_matches_numerical_vonmises_cdf():
+    """The residual-frame von Mises CDF (origin at the antipode) is a proper
+    distribution function and matches a direct numerical integral of the von
+    Mises residual density to machine precision — the analytic PIT reference."""
+    from scipy.integrate import quad
+    from scipy.special import i0e
+
+    from pycircstat2.regression import _pvonmises
+
+    mu, kappa = 1.3, 2.5
+
+    def ref(d):  # F_D(d) = ∫_{-π}^d exp(κ(cos t − 1)) / (2π I0e(κ)) dt
+        return quad(lambda t: np.exp(kappa * (np.cos(t) - 1.0))
+                    / (2 * np.pi * float(i0e(kappa))), -np.pi, d)[0]
+
+    for d in (-np.pi, -1.0, 0.0, 0.7, np.pi):
+        assert _pvonmises(mu + d, mu, kappa) == pytest.approx(ref(d), abs=1e-8)
+    # boundary / median anchors
+    assert _pvonmises(mu - np.pi, mu, kappa) == pytest.approx(0.0, abs=1e-9)
+    assert _pvonmises(mu, mu, kappa) == pytest.approx(0.5, abs=1e-9)
+    # monotone and bounded over the circle
+    grid = mu + np.linspace(-np.pi, np.pi, 200)
+    u = _pvonmises(grid, mu, kappa)
+    assert np.all(np.diff(u) >= -1e-12) and u.min() >= 0 and u.max() <= 1
+
+
+def test_watson_u2_uniform_grid_is_exact_floor():
+    """For the perfectly uniform plotting positions u_i = (2i−1)/(2n) the Watson
+    statistic collapses to its 1/(12n) floor (the sum and mean terms vanish) —
+    a deterministic, closed-form pin on the implementation."""
+    from pycircstat2.regression import _watson_u2
+
+    n = 50
+    u = (2 * np.arange(1, n + 1) - 1) / (2 * n)
+    res = _watson_u2(u)
+    assert res["stat"] == pytest.approx(1.0 / (12 * n), abs=1e-12)
+    assert res["p"] == pytest.approx(1.0, abs=1e-9)
+    # a clustered (non-uniform) sample gives a much larger statistic
+    assert _watson_u2(np.linspace(0.0, 0.2, n))["stat"] > res["stat"] * 50
+
+
+def test_circ_resid_types_tags_and_shapes():
+    """circ_resid returns one value per observation for each residual type, with
+    the circlss ``.type`` / ``.scale`` tags, across the cl / lc / gam legs."""
+    cl = circ_lm("theta ~ X", _cl_frame(), type="cl", tol=1e-10)
+    for t in ("quantile", "deviance", "angular", "pearson"):
+        r = cl.circ_resid(t)
+        assert r.shape == (cl.n,) and r.type == t
+    assert cl.circ_resid("quantile", scale="normal").scale == "normal"
+    with pytest.raises(ValueError, match="quantile|deviance|angular|pearson"):
+        cl.circ_resid("bogus")
+
+    lc = circ_lm("y ~ cos(theta) + sin(theta)", _lung_dataframe(), type="lc")
+    assert lc.circ_resid("deviance").shape == (lc.n,)
+
+    df, _ = _cl_gam_sim(n=300, seed=4)
+    g = circ_gam(["theta ~ s(x)", "~ s(x)"], df)
+    for t in ("quantile", "deviance", "angular", "pearson"):
+        assert g.circ_resid(t).shape[0] == df.height
+
+
+def test_circ_check_draws_panels_and_prints_gof(capsys):
+    """circ_check draws the diagnostic panel grid and prints the R-style GOF
+    table (Watson U² + residual location + the leg backend), returning the
+    Figure — as with summary, it does not return a raw dict. The default grid is
+    the four circular panels (rose dropped for a linear response); which="all"
+    adds the deviance panels."""
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    cl = circ_lm("theta ~ X", _cl_frame(), type="cl", tol=1e-10)
+    fig = cl.circ_check()
+    assert isinstance(fig, Figure) and len(fig.axes) == 4
+    out = capsys.readouterr().out
+    assert "circ_check: circ_lm:cl" in out and "Watson U2" in out
+    assert "converged" in out and "resultant length" in out
+    plt.close(fig)
+
+    cc = circ_lm("theta ~ psi", _milwaukee_frame(), type="cc", order=2)
+    fig = cc.circ_check()
+    assert "higher-order harmonic test" in capsys.readouterr().out
+    plt.close(fig)
+
+    # linear response: the rose panel is dropped (needs an angular residual)
+    lc = circ_lm("y ~ cos(theta) + sin(theta)", _lung_dataframe(), type="lc")
+    fig = lc.circ_check(which="all")
+    titles = [ax.get_title() for ax in fig.axes]
+    assert "angular residuals" not in titles and "R-squared" in \
+        capsys.readouterr().out
+    plt.close(fig)
+
+    df, _ = _cl_gam_sim(n=400, seed=2)
+    g = circ_gam(["theta ~ s(x)", "~ s(x)"], df)
+    fig = g.circ_check(which="all")  # general GAM ⇒ cook dropped with a message
+    out = capsys.readouterr().out
+    assert "effective degrees of freedom" in out and "dropping the 'cook'" in out
+    plt.close(fig)
+
+
+def test_circ_gam_returns_circgam_and_keeps_gam_surface():
+    """circ_gam returns a CircGAM (a hea gam subclass): the full gam interface
+    stays reachable and the circular methods are added on top."""
+    from pycircstat2.regression import CircGAM, _watson_u2
+
+    df, _ = _cl_gam_sim(n=300, seed=11)
+    g = circ_gam(["theta ~ s(x)", "~ 1"], df)
+    assert isinstance(g, CircGAM) and isinstance(g, hea_gam)
+    # inherited gam surface intact
+    for attr in ("summary", "predict", "fitted", "AIC", "logLik", "Vp", "edf"):
+        assert hasattr(g, attr), attr
+    # well-specified fit ⇒ the PIT residual is not flagged non-uniform
+    assert _watson_u2(np.asarray(g.circ_resid("quantile")))["p"] > 0.01
+
+
+def test_circ_lm_cc_pearson_unavailable_paths_are_present():
+    """The von Mises Pearson residual (cl/cc) is the score-standardized
+    sin(d)/√(A1(κ)/κ); confirm it is finite and matches that closed form for a
+    cc fit's single residual concentration."""
+    m = circ_lm("theta ~ psi", _milwaukee_frame(), type="cc", order=2)
+    pe = m.circ_resid("pearson")
+    d = np.angle(np.exp(1j * (m["residuals"])))  # wrapped residual angle
+    v = float(A1(m["kappa"]) / m["kappa"])
+    np.testing.assert_allclose(pe, np.sin(d) / np.sqrt(v), atol=1e-9)
+
+
+def test_circ_plot_smoke_all_views_and_legs():
+    """Headless (Agg) smoke: circ_plot renders flat / geometry / both for every
+    leg and surface — cl→cylinder, cc→torus, lc→can, vmlss/pnlss GAM — and the
+    pnlss derived-direction panel is added (mu1, mu2, direction)."""
+    import matplotlib.pyplot as plt
+
+    rng = np.random.default_rng(0)
+    n = 150
+    x = rng.normal(size=n)
+    theta = np.mod(0.7 + 2 * np.arctan(0.9 * x) + rng.vonmises(0, 6, n), 2 * np.pi)
+    cl = circ_lm("theta ~ x", pl.DataFrame({"theta": theta, "x": x}),
+                 type="cl", tol=1e-9)
+    phi = rng.uniform(0, 2 * np.pi, n)
+    psi = np.mod(phi / 2 + rng.vonmises(0, 5, n), 2 * np.pi)
+    cc = circ_lm("psi ~ phi", pl.DataFrame({"psi": psi, "phi": phi}),
+                 type="cc", order=1)
+    y = 5 + 2 * np.cos(phi) + rng.normal(0, 0.3, n)
+    lc = circ_lm("y ~ cos(phi) + sin(phi)", pl.DataFrame({"y": y, "phi": phi}),
+                 type="lc")
+    for m, npanel in ((cl, 2), (cc, 1), (lc, 1)):
+        for view in ("flat", "geometry", "both"):
+            fig = m.circ_plot(view=view)
+            assert fig is not None and len(fig.axes) >= 1
+            plt.close(fig)
+
+    xg = rng.uniform(0, 1, n)
+    g = circ_gam(["theta ~ s(x)", "~ s(x)"],
+                 pl.DataFrame({"theta": np.mod(np.pi / 2 + np.sin(2 * np.pi * xg)
+                                               + rng.vonmises(0, 5, n), 2 * np.pi),
+                               "x": xg}))
+    for view in ("flat", "geometry", "both"):
+        fig = g.circ_plot(view=view)
+        assert fig is not None
+        plt.close(fig)
+
+    ph = rng.uniform(0, 2 * np.pi, n)
+    th = np.mod(np.arctan2(2 * np.sin(ph) + rng.standard_normal(n),
+                           2 * np.cos(ph) + rng.standard_normal(n)), 2 * np.pi)
+    gp = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
+                  pl.DataFrame({"theta": th, "phi": ph}), family="pnlss")
+    fig = gp.circ_plot(view="flat")  # mu1, mu2, direction panels
+    assert sum(ax.get_title() == "direction" for ax in fig.axes) == 1
+    plt.close(fig)

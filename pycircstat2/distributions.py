@@ -759,14 +759,20 @@ class CircularLL(GeneralFamily):
         return {"null_deviance": float(np.sum(r0 * r0))}
 
     def residuals(self, y, fitted, type: str = "deviance") -> np.ndarray:
-        """Angular residuals. ``response`` = the wrapped difference
-        ``y − μ̂(x)`` in (−π, π]; ``deviance``/``pearson`` =
-        ``sign·√(2·max(ℓ_mode − ℓ, 0))`` with the saturated value taken at
-        the fitted direction — the density mode for every symmetric family;
-        for the skewed ones (sine-skewed JP, Kato–Jones) the fitted
-        direction is a mode *anchor* rather than the argmax, so the inner
-        clip at 0 keeps the convention well-defined there.
-        ``fitted`` is the (n, n_lp) matrix of inverse-linked parameters."""
+        """Angular residuals, ``fitted`` the (n, n_lp) inverse-linked matrix.
+
+        - ``response``: the wrapped difference ``y − μ̂(x)`` in (−π, π].
+        - ``pearson``: the score-standardized ``sin(y − μ̂)/√(Var sin)``, with
+          ``Var(sin(y − μ̂)) = (1 − α₂)/2`` from the family's centered second
+          cosine moment (:meth:`_pearson_var`). Families with no single
+          circular location (the projected normal's Cartesian pair) have no
+          such standardization and alias the deviance residual.
+        - ``deviance``: the signed root of twice the log-likelihood gap to the
+          **saturated** reference — the maximum achievable per-observation
+          log-density (:meth:`_saturated_loglik`), the density peak rather
+          than the value at the location anchor, so a skewed family whose mode
+          is off the anchor still gets a well-posed residual.
+        """
         y = np.asarray(y, dtype=float)
         fitted = np.asarray(fitted, dtype=float)
         mu_hat = self._fitted_direction(fitted)
@@ -778,9 +784,92 @@ class CircularLL(GeneralFamily):
                    if self.links[j].name == "tanhalf" else fitted[:, j])
             for j, name in enumerate(self.params)
         }
+        if type == "pearson":
+            v = self._pearson_var(params)
+            if v is not None:
+                return np.sin(rsd) / np.sqrt(np.clip(v, 1e-12, None))
+            # no single circular location (e.g. pnlss's Cartesian pair): there
+            # is no sin-residual standardization, so alias the deviance
+            # residual — matching circlss's pnlss convention.
         l_obs = self._loglik_values(y, params)
-        l_sat = self._loglik_values(np.mod(mu_hat, 2.0 * np.pi), params)
+        l_sat = self._saturated_loglik(params, mu_hat, l_obs)
         return np.sign(rsd) * np.sqrt(2.0 * np.clip(l_sat - l_obs, 0.0, None))
+
+    def _shape_groups(self, params, loc_name):
+        """Distinct rows of the non-location (shape/concentration) parameters,
+        as ``(unique_rows, inverse_index, shape_names, n)``. The centered
+        moment and the density peak both depend only on these — the location
+        merely slides the density rigidly — so each is computed once per
+        distinct shape and broadcast back over the inverse index."""
+        shape_names = [p for p in self.params if p != loc_name]
+        n = int(np.atleast_1d(np.asarray(params[loc_name])).shape[0])
+        cols = [np.broadcast_to(np.asarray(params[p], dtype=float), (n,))
+                for p in shape_names]
+        if cols:
+            uniq, inv = np.unique(np.column_stack(cols), axis=0,
+                                  return_inverse=True)
+            inv = np.asarray(inv).ravel()
+        else:
+            uniq, inv = np.zeros((1, 0)), np.zeros(n, dtype=int)
+        return uniq, inv, shape_names, n
+
+    def _pearson_var(self, params):
+        """Per-observation ``Var(sin(y − μ̂)) = (1 − α₂)/2`` for the circular
+        Pearson residual, ``α₂`` the centered second cosine moment read from
+        the distribution's own :meth:`trig_moment` (location set to 0 so the
+        moment is centered; location-invariant ⇒ once per distinct shape).
+        Returns ``None`` when the family has no single circular location (the
+        projected normal's Cartesian pair) ⇒ the caller aliases the deviance
+        residual, as circlss does for pnlss. Exact closed forms fall out:
+        von Mises → ``A1(κ)/κ``, wrapped Cauchy → ``(1 − ρ²)/2``."""
+        locs = self.dist.params_by_role().get("location", [])
+        if len(locs) != 1:
+            return None
+        loc_name = locs[0]
+        uniq, inv, shape_names, _ = self._shape_groups(params, loc_name)
+        v = np.empty(len(uniq))
+        for i, row in enumerate(uniq):
+            kw = {loc_name: 0.0}
+            kw.update({nm: float(row[k]) for k, nm in enumerate(shape_names)})
+            a2 = float(np.real(self.dist.trig_moment(2, **kw)))
+            v[i] = 0.5 * (1.0 - a2)
+        return v[inv]
+
+    def _saturated_loglik(self, params, mu_hat, l_obs):
+        """The saturated per-observation log-likelihood for the deviance
+        residual: the maximum achievable log-density. A single-location family
+        has a location-invariant peak height, so it is the grid maximum of the
+        log-density (:meth:`_peak_loglik`); the value at the location anchor
+        and at the datum bound it, keeping symmetric families bit-exact (their
+        mode *is* the location) and the reference never below the attained
+        value. A multi-location family (projected normal) is unimodal at the
+        fitted direction, so the anchor value is already the peak."""
+        l_loc = self._loglik_values(np.mod(mu_hat, 2.0 * np.pi), params)
+        locs = self.dist.params_by_role().get("location", [])
+        if len(locs) == 1:
+            return np.maximum(np.maximum(l_loc, self._peak_loglik(params, locs[0])),
+                              l_obs)
+        return np.maximum(l_loc, l_obs)
+
+    def _peak_loglik(self, params, loc_name, ngrid: int = 1024):
+        """Grid maximum (parabola-refined) of the log-density over θ ∈ [0, 2π):
+        the location-invariant peak log-density, evaluated once per distinct
+        shape and broadcast back."""
+        uniq, inv, shape_names, _ = self._shape_groups(params, loc_name)
+        grid = np.linspace(0.0, 2.0 * np.pi, ngrid, endpoint=False)
+        peaks = np.empty(len(uniq))
+        for i, row in enumerate(uniq):
+            pr = {loc_name: np.zeros(ngrid)}
+            pr.update({nm: np.full(ngrid, float(row[k]))
+                       for k, nm in enumerate(shape_names)})
+            ll = np.asarray(self._loglik_values(grid, pr), dtype=float)
+            j = int(np.argmax(ll))
+            y0, y1, y2 = ll[(j - 1) % ngrid], ll[j], ll[(j + 1) % ngrid]
+            denom = y0 - 2.0 * y1 + y2
+            # parabolic vertex value (>= the grid max when denom < 0, i.e. a
+            # concave peak); fall back to the grid max on a flat/degenerate run
+            peaks[i] = y1 - (y2 - y0) ** 2 / (4.0 * denom) if denom < 0 else y1
+        return peaks[inv]
 
     def __repr__(self):
         links = ", ".join(repr(lnk.name) for lnk in self.links)
@@ -833,6 +922,14 @@ class KatoJonesLL(CircularLL):
         return np.asarray(
             self.dist.logpdf(y, **self._book_params(params)), dtype=float
         )
+
+    def _pearson_var(self, params):
+        """Kato–Jones Pearson variance: the wrapped-Cauchy first-moment scale
+        ``(1 − γ²)/2`` (γ the fitted concentration LP), matching circlss. The
+        chart-coordinate LPs (γ, u₁, u₂) are not book parameters of the
+        distribution, so the generic centered-moment path cannot apply here."""
+        gamma = np.asarray(params["gamma"], dtype=float)
+        return 0.5 * (1.0 - gamma * gamma)
 
     def _null_params(self, y):
         mu0, g0, rho0, lam0 = self.dist.fit(y, method="moments")
