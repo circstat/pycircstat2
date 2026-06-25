@@ -829,7 +829,77 @@ def _resolve_cyclic_knots_data(formulas, data, user_knots):
     return knots or None
 
 
-def circ_gam(formula, data, family=None, knots=None, method="REML", **gam_kwargs):
+# --------------------------------------------------------------------------- #
+# center=True — rotate a circular response off the tan-half wall before fitting
+# --------------------------------------------------------------------------- #
+# circlss's center machinery, ported. A tan-half location (μ = 2·atan(η)) lives
+# in an open 2π-window whose antipode θ = π is unreachable; data hugging that
+# wall fits poorly. We rotate the response to a frame whose origin is the data's
+# circular mean (only when that mean is near the wall), fit there, and rotate
+# response-scale directions back. See ``circ_gam``'s ``center`` argument.
+def _wall_loc(fam):
+    """Column index of the tan-half circular-location LP — the parameter
+    carrying the antipode wall at θ = π — or ``None`` when the family has none.
+    ``pnlss`` (identity-linked Cartesian pair, derived atan2 direction) and
+    every linear-response family have no such column. The circlss
+    ``.circ_wall_loc`` twin; keys on the same ``tanhalf`` link that
+    :meth:`CircGAM._flat_panels` marks circular, so the identical column is
+    rotated everywhere."""
+    if not isinstance(fam, CircularLL):
+        return None
+    for j in range(fam.n_lp):
+        if fam.links[j].name == "tanhalf":
+            return j
+    return None
+
+
+def _center_ref(theta, weights=None, snap=0.05):
+    """Reference angle to rotate a circular response by so the tan-half wall
+    (θ = π) lands away from the data — the circlss ``.circ_center_ref`` twin.
+
+    The centre is the (weighted) **circular mean**: the only rotation-
+    equivariant choice, an exact fixed point for already-centred data. It is
+    applied only when that mean sits in the wall's half of the circle
+    (``|wrap(μ − π)| < π/2 + snap``); a mean well clear of the wall returns 0
+    (an exact no-op), as does a mean already within ``snap`` of the origin.
+    ``weights`` (a circ_mix component's responsibilities, say) weight the mean;
+    ``None`` is the plain mean over the whole response."""
+    theta = np.asarray(theta, dtype=float)
+    ok = np.isfinite(theta)
+    theta = theta[ok]
+    if theta.size == 0:
+        return 0.0
+    w = np.ones_like(theta) if weights is None else np.asarray(weights, float)[ok]
+    mu = float(np.arctan2(float(np.sum(w * np.sin(theta))),
+                          float(np.sum(w * np.cos(theta)))))
+    ref = mu if abs(float(_wrap(mu - np.pi))) < np.pi / 2 + snap else 0.0
+    return 0.0 if (not np.isfinite(ref) or abs(ref) < snap) else ref
+
+
+def _rotate_response(out, loc, ref):
+    """Rotate the circular-location column of a response-scale prediction back
+    to the original frame (``wrap(col + ref)``); scale/shape columns untouched.
+    A no-op when ``ref`` is 0 or there is no wall column. The circlss
+    ``.circ_rotate_response`` twin — works on the polars frame
+    ``predict(type="response")`` returns (column ``fit``/``fit.<loc>``) and on a
+    bare ndarray alike."""
+    if not ref or loc is None:
+        return out
+    if isinstance(out, pl.DataFrame):
+        col = "fit" if loc == 0 else f"fit.{loc}"
+        if col in out.columns:
+            out = out.with_columns(pl.Series(col, _wrap(out[col].to_numpy() + ref)))
+        return out
+    arr = np.asarray(out, dtype=float)
+    if arr.ndim == 2 and arr.shape[1] > loc:
+        arr = arr.copy()
+        arr[:, loc] = _wrap(arr[:, loc] + ref)
+        return arr
+    return out
+
+
+def circ_gam(formula, data, family=None, knots=None, method="REML", center=True,
+             **gam_kwargs):
     """Circular GAM — ``hea.models.gam`` with circular defaults.
 
     A deliberately thin front door: everything forwards to
@@ -856,6 +926,20 @@ def circ_gam(formula, data, family=None, knots=None, method="REML", **gam_kwargs
       predictors are filled with ``~ 1`` (held constant), so
       ``circ_gam("theta ~ s(x)", df, family="jplss")`` smooths μ and pins
       κ, ψ. The first formula must name the response.
+    - ``center=True`` (default) rotates a circular response off the tan-half
+      wall before fitting. The ``tanhalf``-linked families (``vmlss``,
+      ``wclss``, the shape families) place μ in an open 2π-window whose antipode
+      θ = π is unreachable, so a response sitting near that wall fits poorly.
+      ``circ_gam`` rotates the response to a frame centred on its circular mean
+      — only when that mean is near the wall, otherwise an exact no-op — fits
+      there, and rotates response-scale directions back:
+      ``predict(type="response")`` and ``circ_plot`` report in the original
+      frame, while the link scale (``coef``, ``predict(type="link")``) and the
+      raw ``fitted_values`` stay in the centred fit frame. The applied rotation
+      is stored on ``.circ_center`` (0.0 when none). Pass ``center=False`` to
+      disable it, or a number to set the reference angle directly. A no-op for
+      ``pnlss`` (a derived atan2 direction, no wall) and the linear ``l~c``
+      leg; a mean that must *wind through* the wall still needs ``pnlss``.
 
     The circlss/mgcv twin call — cyclic knots auto-pinned to the period::
 
@@ -911,6 +995,31 @@ def circ_gam(formula, data, family=None, knots=None, method="REML", **gam_kwargs
         # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
         formulas += ["~ 1"] * (fam.n_lp - len(formulas))
     df = _to_polars(data)
+    # center: rotate the circular response to a frame where the tan-half wall
+    # (the antipode of the link origin, θ = π) clears the data, fit there, and
+    # report response-scale directions back via predict(type="response") /
+    # circ_plot. A no-op for families with no wall (pnlss's derived direction,
+    # the linear l~c leg) and for data already clear of it (ref snaps to 0).
+    # Only the response column is rotated; the cyclic-smooth covariates — and so
+    # the knots resolved below — are untouched. The circlss center=TRUE twin.
+    ref = 0.0
+    loc = _wall_loc(fam)
+    if loc is not None and center is not False:
+        resp = formulas[0].split("~", 1)[0].strip()
+        if resp in df.columns:
+            yc = np.asarray(df[resp].to_numpy(), dtype=float)
+            if yc.size:
+                w = gam_kwargs.get("weights")
+                if w is not None:
+                    wa = np.asarray(w, dtype=float).ravel()
+                    w = wa if wa.size == yc.size else None
+                ref = _center_ref(yc, w) if center is True else float(center)
+                if np.isfinite(ref) and ref != 0.0:
+                    df = df.with_columns(
+                        pl.Series(resp, np.mod(yc - ref, 2.0 * np.pi))
+                    )
+                else:
+                    ref = 0.0
     merged = _resolve_cyclic_knots_data(formulas, df, knots)
     payload = formulas if len(formulas) > 1 else formulas[0]
     fit = gam(payload, df, family=fam, knots=merged, method=method, **gam_kwargs)
@@ -918,6 +1027,7 @@ def circ_gam(formula, data, family=None, knots=None, method="REML", **gam_kwargs
     # `class(fit) <- c("circ_gam", class(fit))`): every hea gam attribute/method
     # stays directly reachable, plus the circular circ_plot/circ_check/circ_resid.
     fit.__class__ = CircGAM
+    fit.circ_center = ref  # rotation applied at fit time (0.0 if none)
     return fit
 
 
@@ -1190,7 +1300,11 @@ class _CircRegressionMixin:
             )
             return None
         rv = np.asarray(self._response_values(), dtype=float)
-        yobs = _wrap(rv) if resp_circular else rv
+        # a centred CircGAM stores the rotated response; rotate the overlay back
+        # by +circ_center so it shares the panels' original frame (0 otherwise,
+        # and for CircLM, which has no circ_center).
+        ref = getattr(self, "circ_center", 0.0)
+        yobs = _wrap(rv + ref) if resp_circular else rv
         surface = {"cl": "cylinder", "cc": "torus", "lc": "can"}.get(kind)
         surf_idx = (
             next((i for i, p in enumerate(panels) if p.get("circular")), 0)
@@ -1250,6 +1364,29 @@ class CircGAM(_CircRegressionMixin, gam):
     Returned by :func:`circ_gam`, constructed by reclassing the fitted gam in
     place (the Python analog of R's ``class(fit) <- c("circ_gam", class(fit))``),
     so it carries no ``__init__`` of its own."""
+
+    #: rotation (rad) applied to the response at fit time when ``center`` was on
+    #: (see :func:`circ_gam`); 0.0 for an uncentred fit. The class default keeps
+    #: pre-``circ_center`` pickles and any directly built CircGAM safe.
+    circ_center = 0.0
+
+    def predict(self, *args, **kwargs):
+        """``hea.models.gam.predict`` with the centring rotation undone on the
+        response scale. When the fit was centred (``circ_center != 0``),
+        ``type="response"`` (hea's default) rotates the circular-location column
+        back to the original frame — the circlss ``predict.circ_gam`` twin;
+        ``type="link"``/``"lpmatrix"``/``"terms"`` pass straight through, in the
+        centred fit frame. Identical to hea's ``predict`` for an uncentred fit."""
+        out = super().predict(*args, **kwargs)
+        ref = getattr(self, "circ_center", 0.0)
+        if not ref:
+            return out
+        typ = kwargs.get("type")
+        if typ is None and len(args) >= 2:
+            typ = args[1]
+        if (typ or "response") != "response":
+            return out
+        return _rotate_response(out, _wall_loc(self.family), ref)
 
     def _response_name(self):
         fl = self.formula
@@ -1418,6 +1555,17 @@ class CircGAM(_CircRegressionMixin, gam):
                     "hi": mid + 2 * sed,
                 }
             )
+        # centred fit: rotate every circular (location/direction) curve and its
+        # band back to the original frame; scale/shape panels are rotation-
+        # invariant. A no-op when uncentred or wall-less (ref == 0). Matches the
+        # +ref the observed overlay gets in circ_plot, and circlss's plot twin.
+        ref = getattr(self, "circ_center", 0.0)
+        if ref:
+            for p in panels:
+                if p.get("circular"):
+                    for k in ("mid", "lo", "hi"):
+                        if p.get(k) is not None:
+                            p[k] = _wrap(np.asarray(p[k], dtype=float) + ref)
         return panels
 
     def _direction_band(self, nd, m1, m2):

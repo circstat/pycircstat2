@@ -470,8 +470,13 @@ def test_circ_gam_b2_twin_and_knot_defaults():
     # phi on [0, 2π], no explicit knots — the default brackets it to the period
     b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"], df)
     assert b2.converged
+    # mu_true's circular mean (≈ π/2) sits within snap of the wall's half, so
+    # center=True (the default) rotates the fit off the θ = π wall; the raw
+    # fitted_values then live in that centred frame, so add circ_center back —
+    # the original frame predict(type="response") reports — before scoring.
     fv = np.asarray(b2.fitted_values)
-    err = np.abs(np.angle(np.exp(1j * (np.mod(fv[:, 0], 2 * np.pi) - mu_true))))
+    mu_fit = np.mod(fv[:, 0] + b2.circ_center, 2 * np.pi)
+    err = np.abs(np.angle(np.exp(1j * (mu_fit - mu_true))))
     assert err.mean() < 0.15
 
     # a single formula auto-expands the constant second LP
@@ -778,6 +783,129 @@ def test_circ_gam_family_default_is_vmlss():
     g2 = circ_gam("theta ~ 1", df, family=CircularLL(vonmises))
     assert np.isclose(float(g0.logLik), float(g1.logLik), rtol=1e-10)
     assert np.isclose(float(g1.logLik), float(g2.logLik), rtol=1e-10)
+
+
+# --- center=TRUE: rotate the response off the tan-half wall -----------------
+# Ported from circlss's test-circ_gam.R "center = TRUE machinery" block: the
+# reference chooser, the wall-column gate, the response rotate-back, and an
+# end-to-end recovery of a wall-hugging location that the wall otherwise breaks.
+
+
+def test_circ_center_ref_noop_when_wall_clear():
+    """_center_ref is an exact no-op when the circular mean is clear of the
+    wall: concentrated near 0, and a wide symmetric fan, both mean ≈ 0 → 0."""
+    from pycircstat2.regression import _center_ref, _wrap
+
+    rng = np.random.default_rng(1)
+    assert _center_ref(_wrap(rng.normal(0.0, 0.4, 200))) == 0.0
+    assert _center_ref(_wrap(np.linspace(-2.0, 2.0, 200))) == 0.0
+
+
+def test_circ_center_ref_moves_wall_off_straddling_pi():
+    """Data sitting on the wall (mean ≈ π) is rotated by ≈ π, pulling its
+    circular mean back to ≈ 0 (off the wall)."""
+    from pycircstat2.regression import _center_ref, _wrap
+
+    rng = np.random.default_rng(2)
+    th = _wrap(rng.normal(np.pi, 0.4, 200))
+    ref = _center_ref(th)
+    assert abs(ref) > 0.5
+    recentered = np.arctan2(np.mean(np.sin(th - ref)), np.mean(np.cos(th - ref)))
+    assert abs(recentered) < 0.3
+
+
+def test_circ_center_ref_weighted_branch():
+    """The weighted branch (a circ_mix component's responsibilities) centers
+    the weighted mode: weight the near-π mass → ref ≈ π; weight the near-0
+    mass (clear of the wall) → no-op."""
+    from pycircstat2.regression import _center_ref, _wrap
+
+    rng = np.random.default_rng(3)
+    th = _wrap(np.concatenate([rng.normal(np.pi, 0.3, 100), rng.normal(0.0, 0.3, 100)]))
+    w_pi = np.r_[np.ones(100), np.zeros(100)]
+    w_0 = np.r_[np.zeros(100), np.ones(100)]
+    assert abs(float(np.angle(np.exp(1j * (_center_ref(th, w_pi) - np.pi))))) < 0.3
+    assert _center_ref(th, w_0) == 0.0
+
+
+def test_wall_loc_flags_tanhalf_only():
+    """_wall_loc points at the tan-half circular location and nothing else:
+    vmlss/wclss → 0, pnlss (derived atan2, identity links) and a linear family
+    → None."""
+    import hea.family as hea_family
+    from pycircstat2.distributions import pnlss, vmlss, wclss
+    from pycircstat2.regression import _wall_loc
+
+    assert _wall_loc(vmlss) == 0
+    assert _wall_loc(wclss) == 0
+    assert _wall_loc(pnlss) is None
+    assert _wall_loc(hea_family.gaussian) is None
+
+
+def test_rotate_response_shifts_only_circular_col():
+    """_rotate_response wraps only the location column; scale columns and the
+    ref==0 / wall-less cases are untouched. Works on the polars frame
+    predict(type='response') returns and on a bare ndarray."""
+    from pycircstat2.regression import _rotate_response, _wrap
+
+    p = pl.DataFrame({"fit": [-3.0, 0.0, 3.0], "fit.1": [2.0, 5.0, 9.0]})
+    out = _rotate_response(p, 0, 0.5)
+    np.testing.assert_allclose(out["fit"].to_numpy(), _wrap(np.array([-3.0, 0.0, 3.0]) + 0.5))
+    np.testing.assert_array_equal(out["fit.1"].to_numpy(), [2.0, 5.0, 9.0])  # scale kept
+    assert _rotate_response(p, 0, 0.0) is p  # ref 0 = no-op
+    assert _rotate_response(p, None, 0.5) is p  # no wall = no-op
+    arr = np.array([[-3.0, 2.0], [3.0, 9.0]])
+    np.testing.assert_allclose(_rotate_response(arr, 0, 0.5)[:, 0], _wrap(arr[:, 0] + 0.5))
+
+
+def test_circ_gam_center_default_recenters_wall_hugging_data():
+    """End-to-end: a location that straddles the θ = π wall (mean ≈ π) is
+    unrepresentable on the tan-half link, so center=True (the default) rotates
+    the fit off the wall and predict(type='response') reports μ̂ back in the
+    original frame — recovering the truth the uncentred fit cannot."""
+    rng = np.random.default_rng(0)
+    n = 400
+    x = rng.uniform(0.0, 1.0, n)
+    mu_true = np.pi + 0.8 * np.sin(2 * np.pi * x)  # swings across the wall
+    theta = np.mod(mu_true + rng.vonmises(0.0, 5.0, n), 2 * np.pi)
+    df = pl.DataFrame({"theta": theta, "x": x})
+
+    g = circ_gam(["theta ~ s(x)", "~ s(x)"], df)  # center=True default
+    assert abs(g.circ_center) > 0.5  # rotated off the wall
+    grid = np.linspace(0.0, 1.0, 100)
+    nd = pl.DataFrame({"x": grid})
+    mu_hat = np.asarray(g.predict(nd, type="response"))[:, 0]
+    err = np.abs(np.angle(np.exp(1j * (mu_hat - (np.pi + 0.8 * np.sin(2 * np.pi * grid))))))
+    assert err.mean() < 0.15
+
+    # the rotate-back lands on response, not link: response == wrap(linkinv(link)
+    # + circ_center). predict(type="link") stays in the centred fit frame.
+    eta = np.asarray(g.predict(nd, type="link"))[:, 0]
+    from pycircstat2.regression import _wrap
+
+    expected = _wrap(np.asarray(g.family.links[0].linkinv(eta)) + g.circ_center)
+    np.testing.assert_allclose(_wrap(mu_hat), expected, atol=1e-9)
+
+    # center=False leaves the fit on the wall: no rotation recorded.
+    g0 = circ_gam(["theta ~ s(x)", "~ s(x)"], df, center=False)
+    assert g0.circ_center == 0.0
+
+
+def test_circ_gam_center_numeric_and_wall_free_family():
+    """center accepts an explicit reference angle, and a wall-free family
+    (pnlss, identity-linked Cartesian location) is never centred even on
+    wall-hugging data."""
+    from pycircstat2.distributions import pnlss
+
+    rng = np.random.default_rng(5)
+    theta = np.mod(rng.normal(np.pi, 0.3, 250), 2 * np.pi)  # mass on the wall
+    df = pl.DataFrame({"theta": theta})
+
+    g = circ_gam("theta ~ 1", df, family="vmlss", center=0.9)
+    assert g.circ_center == pytest.approx(0.9)
+    # pnlss has no wall: center=True is a no-op even with mass on θ = π
+    gp = circ_gam(["theta ~ 1", "~ 1"], df, family=pnlss)
+    assert gp.circ_center == 0.0
 
 
 # ===========================================================================
