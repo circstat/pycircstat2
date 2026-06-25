@@ -1039,6 +1039,61 @@ def _wrap(a):
     return np.angle(np.exp(1j * np.asarray(a, dtype=float)))
 
 
+def _to_02pi(a):
+    """Wrap angle(s) to pycircstat2's [0, 2π) convention. Unlike a bare
+    ``np.mod(a, 2π)``, the float boundary is folded down: ``np.mod`` returns
+    *exactly* 2π for a tiny negative input (2π − ε rounds up), and a parameter of
+    exactly 2π trips some laws' domain checks (e.g. ``katojones.logpdf`` → NaN)."""
+    m = np.mod(np.asarray(a, dtype=float), 2.0 * np.pi)
+    return np.where(m >= 2.0 * np.pi, 0.0, m)
+
+
+def _circ_sd_from_R(R):
+    """Circular SD ``√(−2·log R)`` from the mean resultant length ``R`` — the
+    **predictive** angular spread a circular location band shows (the spread of
+    the responses about the fitted direction), not a confidence interval of the
+    mean. ``R`` is held off 0/1 (finite band) and the result capped at π — a
+    half-circle each way is the whole circle, the honest near-uniform limit
+    rather than an over-wrapping ribbon. The circlss ``.circ_sd_from_R`` twin,
+    shared by the closed-form circ_lm path (``R = A1(κ)``) and the quadrature
+    circ_gam path (:func:`_circ_sd_quad`)."""
+    R = np.clip(np.asarray(R, dtype=float), np.finfo(float).eps, 1.0 - 1e-12)
+    return np.minimum(np.sqrt(-2.0 * np.log(R)), np.pi)
+
+
+def _circ_sd_quad(fam, resp_fit, M=512):
+    """Per-grid-row circular SD of the fitted law, by deterministic quadrature
+    of the family's OWN density — the circlss ``.circ_sd_quad`` twin.
+
+    ``resp_fit`` is the ``(n_grid, n_lp)`` response-scale parameter matrix. For
+    each row the family's ``logpdf`` is evaluated on a fine angle grid at those
+    parameters, giving the density ``f``; the mean resultant length
+    ``R = |∫ e^{iθ} f| / ∫ f`` then feeds :func:`_circ_sd_from_R`. One exact
+    path for every CircularLL family — von Mises (``R = A1(κ)``), wrapped
+    Cauchy/normal/cardioid (ρ), Cartwright, Kato–Jones, the projected normal's
+    derived direction, and the skew/flexible laws whose ``R`` has no closed
+    form alike."""
+    resp = np.atleast_2d(np.asarray(resp_fit, dtype=float))
+    n = resp.shape[0]
+    tg = np.linspace(0.0, 2.0 * np.pi, M, endpoint=False)
+    params = {
+        name: np.repeat(
+            _to_02pi(resp[:, j]) if fam.links[j].name == "tanhalf" else resp[:, j],
+            M,
+        )
+        for j, name in enumerate(fam.params)
+    }
+    ll = np.asarray(fam._loglik_values(np.tile(tg, n), params), dtype=float)
+    f = np.exp(ll).reshape(n, M)
+    # drop non-finite density points (some laws' logpdf — e.g. katojones — can
+    # return NaN/Inf at isolated grid angles): they contribute 0 to the moment
+    # integral, leaving a well-posed R from the finite remainder.
+    f = np.where(np.isfinite(f), f, 0.0)
+    Z = f.sum(axis=1)
+    R = np.hypot(f @ np.cos(tg), f @ np.sin(tg)) / np.where(Z > 0.0, Z, 1.0)
+    return _circ_sd_from_R(R)
+
+
 def _pvonmises(theta, mu=0.0, kappa=1.0, jmax=60, tol=1e-12):
     """von Mises CDF in the residual frame, origin at the antipode −π::
 
@@ -1275,8 +1330,9 @@ class _CircRegressionMixin:
         ``"geometry"`` draws only that surface — a cylinder (circular~linear),
         torus (circular~circular) or upright can (linear~circular); ``"flat"``
         draws one response-scale panel per modelled parameter against the
-        covariate (a circular location broken at the ±π jump, a 2-SE band, the
-        observed responses overlaid). A surface-less fit falls back to the flat
+        covariate (a circular location broken at the ±π jump, banded by its
+        ± circular-SD predictive spread — a concentration/shape parameter keeps
+        a 2-SE band — the observed responses overlaid). A surface-less fit falls back to the flat
         view. Returns the matplotlib Figure. A fit with no single covariate axis
         defers (to hea's per-term ``plot`` for a CircGAM, else a message pointing
         at ``coef``/``predict``/``summary``)."""
@@ -1302,9 +1358,10 @@ class _CircRegressionMixin:
         rv = np.asarray(self._response_values(), dtype=float)
         # a centred CircGAM stores the rotated response; rotate the overlay back
         # by +circ_center so it shares the panels' original frame (0 otherwise,
-        # and for CircLM, which has no circ_center).
+        # and for CircLM, which has no circ_center). Circular responses display on
+        # [0, 2π), pycircstat2's angle convention.
         ref = getattr(self, "circ_center", 0.0)
-        yobs = _wrap(rv + ref) if resp_circular else rv
+        yobs = np.mod(rv + ref, 2.0 * np.pi) if resp_circular else rv
         surface = {"cl": "cylinder", "cc": "torus", "lc": "can"}.get(kind)
         surf_idx = (
             next((i for i, p in enumerate(panels) if p.get("circular")), 0)
@@ -1340,7 +1397,11 @@ class _CircRegressionMixin:
             return fig
 
         sp = panels[surf_idx]
-        lo, hi = (sp.get("lo"), sp.get("hi")) if se else (None, None)
+        if sp.get("circular") and sp.get("csd") is not None:
+            # circular surface band = the ± circular-SD ribbon on the tube
+            lo, hi = (sp["mid"] - sp["csd"], sp["mid"] + sp["csd"]) if se else (None, None)
+        else:
+            lo, hi = (sp.get("lo"), sp.get("hi")) if se else (None, None)
         if view == "both":
             fig = plt.figure(figsize=figsize or (12.0, 5.0))
             ax3 = fig.add_subplot(1, 2, 1, projection="3d")
@@ -1524,66 +1585,55 @@ class CircGAM(_CircRegressionMixin, gam):
         pr = self.predict(nd, type="link", se_fit=True).to_numpy()
         nlp = fam.n_lp
         eta, seta = pr[:, :nlp], pr[:, nlp : 2 * nlp]
-        resp_fit = np.empty((nd.height, nlp))
+        resp_fit = np.column_stack(
+            [np.asarray(fam.links[j].linkinv(eta[:, j]), dtype=float) for j in range(nlp)]
+        )
+        # A circular location carries the ± circular-SD PREDICTIVE band (the
+        # spread of the responses about the fitted direction), from one
+        # quadrature of the fitted law per grid point — one path for every
+        # family, incl. pnlss's derived direction below. Scale/shape parameters
+        # keep the delta-method 2-SE band. The circlss plot twin.
+        csd = _circ_sd_quad(fam, resp_fit)
+        twopi = 2.0 * np.pi
         panels = []
         for j in range(nlp):
-            li = fam.links[j].linkinv
-            mid = np.asarray(li(eta[:, j]), dtype=float)
-            resp_fit[:, j] = mid
-            panels.append(
-                {
-                    "name": fam.params[j],
-                    "circular": fam.links[j].name == "tanhalf",
-                    "mid": mid,
-                    "lo": np.asarray(li(eta[:, j] - 2 * seta[:, j]), dtype=float),
-                    "hi": np.asarray(li(eta[:, j] + 2 * seta[:, j]), dtype=float),
-                }
-            )
-        # derived mean direction (e.g. pnlss's atan2(mu2, mu1)): a function of
-        # two LPs at once, so its band is the joint delta-method interval.
+            if fam.links[j].name == "tanhalf":
+                panels.append(
+                    {"name": fam.params[j], "circular": True,
+                     "mid": np.mod(resp_fit[:, j], twopi), "csd": csd}
+                )
+            else:
+                li = fam.links[j].linkinv
+                panels.append(
+                    {
+                        "name": fam.params[j],
+                        "circular": False,
+                        "mid": resp_fit[:, j],
+                        "lo": np.asarray(li(eta[:, j] - 2 * seta[:, j]), dtype=float),
+                        "hi": np.asarray(li(eta[:, j] + 2 * seta[:, j]), dtype=float),
+                    }
+                )
+        # derived mean direction (e.g. pnlss's atan2(mu2, mu1)): a circular
+        # direction, so the same ± circular-SD predictive band as a native
+        # circular location (its concentration is implicit in the two LPs).
         loc = fam.dist.params_by_role().get("location", [])
         if len(loc) == 2:
             i1, i2 = (fam.params.index(loc[0]), fam.params.index(loc[1]))
             mid = np.arctan2(resp_fit[:, i2], resp_fit[:, i1])
-            sed = self._direction_band(nd, resp_fit[:, i1], resp_fit[:, i2])
             panels.append(
-                {
-                    "name": "direction",
-                    "circular": True,
-                    "mid": mid,
-                    "lo": mid - 2 * sed,
-                    "hi": mid + 2 * sed,
-                }
+                {"name": "direction", "circular": True,
+                 "mid": np.mod(mid, twopi), "csd": csd}
             )
-        # centred fit: rotate every circular (location/direction) curve and its
-        # band back to the original frame; scale/shape panels are rotation-
-        # invariant. A no-op when uncentred or wall-less (ref == 0). Matches the
-        # +ref the observed overlay gets in circ_plot, and circlss's plot twin.
+        # centred fit: rotate every circular location/direction curve back to the
+        # original frame (its csd half-width is rotation-invariant). A no-op when
+        # uncentred or wall-less (ref == 0). Matches the +ref the observed overlay
+        # gets in circ_plot, and circlss's plot twin.
         ref = getattr(self, "circ_center", 0.0)
         if ref:
             for p in panels:
                 if p.get("circular"):
-                    for k in ("mid", "lo", "hi"):
-                        if p.get(k) is not None:
-                            p[k] = _wrap(np.asarray(p[k], dtype=float) + ref)
+                    p["mid"] = np.mod(np.asarray(p["mid"], dtype=float) + ref, twopi)
         return panels
-
-    def _direction_band(self, nd, m1, m2):
-        """Joint delta-method SE for the projected-normal mean direction
-        atan2(μ₂, μ₁): both components are identity-linked, so the band combines
-        the lpmatrix blocks through the joint coefficient covariance Vp."""
-        xp = np.asarray(self.predict(nd, type="lpmatrix"), dtype=float)
-        i1, i2 = self.lpi[0], self.lpi[1]
-        vp = np.asarray(self.Vp, dtype=float)
-        x1, x2 = xp[:, i1], xp[:, i2]
-        v11 = np.sum((x1 @ vp[np.ix_(i1, i1)]) * x1, axis=1)
-        v22 = np.sum((x2 @ vp[np.ix_(i2, i2)]) * x2, axis=1)
-        v12 = np.sum((x1 @ vp[np.ix_(i1, i2)]) * x2, axis=1)
-        r2 = np.maximum(m1**2 + m2**2, 1e-8)
-        return (
-            np.sqrt(np.clip(m2**2 * v11 + m1**2 * v22 - 2 * m1 * m2 * v12, 0.0, None))
-            / r2
-        )
 
     def _check_cov(self):
         cov = self._covariate()
@@ -1744,26 +1794,25 @@ class CircLM(_CircRegressionMixin):
             return [{"name": self.response, "circular": False, **self._lc_loc(grid)}]
         if self.type == "cc":
             return [{"name": self.response, "circular": True, **self._cc_loc(grid)}]
+        # cl: the location μ carries the ± circular-SD PREDICTIVE band from the
+        # fitted concentration at each grid point (√(−2 log A1(κ)), constant for
+        # the mean model, varying for a κ-model); the κ panel keeps its 2-SE
+        # band. The circlss plot twin.
+        ka = self._cl_kappa(nd)
+        csd = _circ_sd_from_R(A1(np.asarray(ka["mid"], dtype=float)))
         return [
-            {"name": self.response, "circular": True, **self._cl_mu(nd)},
-            {"name": "kappa", "circular": False, **self._cl_kappa(nd)},
+            {"name": self.response, "circular": True, **self._cl_mu(nd, csd)},
+            {"name": "kappa", "circular": False, **ka},
         ]
 
-    def _cl_mu(self, nd):
-        """Fisher–Lee mean direction μ = μ0 + 2·atan(Xβ) with its delta-method
-        band: the intercept level (se_μ²) plus G Vβ Gᵀ, G = 2/(1+η²)·X."""
+    def _cl_mu(self, nd, csd):
+        """Fisher–Lee mean direction μ = μ0 + 2·atan(Xβ) (on [0, 2π)) with the
+        ± circular-SD predictive band (``csd``, the angular spread of the fitted
+        von Mises)."""
         xn, _ = _circ_lm_design(self.mu_formula, nd, self.response)
         eta = xn @ self.beta if xn.shape[1] else np.zeros(nd.height)
-        mid = _wrap(self.mu + 2.0 * np.arctan(eta))
-        v_level = self.se_mu**2 if self.se_mu is not None else 0.0
-        vbeta = self._fields.get("Vbeta")
-        if xn.shape[1] and vbeta is not None:
-            g = (2.0 / (1.0 + eta**2))[:, None] * xn
-            v_beta = np.sum((g @ vbeta) * g, axis=1)
-        else:
-            v_beta = 0.0
-        sd = np.sqrt(np.clip(v_level + v_beta, 0.0, None))
-        return {"mid": mid, "lo": mid - 2.0 * sd, "hi": mid + 2.0 * sd}
+        mid = np.mod(self.mu + 2.0 * np.arctan(eta), 2.0 * np.pi)
+        return {"mid": mid, "csd": csd}
 
     def _cl_kappa(self, nd):
         """Concentration log κ = α + Zγ with its band on the log scale (through
@@ -1788,25 +1837,15 @@ class CircLM(_CircRegressionMixin):
         }
 
     def _cc_loc(self, grid):
-        """Harmonic circular–circular location atan2(ŝ, ĉ) with the delta-method
-        band on the two OLS predictions, including their residual cross-
-        covariance (homoskedastic SUR)."""
+        """Harmonic circular–circular location atan2(ŝ, ĉ) with the ± circular-SD
+        predictive band from the fitted residual concentration κ
+        (√(−2 log A1(κ)), constant across the grid). The circlss plot twin."""
         nd = pl.DataFrame({self.var: np.mod(grid, 2.0 * np.pi)})
-        pc = self.cos_lm.predict(nd, se_fit=True)
-        ps = self.sin_lm.predict(nd, se_fit=True)
-        cf, sf = pc["fit"].to_numpy(), ps["fit"].to_numpy()
-        vc, vs = pc["se.fit"].to_numpy() ** 2, ps["se.fit"].to_numpy() ** 2
-        sc = float(self.cos_lm.sigma)
-        rc, rs = _ravel(self.cos_lm.residuals), _ravel(self.sin_lm.residuals)
-        shp = np.asarray(self.cos_lm.X.to_numpy()).shape
-        scs = float(rc @ rs) / max(shp[0] - shp[1], 1)
-        cv = (vc / sc**2) * scs  # leverage h = vc/σ_cos²
-        r2 = np.maximum(cf**2 + sf**2, 1e-8)
-        sd = np.sqrt(
-            np.clip((sf**2 * vc + cf**2 * vs - 2 * sf * cf * cv) / r2**2, 0.0, None)
-        )
-        mid = np.arctan2(sf, cf)
-        return {"mid": mid, "lo": mid - 2.0 * sd, "hi": mid + 2.0 * sd}
+        cf = self.cos_lm.predict(nd)["fit"].to_numpy()
+        sf = self.sin_lm.predict(nd)["fit"].to_numpy()
+        mid = np.mod(np.arctan2(sf, cf), 2.0 * np.pi)
+        csd = float(_circ_sd_from_R(A1(float(np.atleast_1d(self.kappa)[0]))))
+        return {"mid": mid, "csd": csd}
 
     def _lc_loc(self, grid):
         """Harmonic linear–circular mean over the cyclic covariate: the OLS
@@ -2026,63 +2065,112 @@ class CircLM(_CircRegressionMixin):
 # can lift them wholesale into visualization.py; circ_plot drives them off the
 # per-class _geometry()/_flat_panels() hooks.
 # --------------------------------------------------------------------------- #
-def _break_wrap(v):
-    """Insert NaN at each ±π branch jump of a circular curve (|Δ| > π), so a
-    line/band plotted against the covariate breaks cleanly instead of drawing a
-    vertical streak across the wrap."""
-    if v is None:
-        return None
-    v = np.array(v, dtype=float)
-    v[1:][np.abs(np.diff(v)) > np.pi] = np.nan
-    return v
-
-
 def _band_fill(ax, grid, lo, hi):
-    """A translucent SE band that breaks at the NaN gaps (the ±π wraps)."""
+    """A translucent band that breaks at NaN gaps — the non-circular (scale /
+    shape / linear-response) panels, drawn directly against the covariate."""
     lo = np.asarray(lo, dtype=float)
     hi = np.asarray(hi, dtype=float)
     ok = np.isfinite(lo) & np.isfinite(hi)
     ax.fill_between(
-        grid,
-        lo,
-        hi,
-        where=ok,
-        color="steelblue",
-        alpha=0.25,
-        linewidth=0.0,
-        interpolate=False,
+        grid, lo, hi, where=ok, color="steelblue", alpha=0.25,
+        linewidth=0.0, interpolate=False,
     )
 
 
+# Circular location curves/bands are drawn in pycircstat2's [0, 2π) convention by
+# UNWRAPPING each to a continuous phase and tiling every 2π copy that can reach
+# the panel, letting set_ylim clip the rest. That keeps both the curve and its
+# band continuous across the 0/2π cut — they exit one edge and re-enter the
+# other, and a wide band wraps the full height instead of clipping — rather than
+# a principal branch broken at the cut. The circlss plot twin.
+def _unwrap_runs(v):
+    """Maximal finite runs of ``v``, each unwrapped to a continuous phase (the
+    per-step differences folded into (−π, π] and accumulated); returns a list of
+    ``(index_array, phase_array)``."""
+    v = np.asarray(v, dtype=float)
+    ok = np.isfinite(v)
+    runs, i, n = [], 0, v.size
+    while i < n:
+        if not ok[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and ok[j]:
+            j += 1
+        idx = np.arange(i, j)
+        m = v[idx]
+        if m.size > 1:
+            fold = np.angle(np.exp(1j * np.diff(m)))
+            m = m[0] + np.concatenate([[0.0], np.cumsum(fold)])
+        runs.append((idx, m))
+        i = j
+    return runs
+
+
+def _tile_k(lo_min, hi_max, view=(0.0, 2.0 * np.pi)):
+    """The 2π-shift indices ``k`` whose copy ``[· + 2πk]`` can reach ``view``."""
+    period = 2.0 * np.pi
+    return range(
+        int(np.ceil((view[0] - hi_max) / period)),
+        int(np.floor((view[1] - lo_min) / period)) + 1,
+    )
+
+
+def _band_fill_circular(ax, grid, mid, csd, view=(0.0, 2.0 * np.pi)):
+    """The ± circular-SD band of an unwrapped location, tiled across the wrap."""
+    grid = np.asarray(grid, dtype=float)
+    csd = np.broadcast_to(np.asarray(csd, dtype=float), np.asarray(mid).shape)
+    for idx, phase in _unwrap_runs(mid):
+        g, lo, hi = grid[idx], phase - csd[idx], phase + csd[idx]
+        for k in _tile_k(float(lo.min()), float(hi.max()), view):
+            ax.fill_between(
+                g, lo + 2 * np.pi * k, hi + 2 * np.pi * k,
+                color="steelblue", alpha=0.25, linewidth=0.0,
+            )
+
+
+def _lines_circular(ax, grid, mid, view=(0.0, 2.0 * np.pi), **kw):
+    """The location curve, tiled to match its band (continuous across the cut)."""
+    grid = np.asarray(grid, dtype=float)
+    for idx, phase in _unwrap_runs(mid):
+        g = grid[idx]
+        for k in _tile_k(float(phase.min()), float(phase.max()), view):
+            ax.plot(g, phase + 2 * np.pi * k, **kw)
+
+
 def _flat_panel(ax, grid, panel, xlab, se, xobs, yobs, rug):
-    """One response-scale panel against the covariate: a circular location is
-    broken at the ±π jump with ``ylim=(-π, π)``; the 2-SE band is a broken
-    shadow; the observed responses (and an optional rug) overlay it."""
+    """One response-scale panel against the covariate. A circular location uses
+    the [0, 2π) convention with ``ylim=(0, 2π)``, its curve and ± circular-SD
+    band tiled continuously across the wrap; a scale/shape/linear panel draws a
+    2-SE shadow directly. The observed responses (and an optional rug) overlay."""
     mid = np.asarray(panel["mid"], dtype=float)
-    lo, hi = panel.get("lo"), panel.get("hi")
     if panel.get("circular"):
-        mid, lo, hi = _break_wrap(mid), _break_wrap(lo), _break_wrap(hi)
-        ylim = [-np.pi, np.pi]
+        ylim = [0.0, 2.0 * np.pi]
+        mid = np.mod(mid, 2.0 * np.pi)
+        if xobs is not None and yobs is not None:
+            ax.scatter(xobs, np.mod(yobs, 2.0 * np.pi), s=6, c="black",
+                       alpha=0.25, edgecolors="none")
+        csd = panel.get("csd")
+        if se and csd is not None:
+            _band_fill_circular(ax, grid, mid, csd)
+        _lines_circular(ax, grid, mid, color="steelblue", lw=2)
     else:
-        stack = [mid] + [np.asarray(v, float) for v in (lo, hi) if v is not None]
-        cat = np.concatenate(stack)
-        ylim = [float(np.nanmin(cat)), float(np.nanmax(cat))]
-    if yobs is not None and len(yobs):
-        ylim = [min(ylim[0], float(np.min(yobs))), max(ylim[1], float(np.max(yobs)))]
-    if xobs is not None and yobs is not None:
-        ax.scatter(xobs, yobs, s=6, c="black", alpha=0.25, edgecolors="none")
-    if se and lo is not None and hi is not None:
-        _band_fill(ax, grid, lo, hi)
-    ax.plot(grid, mid, color="steelblue", lw=2)
-    if rug and xobs is not None:
-        ax.plot(
-            xobs,
-            np.full(len(xobs), ylim[0]),
-            "|",
-            color="black",
-            alpha=0.3,
-            markersize=6,
+        lo, hi = panel.get("lo"), panel.get("hi")
+        cat = np.concatenate(
+            [mid] + [np.asarray(v, float) for v in (lo, hi) if v is not None]
         )
+        ylim = [float(np.nanmin(cat)), float(np.nanmax(cat))]
+        if yobs is not None and len(yobs):
+            ylim = [min(ylim[0], float(np.min(yobs))),
+                    max(ylim[1], float(np.max(yobs)))]
+        if xobs is not None and yobs is not None:
+            ax.scatter(xobs, yobs, s=6, c="black", alpha=0.25, edgecolors="none")
+        if se and lo is not None and hi is not None:
+            _band_fill(ax, grid, lo, hi)
+        ax.plot(grid, mid, color="steelblue", lw=2)
+    if rug and xobs is not None:
+        ax.plot(xobs, np.full(len(xobs), ylim[0]), "|", color="black",
+                alpha=0.3, markersize=6)
     ax.set_xlabel(xlab)
     ax.set_ylabel(panel["name"])
     ax.set_title(panel["name"])
@@ -2155,8 +2243,9 @@ def _surface_maps(kind, grid, xobs, yspan):
 
 def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None, main=None):
     """Draw the fitted location curve on its natural surface (the 3-D
-    counterpart of the flat location panel): wireframe canvas, optional 2-SE
-    ribbon, the fitted curve, and the observed points."""
+    counterpart of the flat location panel): wireframe canvas, optional band
+    ribbon (± circular-SD for a circular location), the fitted curve, and the
+    observed points."""
     yspan = None
     if surface == "can":
         parts = [np.asarray(zv, float)]

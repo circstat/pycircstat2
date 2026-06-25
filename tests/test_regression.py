@@ -1422,6 +1422,111 @@ def test_circ_plot_smoke_all_views_and_legs():
     plt.close(fig)
 
 
+def test_circ_plot_location_band_is_predictive_circ_sd():
+    """The circular-location panel carries ``csd``, the ± circular-SD PREDICTIVE
+    half-width (√(−2 log R)), in both circ_lm and circ_gam — consistent with each
+    other and with circlss. It tracks the fitted concentration, not 1/√n: unlike
+    a confidence band of the mean it does NOT shrink as n grows, the location
+    ``mid`` is on [0, 2π), and the concentration/shape panels keep their
+    delta-method 2-SE lo/hi band."""
+    from pycircstat2.regression import _circ_sd_from_R
+    from pycircstat2.utils import A1
+
+    rng = np.random.default_rng(0)
+    grid = np.linspace(0.0, 1.0, 40)
+    nd = pl.DataFrame({"x": grid})
+
+    # circ_lm cl: csd == √(−2 log A1(κ̂)) exactly, and does not collapse with n
+    # (a 2-SE CI would shrink to ~0.05 at n=4000).
+    hw_big = None
+    for n in (200, 4000):
+        x = rng.uniform(0, 1, n)
+        theta = np.mod(
+            0.3 + 2 * np.arctan(np.sin(2 * np.pi * x)) + rng.vonmises(0, 4.0, n),
+            2 * np.pi,
+        )
+        m = circ_lm("theta ~ x", pl.DataFrame({"theta": theta, "x": x}), type="cl")
+        loc = next(p for p in m._flat_panels(grid, nd) if p["circular"])
+        assert loc.get("lo") is None and loc.get("hi") is None  # band is csd, not lo/hi
+        assert np.all((loc["mid"] >= 0) & (loc["mid"] < 2 * np.pi))  # [0, 2π)
+        hw = float(np.median(loc["csd"]))
+        assert hw == pytest.approx(
+            float(_circ_sd_from_R(A1(float(np.atleast_1d(m.kappa)[0])))), abs=1e-9
+        )
+        hw_big = hw
+    assert hw_big > 0.3  # predictive band stays wide at n=4000
+
+    # circ_gam: the location csd (via density quadrature) matches the von Mises
+    # closed form √(−2 log A1(κ̂)) at the fitted κ; the κ panel stays 2-SE lo/hi.
+    x = rng.uniform(0, 1, 600)
+    theta = np.mod(0.5 + np.sin(2 * np.pi * x) + rng.vonmises(0, 6, 600), 2 * np.pi)
+    g = circ_gam(["theta ~ s(x)", "~ 1"], pl.DataFrame({"theta": theta, "x": x}))
+    panels = g._flat_panels(grid, nd)
+    loc = next(p for p in panels if p["circular"])
+    kappa_fit = np.exp(np.asarray(g.predict(nd, type="link"))[:, 1])
+    np.testing.assert_allclose(loc["csd"], _circ_sd_from_R(A1(kappa_fit)), atol=1e-3)
+    kap = next(p for p in panels if p["name"] == "kappa")  # 2-SE lo/hi, not csd
+    assert kap.get("lo") is not None and "csd" not in kap
+
+    # circ_lm cc: same predictive semantics from the residual concentration.
+    phi = rng.uniform(0, 2 * np.pi, 500)
+    psi = np.mod(phi / 2 + rng.vonmises(0, 5, 500), 2 * np.pi)
+    cc = circ_lm("psi ~ phi", pl.DataFrame({"psi": psi, "phi": phi}), type="cc", order=1)
+    locc = cc._flat_panels(np.linspace(0, 2 * np.pi, 40), None)[0]
+    assert float(np.median(locc["csd"])) == pytest.approx(
+        float(_circ_sd_from_R(A1(cc.kappa))), abs=1e-9
+    )
+
+
+def test_to_02pi_folds_float_edge():
+    """``_to_02pi`` wraps to [0, 2π) and folds the np.mod float edge: a tiny
+    negative input must give 0, not 2π (which trips some laws' domain checks)."""
+    from pycircstat2.regression import _to_02pi
+
+    assert float(_to_02pi(-1e-16)) == 0.0  # np.mod(-1e-16, 2π) rounds up to 2π
+    assert float(_to_02pi(0.0)) == 0.0
+    np.testing.assert_allclose(_to_02pi(np.array([-0.1, 7.0, np.pi])),
+                               [2 * np.pi - 0.1, 7.0 - 2 * np.pi, np.pi], atol=1e-12)
+    assert np.all(_to_02pi(np.linspace(-10, 10, 101)) < 2 * np.pi)
+
+
+def test_unwrap_runs_and_tile_k():
+    """The tiling primitives: ``_unwrap_runs`` turns a wrapped location into a
+    continuous phase (no ±π jumps) within finite runs; ``_tile_k`` returns the
+    2π copies needed to cover the [0, 2π) view."""
+    from pycircstat2.regression import _tile_k, _unwrap_runs
+
+    v = np.mod(np.linspace(0, 4 * np.pi, 50), 2 * np.pi)  # two full wraps
+    (idx, phase), = _unwrap_runs(v)
+    assert idx.size == 50
+    assert np.all(np.abs(np.diff(phase)) < np.pi)  # continuous, no jumps
+    np.testing.assert_allclose(np.diff(phase), np.diff(np.linspace(0, 4 * np.pi, 50)),
+                               atol=1e-9)
+    # a band centred at 0.3 with half-width π reaches the view as k = 0 and k = 1
+    assert list(_tile_k(0.3 - np.pi, 0.3 + np.pi)) == [0, 1]
+    assert list(_tile_k(2.0, 4.0)) == [0]  # squarely inside → one copy
+
+
+def test_circ_sd_quad_robust_to_nonfinite_density():
+    """`_circ_sd_quad` survives a family whose logpdf returns NaN at some grid
+    angles (katojones at μ = 2π): the band is finite and not the degenerate
+    near-uniform π cap — the regression for the chart-coordinate location."""
+    from pycircstat2.distributions import katojones
+    from pycircstat2.regression import circ_gam
+
+    rng = np.random.default_rng(3)
+    th = np.array(
+        [float(katojones.rvs(mu=2.0, gamma=0.4, rho=0.3, lam=0.5,
+                             size=1, random_state=rng)[0]) for _ in range(120)]
+    )
+    g = circ_gam(["theta ~ 1", "~ 1", "~ 1", "~ 1"],
+                 pl.DataFrame({"theta": np.mod(th, 2 * np.pi)}), family=katojones)
+    loc = next(p for p in g._flat_panels(np.array([0.0]),
+                                         pl.DataFrame({"_d": [0.0]})) if p["circular"])
+    csd = float(np.ravel(loc["csd"])[0])
+    assert np.isfinite(csd) and 0.0 < csd < np.pi  # sensible, not the π fallback
+
+
 def test_circ_plot_unicode_covariate_uses_geometry_not_term_fallback():
     """A Greek covariate name (θ) must be detected as the single covariate so
     circ_plot draws the geometry/both view — an ASCII-only identifier regex
