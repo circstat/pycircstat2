@@ -26,15 +26,18 @@ from scipy.special import (
     roots_legendre,
 )
 from hea.family import (
+    DiscreteX,
     GeneralFamily,
     IdentityLink,
     Link,
     LogitLink,
     LogLink,
+    _DiscreteLPSolve,
     gamlss_etamu,
     gamlss_gH,
     trind_generator,
 )
+from hea.models.bam import Xbd
 from scipy.stats import rv_continuous
 from scipy.stats._distn_infrastructure import rv_continuous_frozen
 
@@ -629,6 +632,12 @@ class CircularLL(GeneralFamily):
             else 1 if hasattr(dist, "d3logpdf")
             else 0
         )
+        # Opt into hea's discrete (bam) rail — mgcv's dormant family$discrete.ok,
+        # which hea gates on. Safe for every *lss family because the only
+        # dense-X touch points, `_etas` and `initialize_coef`, both carry a
+        # DiscreteX branch; the deriv-1 rail cap lives in hea's estimate_gam, so
+        # `available_derivs` above stays the DENSE contract. Enables :func:`circ_bam`.
+        self.discrete_ok = True
         self.tri = trind_generator(self.n_lp)
         # Size-aware MAP degeneracy guard (circ_mix M-step only). The distribution
         # declares which natural parameter(s) degenerate and toward what via its
@@ -661,6 +670,18 @@ class CircularLL(GeneralFamily):
         return type(self)(links=links, name=name)
 
     def _etas(self, X, coef, jj, offset):
+        # Discrete (bam) rail: each LP's η is ``Xbd`` of the FULL coef vector
+        # restricted to that LP's terms (``lt=lpid[j]``) — the gamlss.r:936-938
+        # twin. One branch serves every ``*lss`` family and any n_lp; the dense
+        # branch below is the ``X[:, jj[j]] @ coef`` matmul. See :func:`circ_bam`.
+        if isinstance(X, DiscreteX):
+            etas = []
+            for j in range(self.n_lp):
+                eta = Xbd(X.design, coef, lt=X.lpid[j])
+                if offset is not None and len(offset) > j and offset[j] is not None:
+                    eta = eta + offset[j]
+                etas.append(eta)
+            return etas
         etas = []
         for j in range(self.n_lp):
             eta = X[:, jj[j]] @ coef[jj[j]]
@@ -742,7 +763,11 @@ class CircularLL(GeneralFamily):
         # E-step reads (only the scalar objective `l` and the derivative blocks
         # are weighted).
         y = np.asarray(y, dtype=float)
-        X = np.asarray(X, dtype=float)
+        # On the discrete (bam) rail X is a DiscreteX (compressed design), not a
+        # dense matrix: leave it untouched — _etas reads it via Xbd and gamlss_gH
+        # dispatches on it internally; only the dense path materializes an array.
+        if not isinstance(X, DiscreteX):
+            X = np.asarray(X, dtype=float)
         coef = np.asarray(coef, dtype=float)
         wt = (np.ones(y.shape, dtype=float) if wt is None
               else np.broadcast_to(np.asarray(wt, dtype=float), y.shape))
@@ -856,8 +881,10 @@ class CircularLL(GeneralFamily):
         falls through to the constant start (unchanged).
         """
         y = np.asarray(y, dtype=float)
-        X = np.asarray(X, dtype=float)
         jj = [np.asarray(ix, dtype=int) for ix in lpi]
+        if isinstance(X, DiscreteX):
+            return self._initialize_coef_discrete(y, X, jj, E, offset)
+        X = np.asarray(X, dtype=float)
         n, p = X.shape
         if E is None:
             E = np.zeros((0, p))
@@ -899,6 +926,70 @@ class CircularLL(GeneralFamily):
             if offset is not None and len(offset) > j and offset[j] is not None:
                 target = target - offset[j]
             start[jj[j]] = stacked_solve(jj[j], target)
+        return start
+
+    def _initialize_coef_discrete(self, y, X: DiscreteX, jj, E,
+                                  offset) -> np.ndarray:
+        """The discrete-rail (bam) twin of :meth:`initialize_coef`: the same
+        role-aware start (projected-μ pilot for a single circular location,
+        constant ``link(param̂)`` targets for the concentration/shape LPs), but
+        each per-LP penalized regression is the gamlss discrete solve — factor
+        ``XWXd(…, lt=lpid[j]) + Eⱼ'Eⱼ`` once (pivoted Cholesky with rank
+        truncation, :class:`hea.family._DiscreteLPSolve`) and pivot-backsolve —
+        and each dense ``X[:, cols] @ b`` recombination is
+        ``Xbd(design, ·, lt=lpid[j])``. A per-LP solver is cached so the pilot's
+        cos/sin/target regressions reuse one factor. The clip/antipode rationale
+        and the constant-target logic are unchanged from :meth:`initialize_coef`;
+        only the linear algebra moves onto the compressed kernels. Like mgcv's
+        own dense-vs-discrete inits, the two are not bit-identical (QR of the
+        stacked system vs regularized normal equations) but reach the same
+        optimum."""
+        design = X.design
+        lpid = X.lpid
+        n = y.shape[0]
+        p = design.p
+        E = np.zeros((0, p)) if E is None else np.asarray(E, dtype=float)
+        ones_n = np.ones(n)
+
+        solvers: dict = {}
+
+        def solve_lp(i, target):
+            if i not in solvers:
+                solvers[i] = _DiscreteLPSolve(design, lpid[i], E[:, jj[i]], ones_n)
+            b = solvers[i].solve_target(np.asarray(target, dtype=float))
+            b[~np.isfinite(b)] = 0.0
+            return b
+
+        loc = self.dist.params_by_role().get("location", [])
+        loc_idx = [self.params.index(nm) for nm in loc]
+        single_loc = loc_idx[0] if len(loc_idx) == 1 else None
+
+        start = np.zeros(p)
+        if single_loc is not None:
+            i = single_loc
+            cc = np.zeros(p)
+            cc[jj[i]] = solve_lp(i, np.cos(y))
+            chat = Xbd(design, cc, lt=lpid[i])
+            ss = np.zeros(p)
+            ss[jj[i]] = solve_lp(i, np.sin(y))
+            shat = Xbd(design, ss, lt=lpid[i])
+            muhat = np.arctan2(shat, chat)
+            # clip guards the tanhalf pole at μ̂ ≡ π (η → ∞)
+            target = np.clip(self.links[i].link(muhat), -1e6, 1e6)
+            if (offset is not None and len(offset) > i
+                    and offset[i] is not None):
+                target = target - offset[i]
+            start[jj[i]] = solve_lp(i, target)
+
+        param_hat = self._null_params(y)
+        for j, (link, par0) in enumerate(zip(self.links, param_hat)):
+            if j == single_loc:
+                continue
+            eta0 = float(np.clip(link.link(float(par0)), -1e6, 1e6))
+            target = np.full(n, eta0)
+            if offset is not None and len(offset) > j and offset[j] is not None:
+                target = target - offset[j]
+            start[jj[j]] = solve_lp(j, target)
         return start
 
     def _fitted_direction(self, fitted):

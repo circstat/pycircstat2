@@ -33,7 +33,7 @@ from typing import List, Tuple
 import numpy as np
 import polars as pl
 from hea.formula import prepare_design
-from hea.models import gam, lm
+from hea.models import bam, gam, lm
 from scipy.special import i0e, ive
 from scipy.stats import chi2, norm
 
@@ -56,7 +56,7 @@ from .distributions import (
 )
 from .utils import A1, A1inv, A1prime, significance_code
 
-__all__ = ["circ_lm", "circ_gam", "CircLM", "CircGAM"]
+__all__ = ["circ_lm", "circ_gam", "circ_bam", "CircLM", "CircGAM", "CircBAM"]
 
 
 # --------------------------------------------------------------------------- #
@@ -898,6 +898,59 @@ def _rotate_response(out, loc, ref):
     return out
 
 
+def _circ_prepare(formula, data, family, knots, center, weights):
+    """Shared front-door prep for :func:`circ_gam` and :func:`circ_bam`: family
+    resolution, trailing ``~ 1`` LP padding, response-name validation, off-wall
+    ``center`` rotation, and cyclic-knot defaulting. Returns
+    ``(fam, payload, df, merged_knots, ref)`` — everything the two wrappers then
+    hand to ``hea`` ``gam``/``bam`` verbatim (only the engine call and the
+    result reclass differ between them)."""
+    fam = _resolve_gam_family(family)
+    formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
+    if isinstance(fam, CircularLL):
+        if "~" not in formulas[0] or not formulas[0].split("~", 1)[0].strip():
+            raise ValueError(
+                'the first formula must name the response, e.g. "theta ~ s(x)".'
+            )
+        if len(formulas) > fam.n_lp:
+            raise ValueError(
+                f"{fam.name} has {fam.n_lp} linear predictors; got "
+                f"{len(formulas)} formulas."
+            )
+        # fewer formulas than parameters: hold the rest constant (~ 1), e.g.
+        # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
+        formulas += ["~ 1"] * (fam.n_lp - len(formulas))
+    df = _to_polars(data)
+    # center: rotate the circular response to a frame where the tan-half wall
+    # (the antipode of the link origin, θ = π) clears the data, fit there, and
+    # report response-scale directions back via predict(type="response") /
+    # circ_plot. A no-op for families with no wall (pnlss's derived direction,
+    # the linear l~c leg) and for data already clear of it (ref snaps to 0).
+    # Only the response column is rotated; the cyclic-smooth covariates — and so
+    # the knots resolved below — are untouched. The circlss center=TRUE twin.
+    ref = 0.0
+    loc = _wall_loc(fam)
+    if loc is not None and center is not False:
+        resp = formulas[0].split("~", 1)[0].strip()
+        if resp in df.columns:
+            yc = np.asarray(df[resp].to_numpy(), dtype=float)
+            if yc.size:
+                w = weights
+                if w is not None:
+                    wa = np.asarray(w, dtype=float).ravel()
+                    w = wa if wa.size == yc.size else None
+                ref = _center_ref(yc, w) if center is True else float(center)
+                if np.isfinite(ref) and ref != 0.0:
+                    df = df.with_columns(
+                        pl.Series(resp, np.mod(yc - ref, 2.0 * np.pi))
+                    )
+                else:
+                    ref = 0.0
+    merged = _resolve_cyclic_knots_data(formulas, df, knots)
+    payload = formulas if len(formulas) > 1 else formulas[0]
+    return fam, payload, df, merged, ref
+
+
 def circ_gam(formula, data, family=None, knots=None, method="REML",
              center=True, weights=None, **gam_kwargs):
     """Circular GAM — ``hea.models.gam`` with circular defaults.
@@ -989,49 +1042,9 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
        identity-linked location LPs) for full-circle mean sweeps. Same
        convention as circlss documents on the R side.
     """
-    fam = _resolve_gam_family(family)
-    formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
-    if isinstance(fam, CircularLL):
-        if "~" not in formulas[0] or not formulas[0].split("~", 1)[0].strip():
-            raise ValueError(
-                'the first formula must name the response, e.g. "theta ~ s(x)".'
-            )
-        if len(formulas) > fam.n_lp:
-            raise ValueError(
-                f"{fam.name} has {fam.n_lp} linear predictors; got "
-                f"{len(formulas)} formulas."
-            )
-        # fewer formulas than parameters: hold the rest constant (~ 1), e.g.
-        # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
-        formulas += ["~ 1"] * (fam.n_lp - len(formulas))
-    df = _to_polars(data)
-    # center: rotate the circular response to a frame where the tan-half wall
-    # (the antipode of the link origin, θ = π) clears the data, fit there, and
-    # report response-scale directions back via predict(type="response") /
-    # circ_plot. A no-op for families with no wall (pnlss's derived direction,
-    # the linear l~c leg) and for data already clear of it (ref snaps to 0).
-    # Only the response column is rotated; the cyclic-smooth covariates — and so
-    # the knots resolved below — are untouched. The circlss center=TRUE twin.
-    ref = 0.0
-    loc = _wall_loc(fam)
-    if loc is not None and center is not False:
-        resp = formulas[0].split("~", 1)[0].strip()
-        if resp in df.columns:
-            yc = np.asarray(df[resp].to_numpy(), dtype=float)
-            if yc.size:
-                w = weights
-                if w is not None:
-                    wa = np.asarray(w, dtype=float).ravel()
-                    w = wa if wa.size == yc.size else None
-                ref = _center_ref(yc, w) if center is True else float(center)
-                if np.isfinite(ref) and ref != 0.0:
-                    df = df.with_columns(
-                        pl.Series(resp, np.mod(yc - ref, 2.0 * np.pi))
-                    )
-                else:
-                    ref = 0.0
-    merged = _resolve_cyclic_knots_data(formulas, df, knots)
-    payload = formulas if len(formulas) > 1 else formulas[0]
+    fam, payload, df, merged, ref = _circ_prepare(
+        formula, data, family, knots, center, weights
+    )
     # `weights` is a plain hea gam kwarg (no R-style NSE to route around);
     # forwarded only when set so hea keeps its own default (unit weights). It
     # also fed the center reference above. An `offset` is NOT a constructor arg
@@ -1047,6 +1060,66 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
     # `class(fit) <- c("circ_gam", class(fit))`): every hea gam attribute/method
     # stays directly reachable, plus the circular circ_plot/circ_check/circ_resid.
     fit.__class__ = CircGAM
+    fit.circ_center = ref  # rotation applied at fit time (0.0 if none)
+    return fit
+
+
+def circ_bam(formula, data, family=None, knots=None, method="fREML",
+             center=True, discrete=True, weights=None, optimizer=("efs",),
+             **bam_kwargs):
+    """Circular **big** additive model — ``hea.models.bam(discrete=True)`` with
+    the same circular defaults as :func:`circ_gam`.
+
+    A `circ_gam` that scales to large *n*. It fits the identical circular
+    distributional model, but on ``hea``'s **discrete** rail: the design is
+    compressed to per-covariate bins and every *n*-dependent assembly runs on
+    those kernels, so cost grows with the number of *distinct* covariate values
+    rather than the number of rows. The reward is speed at large *n*; the price
+    is a controlled approximation — binned bases make the fit agree with
+    ``circ_gam`` at a ~1e-3 grade, not to machine precision.
+
+    **This is a pycircstat2-only capability.** ``mgcv::bam`` refuses a general
+    (multi-parameter) family outright — ``"general families not supported by
+    bam"`` (bam.r:2653) — so circlss, built on mgcv, has no discrete circular
+    rail. ``hea`` completed mgcv's dormant discrete general-family branch, and
+    every ``*lss`` family here declares ``discrete_ok`` and carries the two
+    ``DiscreteX`` seams (``_etas``/``initialize_coef``) the rail needs.
+
+    Signature mirrors :func:`circ_gam` — same family resolution, ``~ 1`` LP
+    padding, off-wall ``center`` rotation, cyclic-knot defaulting, and
+    ``weights=`` — plus:
+
+    - ``method="fREML"`` (bam's fast-REML default; ``hea`` aliases it to the
+      same REML criterion).
+    - ``discrete=True`` (the only supported mode here). ``discrete=False`` asks
+      ``hea`` for the dense chunked path, which — like ``mgcv`` — is not wired
+      for general families and raises; use :func:`circ_gam` for a dense fit.
+    - ``optimizer=("efs",)`` — extended Fellner–Schall — is the **default here**.
+      hea's own bam default is BFGS over the deriv-1 REML trace, a placeholder
+      mirroring mgcv's not-yet-implemented discrete general-family default; EFS
+      is the intended (and, on these families, markedly faster) selector, so
+      circ_bam sets it explicitly until hea's default flips. Full Newton is off
+      the discrete rail (the same reason mgcv caps it). Pass ``optimizer=`` to
+      override (e.g. ``optimizer=None`` for hea's current BFGS default).
+    - ``chunk_size=`` and ``nthreads=`` forward through ``**bam_kwargs`` to tune
+      the binning/parallelism.
+
+    Reproducibility and the tanhalf-wall caveat are exactly as documented on
+    :func:`circ_gam`; for cross-fit reproducibility tighten
+    ``control={"efs_tol": 1e-8, "epsilon": 1e-10}`` when on the EFS optimizer.
+
+    Returns a :class:`CircBAM` — a :class:`CircGAM` (all its circular
+    ``predict`` rotate-back, ``circ_plot``/``circ_check``/``circ_resid`` and the
+    geometry-aware header) whose fitting surface is ``hea``'s ``bam``.
+    """
+    fam, payload, df, merged, ref = _circ_prepare(
+        formula, data, family, knots, center, weights
+    )
+    if weights is not None:
+        bam_kwargs["weights"] = weights
+    fit = bam(payload, df, family=fam, knots=merged, method=method,
+              discrete=discrete, optimizer=optimizer, **bam_kwargs)
+    fit.__class__ = CircBAM
     fit.circ_center = ref  # rotation applied at fit time (0.0 if none)
     return fit
 
@@ -1451,6 +1524,9 @@ class CircGAM(_CircRegressionMixin, gam):
     #: pre-``circ_center`` pickles and any directly built CircGAM safe.
     circ_center = 0.0
 
+    #: front-door name printed in the header (``CircBAM`` overrides to circ_bam).
+    _front_door = "circ_gam"
+
     def __repr__(self):
         """hea ``gam``'s print output, prefixed with a geometry-aware
         ``circ_gam`` header — the circlss ``print.circ_gam`` twin. The header
@@ -1474,7 +1550,7 @@ class CircGAM(_CircRegressionMixin, gam):
             "ll": "Location-scale GAM",
         }.get(kind, "Circular GAM" if resp_circular else "Location-scale GAM")
         fam_name = getattr(fam, "name", None) or type(fam).__name__
-        line = f"{head} via circ_gam() -- family {fam_name}"
+        line = f"{head} via {self._front_door}() -- family {fam_name}"
         params = getattr(fam, "params", None)
         if params:
             line += f", parameters: {', '.join(params)}"
@@ -1713,6 +1789,22 @@ class CircGAM(_CircRegressionMixin, gam):
                 "p": float(np.sum(np.asarray(self.edf, dtype=float))),
             }
         return None
+
+
+class CircBAM(CircGAM, bam):
+    """Circular big-additive-model fit: the discrete-rail twin of
+    :class:`CircGAM`, returned by :func:`circ_bam`.
+
+    Inherits every circular method from :class:`CircGAM` — the ``predict``
+    rotate-back, the geometry-aware header, ``_flat_panels``/``_resid_parts``
+    and hence ``circ_plot``/``circ_check``/``circ_resid`` — while its fitting
+    surface (and the ``predict`` those methods call via ``super()``) is
+    ``hea``'s :class:`~hea.models.bam.bam`, so the binned discrete design is
+    used throughout. Constructed by reclassing a fitted ``bam`` in place, so it
+    carries no ``__init__`` of its own; ``print`` reports the geometry header
+    (``_geometry`` is family/covariate-based, engine-agnostic)."""
+
+    _front_door = "circ_bam"
 
 
 class CircLM(_CircRegressionMixin):

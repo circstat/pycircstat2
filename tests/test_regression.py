@@ -998,6 +998,112 @@ def test_circ_gam_weights_arg_reaches_fit_and_center_ref():
 
 
 # ===========================================================================
+# circ_bam — circular GAM on hea's discrete (bam) rail. A pycircstat2-ONLY
+# capability: mgcv::bam refuses general families ("general families not
+# supported by bam", bam.r:2653), so circlss has no discrete circular rail;
+# hea completed mgcv's dormant discrete general-family branch and every *lss
+# family declares discrete_ok + carries the CircularLL _etas/initialize_coef
+# DiscreteX seams. Referee is the dense circ_gam fit on the SAME data (R-free),
+# agreeing to a binning-limited ~1e-3 grade.
+# ===========================================================================
+from hea.models import bam as hea_bam  # noqa: E402
+from pycircstat2.regression import CircBAM, circ_bam  # noqa: E402
+
+
+def _vm_bam_frame(n, seed=1, wall=False):
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0.0, 1.0, n)
+    center = np.pi if wall else np.pi / 2
+    theta = np.mod(center + 1.1 * np.sin(2 * np.pi * x)
+                   + rng.normal(0.0, 0.5, n), 2 * np.pi)
+    return pl.DataFrame({"theta": theta, "x": x})
+
+
+def test_circ_bam_discrete_ok_and_is_circbam():
+    """Every *lss family opts into hea's discrete rail (mgcv's dormant
+    family$discrete.ok); circ_bam returns a CircBAM that IS an hea bam (discrete
+    fitting surface) and a CircGAM (inherits the circular predict/plot/check)."""
+    from pycircstat2.distributions import kjlss
+    from pycircstat2.regression import CircGAM
+
+    assert vmlss.discrete_ok is True and kjlss.discrete_ok is True
+    b = circ_bam(["theta ~ s(x, k=10)", "~ 1"], _vm_bam_frame(2000))
+    assert isinstance(b, CircBAM) and isinstance(b, hea_bam) and isinstance(b, CircGAM)
+    assert b.converged and np.isfinite(float(b.logLik))
+    assert b._front_door == "circ_bam"
+
+
+def test_circ_bam_matches_dense_circ_gam():
+    """The discrete rail reproduces the dense EFS fit to a binning-limited
+    grade — fitted mean-direction to ~1e-2 RMS and logLik to ~1e-2 relative. A
+    wrong discrete ll / initialize_coef could not track the dense fit this
+    closely, so this doubles as the family DiscreteX-branch parity check."""
+    df = _vm_bam_frame(4000, seed=3)
+    g = circ_gam(["theta ~ s(x, k=12)", "~ 1"], df,
+                 control={"efs_tol": 1e-8, "epsilon": 1e-10}, optimizer="efs")
+    b = circ_bam(["theta ~ s(x, k=12)", "~ 1"], df)
+    nd = pl.DataFrame({"x": np.linspace(0.0, 1.0, 100)})
+    mg = np.mod(g.predict(nd, type="response").to_numpy()[:, 0], 2 * np.pi)
+    mb = np.mod(b.predict(nd, type="response").to_numpy()[:, 0], 2 * np.pi)
+    d = np.angle(np.exp(1j * (mg - mb)))
+    assert float(np.sqrt(np.mean(d ** 2))) < 2e-2
+    assert abs(float(g.logLik) - float(b.logLik)) / abs(float(g.logLik)) < 1e-2
+
+
+def test_circ_bam_defaults_to_efs_and_predicts():
+    """circ_bam defaults optimizer=('efs',) (hea's own bam default is a BFGS
+    placeholder mirroring mgcv's not-yet-implemented state); the fit converges,
+    predict returns the per-LP response frame, and geometry classifies cl."""
+    b = circ_bam(["theta ~ s(x, k=10)", "~ 1"], _vm_bam_frame(1500))
+    assert b.converged
+    pr = b.predict(pl.DataFrame({"x": np.linspace(0, 1, 20)}), type="response")
+    assert "fit" in pr.columns
+    assert b._geometry()[:3] == ("cl", True, False)
+
+
+def test_circ_bam_discrete_false_raises():
+    """discrete=False asks hea for the dense chunked general path, which — like
+    mgcv — is not wired; it raises (use circ_gam for a dense fit)."""
+    with pytest.raises(NotImplementedError):
+        circ_bam(["theta ~ s(x)", "~ 1"], _vm_bam_frame(500), discrete=False)
+
+
+def test_circ_bam_center_off_wall_and_header():
+    """center rotates a wall-hugging response off the tan-half wall (circ_center
+    recorded) exactly as circ_gam, and the print header names circ_bam."""
+    b = circ_bam(["theta ~ s(x, k=8)", "~ 1"],
+                 _vm_bam_frame(1500, seed=5, wall=True))
+    assert abs(b.circ_center) > 0.5
+    assert repr(b).splitlines()[0] == (
+        "Circular GAM (circular-linear) via circ_bam() -- "
+        "family vmlss, parameters: mu, kappa"
+    )
+
+
+def test_circ_bam_kjlss_four_lp_rail_parity():
+    """kjlss (4 LPs, disc-chart coords) rides CircularLL's shared DiscreteX
+    branches with no family code of its own. Intercept-only in all four LPs (a
+    convergent fixture that trips gam.fit5 on neither rail — a smooth-on-kjlss
+    fixture goes indefinite on BOTH, a family/data issue, not a rail one): the
+    discrete fit matches the dense circ_gam logLik to machine precision,
+    exercising the 4-way lpid and param-only discrete terms."""
+    from pycircstat2.distributions import katojones
+
+    rng = np.random.default_rng(3)
+    theta = np.array([
+        float(katojones.rvs(mu=2.0, gamma=0.4, rho=0.3, lam=0.5,
+                            size=1, random_state=rng)[0])
+        for _ in range(300)
+    ])
+    df = pl.DataFrame({"theta": theta})
+    form = ["theta ~ 1", "~ 1", "~ 1", "~ 1"]
+    g = circ_gam(form, df, family="kjlss")
+    b = circ_bam(form, df, family="kjlss")
+    assert b.converged
+    assert abs(float(g.logLik) - float(b.logLik)) < 1e-6
+
+
+# ===========================================================================
 # circ_lm — classical (parametric) circular regression.
 # lc returns a hea lm object; cl/cc return result dicts. References: the
 # `circular` R package / circlss, and Pewsey et al. (2013) §8.4.1 (lc lung).
