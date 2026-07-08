@@ -3063,7 +3063,10 @@ def test_circularll_deviance_saturated_reference_is_density_peak():
         )
     )
     assert l_peak > l_anchor + 1e-3  # the mode sits off the anchor
-    assert l_peak == pytest.approx(grid_truth, abs=1e-4)
+    # the parabola-refined 1024-pt peak lands on the true vertex to ~1e-9; the
+    # tol is tight enough to catch a regression to a plain grid max / the wrong
+    # (4*denom) refinement constant, both of which err ~8e-7 here.
+    assert l_peak == pytest.approx(grid_truth, abs=1e-7)
 
 
 # ---------------------------------------------------------------------------

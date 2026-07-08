@@ -1044,9 +1044,15 @@ class CircularLL(GeneralFamily):
             j = int(np.argmax(ll))
             y0, y1, y2 = ll[(j - 1) % ngrid], ll[j], ll[(j + 1) % ngrid]
             denom = y0 - 2.0 * y1 + y2
-            # parabolic vertex value (>= the grid max when denom < 0, i.e. a
-            # concave peak); fall back to the grid max on a flat/degenerate run
-            peaks[i] = y1 - (y2 - y0) ** 2 / (4.0 * denom) if denom < 0 else y1
+            # value at the vertex of the parabola through the grid argmax and
+            # its two circular neighbours. For samples at x = -1, 0, 1 that
+            # parabola has leading coeff A = denom/2, so the vertex correction
+            # is (y2 - y0)^2 / (8*denom) exactly — the 8 is not a fudge; 4 would
+            # double the step and overshoot the vertex (no better than the grid
+            # max). May sit a hair below y1 on a non-parabolic run; the
+            # _saturated_loglik guard keeps l_sat >= l_obs. Fall back to the grid
+            # max on a flat/degenerate run (denom >= 0).
+            peaks[i] = y1 - (y2 - y0) ** 2 / (8.0 * denom) if denom < 0 else y1
         return peaks[inv]
 
     def __repr__(self):
