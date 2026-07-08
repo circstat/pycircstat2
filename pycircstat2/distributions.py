@@ -172,6 +172,11 @@ class _RegressionReady:
 
     param_roles: dict = {}
     default_links: dict = {}
+    # Optional size-aware MAP degeneracy guard (read by CircularLL, applied only
+    # in a reweighted circ_mix M-step): a tuple of `_degen_*` kernels naming the
+    # degeneracy-prone natural parameter(s). Empty -> no guard (a standalone fit is
+    # unaffected regardless).
+    degen_penalty: tuple = ()
 
     @classmethod
     def params_by_role(cls) -> dict:
@@ -407,6 +412,141 @@ def _as_scalar_param(value, dist_name):
 # both classes, so either import site works.
 
 
+# --- size-aware MAP-penalty degeneracy guard (circ_mix M-step only) -----------
+# A finite mixture's likelihood is unbounded: a reweighted component raises it by
+# concentrating onto its responsibility-weighted subset — concentration runs off
+# (kappa -> Inf) or a bounded shape/peakedness parameter is driven onto its
+# singular boundary (cardioid rho -> 1/2, the tanh-linked nu/lmbd -> +/-1, the
+# Kato-Jones disc edge), where the penalized Hessian goes indefinite. The guard
+# adds to each reweighted M-step a penalty pulling the degeneracy-prone NATURAL
+# parameter toward the family's diffuse/reduced model, with strength
+# lambda_k = c / N_k that VANISHES as the component grows (N_k the effective size
+# sum_i gamma_ik) — the dual of c diffuse pseudo-observations, so a well-populated
+# component is unaffected and a collapsing one cannot reach the boundary. The
+# gamlss_etamu chain rule carries the natural-coord penalty to eta; it is folded
+# into the derivative blocks BEFORE the wt-scaling, so it is automatically
+# responsibility-weighted, and `l0` (the per-datum density the E-step reads) is
+# left untouched. It activates only when a circ_mix M-step has set
+# `family.map_lambda > 0`; for a standalone circ_gam `map_lambda` is None, so
+# `_degen_active` is False and the fit is byte-for-byte unchanged. A family
+# declares its degeneracy-prone parameter(s) + kernel(s) via the `degen_penalty`
+# class attribute on its distribution (mirroring `param_roles`); a family with no
+# boundary pathology omits it (Cartwright). Port of circlss's internal-degen.R.
+
+_DEGEN_EPS = float(np.finfo(float).eps)
+
+
+class _DegenKernel:
+    """One penalty kernel rho(v) on a single natural parameter, carrying its
+    value and first two derivatives (orders 0-2 are all the Newton/EFS families
+    need; rho3 = rho4 = 0 for every kernel here). ``param`` is the book name of
+    the parameter it acts on; ``scale`` (baked into the closures) is a
+    family-declared relative strength, so the one global ``c`` stays the default."""
+
+    __slots__ = ("param", "rho0", "rho1", "rho2")
+
+    def __init__(self, param, rho0, rho1, rho2):
+        self.param = param
+        self.rho0, self.rho1, self.rho2 = rho0, rho1, rho2
+
+
+def _degen_linear(param, scale=1.0):
+    """rho(v) = scale*v — exponential prior toward 0 for an unbounded-above
+    concentration (kappa, log link): a constant gradient pull, no curvature
+    (rho2 = 0), right where the data Hessian flattens (kappa -> Inf) rather than
+    going singular."""
+    s = float(scale)
+    return _DegenKernel(
+        param,
+        lambda v: s * v,
+        lambda v: np.full(np.shape(v), s, dtype=float),
+        lambda v: np.zeros(np.shape(v), dtype=float),
+    )
+
+
+def _degen_ridge(param, scale=1.0):
+    """rho(v) = scale*v^2 — Gaussian prior toward 0 for an unbounded shape
+    coordinate whose diffuse value is 0 (jplss psi -> von Mises, pnlss mu ->
+    uniform radius, kjlss u -> wrapped Cauchy); the positive curvature also
+    stabilizes the Hessian."""
+    s = float(scale)
+    return _DegenKernel(
+        param,
+        lambda v: s * v * v,
+        lambda v: 2.0 * s * v,
+        lambda v: np.full(np.shape(v), 2.0 * s, dtype=float),
+    )
+
+
+def _degen_boundary_upper(param, vmax, scale=1.0):
+    """rho(v) = -scale*log(1 - v/vmax) on v in [0, vmax) — diverges as v -> vmax,
+    so a small component cannot push the parameter onto the wall (cardioid
+    rho -> 1/2, wrapped normal rho -> 1). Pulls toward 0 (uniform); an eps floor
+    on the denominator keeps a parameter sitting on the wall finite."""
+    s, vm = float(scale), float(vmax)
+
+    def z(v):
+        return np.maximum(1.0 - np.asarray(v, dtype=float) / vm, _DEGEN_EPS)
+
+    return _DegenKernel(
+        param,
+        lambda v: -s * np.log(z(v)),
+        lambda v: s * (1.0 / vm) / z(v),
+        lambda v: s * (1.0 / vm ** 2) / (z(v) * z(v)),
+    )
+
+
+def _degen_boundary_sym(param, vmax, scale=1.0):
+    """rho(v) = -scale*log(1 - (v/vmax)^2) on v in (-vmax, vmax) — diverges as
+    v -> +/-vmax, pulling toward 0 (the von Mises / symmetric member). For the
+    tanh-linked peakedness/skewness parameters (nu, lmbd) whose crash is the
+    +/-1 edge. Eps-floored denominator."""
+    s, vm = float(scale), float(vmax)
+
+    def z(v):
+        return np.maximum(1.0 - (np.asarray(v, dtype=float) / vm) ** 2, _DEGEN_EPS)
+
+    return _DegenKernel(
+        param,
+        lambda v: -s * np.log(z(v)),
+        lambda v: s * (2.0 * v / vm ** 2) / z(v),
+        lambda v: s * ((2.0 / vm ** 2) / z(v) + (4.0 * v ** 2 / vm ** 4) / (z(v) * z(v))),
+    )
+
+
+def _degen_active(family) -> bool:
+    """True only when a circ_mix M-step has set a positive ``map_lambda`` AND the
+    family declares a ``degen`` spec; None/absent for a standalone circ_gam, so a
+    non-mixture fit is byte-for-byte unchanged."""
+    lam = getattr(family, "map_lambda", None)
+    return bool(getattr(family, "degen", None)) and (
+        lam is not None and bool(np.isfinite(lam)) and float(lam) > 0.0
+    )
+
+
+def _lss_map_penalty(family, params: dict, lam: float) -> dict:
+    """The MAP penalty's contribution to ``(l0, l1, l2)`` in NATURAL coordinates,
+    ready to ADD to the family's per-datum blocks before the wt-scaling. Negation
+    and ``lam``-scaling are baked in; the penalty is separable across parameters,
+    so it touches the l1 gradient entries and the l2 DIAGONAL only, placed via the
+    family's own trind index. ``params`` is the LP-space (inverse-linked)
+    parameter dict."""
+    n_lp = family.n_lp
+    i2 = family.tri["i2"]
+    n = int(np.atleast_1d(np.asarray(params[family.degen[0].param])).shape[0])
+    dl0 = np.zeros(n)
+    dl1 = np.zeros((n, n_lp))
+    dl2 = np.zeros((n, n_lp * (n_lp + 1) // 2))
+    for k in family.degen:
+        j = family.params.index(k.param)
+        v = np.broadcast_to(np.asarray(params[k.param], dtype=float), (n,))
+        dl0 = dl0 - lam * k.rho0(v)
+        dl1[:, j] = dl1[:, j] - lam * k.rho1(v)
+        cjj = int(i2[j, j])
+        dl2[:, cjj] = dl2[:, cjj] - lam * k.rho2(v)
+    return {"l0": dl0, "l1": dl1, "l2": dl2}
+
+
 class CircularLL(GeneralFamily):
     """A regression-ready circular distribution as a hea/mgcv **general
     family**.
@@ -490,6 +630,14 @@ class CircularLL(GeneralFamily):
             else 0
         )
         self.tri = trind_generator(self.n_lp)
+        # Size-aware MAP degeneracy guard (circ_mix M-step only). The distribution
+        # declares which natural parameter(s) degenerate and toward what via its
+        # `degen_penalty` overlay; `map_lambda` is set per-fit by a circ_mix M-step
+        # (None here -> `_degen_active` False -> a standalone circ_gam is
+        # byte-for-byte unchanged). A clone (`__call__`) re-reads the spec from the
+        # same distribution and resets `map_lambda`, as a fresh family should.
+        self.degen = tuple(getattr(dist, "degen_penalty", ()) or ())
+        self.map_lambda = None
         # `name` is what fitted summaries print; the *lss aliases set it to
         # the cross-language family name (vmlss(…).name == "vmlss" ==
         # circlss's family$family) so differential tests diff clean.
@@ -603,7 +751,16 @@ class CircularLL(GeneralFamily):
         params = self._param_values(etas)
 
         l0 = self._loglik_values(y, params)
-        ret: dict = {"l": float(np.sum(wt * l0)), "l0": l0}
+        # size-aware MAP degeneracy penalty (circ_mix M-step only; inert for a
+        # standalone circ_gam, where map_lambda is None). Penalizes the scalar
+        # objective here and the natural derivative blocks below (before the
+        # wt-scaling); the returned `l0` (the E-step density) stays unpenalized.
+        pen = (_lss_map_penalty(self, params, self.map_lambda)
+               if _degen_active(self) else None)
+        lval = float(np.sum(wt * l0))
+        if pen is not None:
+            lval += float(np.sum(wt * pen["l0"]))
+        ret: dict = {"l": lval, "l0": l0}
         if deriv == 0:
             return ret
 
@@ -644,6 +801,13 @@ class CircularLL(GeneralFamily):
                 [link.d4link(params[name])
                  for link, name in zip(self.links, names)]
             )
+
+        # Fold the MAP degeneracy penalty into the natural derivative blocks
+        # before the wt-scaling, so it is responsibility-weighted like every other
+        # row; only orders 0-2 are nonzero (rho3 = rho4 = 0), so l3/l4 are untouched.
+        if pen is not None:
+            l1 = l1 + pen["l1"]
+            l2 = l2 + pen["l2"]
 
         # Scale the derivative blocks by the prior weights before the chain rule:
         # gamlss_etamu is linear per row in (l1..l4), so weighting these inputs
@@ -2268,6 +2432,9 @@ class cardioid_gen(_RegressionReady, CircularContinuous):
     # only). Book names mu/rho are preserved; ρ is the mean resultant length,
     # bounded in (0, ½), so its default link is the scaled logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): keep rho off its 1/2 wall, where 1/P^2 blows the Hessian up.
+    degen_penalty = (_degen_boundary_upper("rho", 0.5),)
     default_links = {"location": "tanhalf", "concentration": "logit_half"}
 
     def _concentration_start(self, Rbar):
@@ -2916,6 +3083,9 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
     # only). Book names mu/zeta are preserved; ζ > 0 is an inverse
     # peakedness, so its default link is log. ---
     param_roles = {"mu": "location", "zeta": "concentration"}
+    # (no `degen_penalty`: Cartwright's power-of-cosine has a bounded shape with no
+    # boundary pathology under reweighting, so the circ_mix guard is a no-op here —
+    # matching circlss, where cartlss declares no `degen`.)
     default_links = {"location": "tanhalf", "concentration": "log"}
 
     def _concentration_start(self, Rbar):
@@ -3676,6 +3846,9 @@ class wrapnorm_gen(_RegressionReady, CircularContinuous):
     # only). Book names mu/rho are preserved; ρ is the mean resultant length,
     # bounded in (0, 1), so its default link is logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): keep the concentration rho off its upper wall (rho -> 1).
+    degen_penalty = (_degen_boundary_upper("rho", 1.0),)
     default_links = {"location": "tanhalf", "concentration": "logit"}
 
     def _concentration_start(self, Rbar):
@@ -4472,6 +4645,9 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
     # only). Book names mu/rho are preserved; ρ is the mean resultant length,
     # bounded in (0, 1), so its default link is logit. ---
     param_roles = {"mu": "location", "rho": "concentration"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): exponential pull on the concentration rho toward 0 (uniform).
+    degen_penalty = (_degen_linear("rho"),)
     default_links = {"location": "tanhalf", "concentration": "logit"}
 
     def _concentration_start(self, Rbar):
@@ -5109,6 +5285,10 @@ class vonmises_gen(_RegressionReady, CircularContinuous):
     # --- regression overlay (read by the regression engine
     # only). Book names mu/kappa are preserved; roles attach the default links. ---
     param_roles = {"mu": "location", "kappa": "concentration"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): exponential pull on kappa toward 0 (kappa -> Inf is the soft
+    # degeneracy, where the data Hessian flattens rather than going singular).
+    degen_penalty = (_degen_linear("kappa"),)
     default_links = {"location": "tanhalf", "concentration": "log"}
 
     def _concentration_start(self, Rbar):
@@ -5885,6 +6065,10 @@ class projectednormal_gen(_RegressionReady, CircularContinuous):
     # --- regression overlay: one role, two parameters —
     # the documented one-to-many case. Both LPs use the identity link. ---
     param_roles = {"mu1": "location", "mu2": "location"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): a radial ridge on the Cartesian mean (mu1, mu2) shrinks the
+    # concentration ||mu|| toward 0 (uniform) while preserving the direction.
+    degen_penalty = (_degen_ridge("mu1"), _degen_ridge("mu2"))
     default_links = {"location": "identity"}
 
     @staticmethod
@@ -6547,6 +6731,9 @@ class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
     # carry a grid-expectation term (the jplss `ℓ_κ = h_κ − E[h_κ]` pattern).
     # ν ∈ (−1,1) rides the tanh link. Reduction member ν=0 is plain `vmlss`. ---
     param_roles = {"mu": "location", "kappa": "concentration", "nu": "shape"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): kappa toward 0 (linear), peakedness nu off its +/-1 walls.
+    degen_penalty = (_degen_linear("kappa"), _degen_boundary_sym("nu", 1.0))
     default_links = {
         "location": "tanhalf",
         "concentration": "log",
@@ -7538,6 +7725,11 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
     # value there — the value gap is O(κ) ≤ 1e-3 relative, and live scores in
     # that corner let the optimizer escape it. ---
     param_roles = {"mu": "location", "kappa": "concentration", "psi": "shape"}
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): kappa toward 0 (linear) and a firmer ridge (scale 30) on the
+    # Jones-Pewsey shape psi toward 0 (= von Mises), keeping its quadrature
+    # normalizer fast and non-singular.
+    degen_penalty = (_degen_linear("kappa"), _degen_ridge("psi", 30.0))
     default_links = {
         "location": "tanhalf",
         "concentration": "log",
@@ -9032,6 +9224,14 @@ class jonespewsey_sineskewed_gen(_RegressionReady, CircularContinuous):
         "psi": "shape",
         "lmbd": "skewness",
     }
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): kappa toward 0 (linear), a firmer ridge (scale 30) on psi, and
+    # the sine-skew lmbd off its +/-1 walls (scale 10).
+    degen_penalty = (
+        _degen_linear("kappa"),
+        _degen_ridge("psi", 30.0),
+        _degen_boundary_sym("lmbd", 1.0, 10.0),
+    )
     default_links = {
         "location": "tanhalf",
         "concentration": "log",
@@ -9764,6 +9964,14 @@ class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
         "psi": "shape",
         "nu": "skewness",
     }
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): kappa toward 0 (linear), a firmer ridge (scale 30) on psi, and
+    # the asymmetry nu off its +/-1 walls (scale 10).
+    degen_penalty = (
+        _degen_linear("kappa"),
+        _degen_ridge("psi", 30.0),
+        _degen_boundary_sym("nu", 1.0, 10.0),
+    )
     default_links = {
         "location": "tanhalf",
         "concentration": "log",
@@ -10863,6 +11071,15 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
         "nu": "skewness",
         "lmbd": "shape",
     }
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): kappa toward 0 (linear); skewness nu and peakedness lmbd off
+    # their +/-1 walls (scale 10), keeping the inverse-Batschelet normalizer fast
+    # and non-singular.
+    degen_penalty = (
+        _degen_linear("kappa"),
+        _degen_boundary_sym("nu", 1.0, 10.0),
+        _degen_boundary_sym("lmbd", 1.0, 10.0),
+    )
     default_links = {
         "location": "tanhalf",
         "concentration": "log",
@@ -13195,6 +13412,11 @@ class katojones_gen(_RegressionReady, CircularContinuous):
         "u1": "shape",
         "u2": "shape",
     }
+    # size-aware MAP degeneracy guard (reweighted circ_mix M-step; inert
+    # otherwise): a ridge on the disc-chart coordinates (u1, u2) toward 0 =
+    # wrapped Cauchy, keeping the shape off the feasibility-disc boundary where
+    # the kernel denominator -> 0 and the Hessian (~ 1/(1-rho)^6) blows up.
+    degen_penalty = (_degen_ridge("u1"), _degen_ridge("u2"))
     default_links = {
         "location": "tanhalf",
         "concentration": "logit",
