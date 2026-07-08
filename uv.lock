@@ -592,7 +592,7 @@ wheels = [
 
 [[package]]
 name = "hea"
-version = "0.1.6"
+version = "0.1.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -607,15 +607,15 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c5/22/d6858228ae9bdf8e720d1d69fbfe8711752f3319b39842871d83b5daeed7/hea-0.1.6.tar.gz", hash = "sha256:88da9a1e209922016722182446406434963064f34f329757cf1593b3f58b23c7", size = 1340114, upload-time = "2026-06-25T09:58:25.078Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/db/425acaad657457172479ebd0741142bd05ae5817d677e42f0f252279bb3e/hea-0.1.7.tar.gz", hash = "sha256:8d398d2e9d12d0acbd52db367285ebd13b6190dc9b5929b7de1915bc619f4360", size = 1515344, upload-time = "2026-07-08T11:34:29.051Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/c2/7b940181be9c9d970fc1dfd519ee98de7122ce17358e84d32edc706b0d5d/hea-0.1.6-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:31d077eb771abed0bf08d54ad1eeba7ab182dfcd31eb3a74e5e596edf0e2d9e1", size = 1988769, upload-time = "2026-06-25T09:58:12.834Z" },
-    { url = "https://files.pythonhosted.org/packages/ea/80/f4d73b0eae01b8ead2b6ae2a18c7825812997be900ae400c0e0a34345541/hea-0.1.6-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:f50d762d7fe36cb247977fa31abf160e92a9890d02e3c55dc1b179124f5fab80", size = 1966919, upload-time = "2026-06-25T09:58:14.682Z" },
-    { url = "https://files.pythonhosted.org/packages/05/78/9127197cdf399ff171f6457e02d3af81b98536be61cbb769078549a44199/hea-0.1.6-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fe8eb2a9a4f240fd064ee71a49c3ff7435df74abfc17cc09416d20cac0eab405", size = 2029041, upload-time = "2026-06-25T09:58:16.496Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/c5/ebc0ab61ea5a73dc740a5c4fafe33eee58846b366bf3a9d916fba4e234ec/hea-0.1.6-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fa5e7b3de1c89dbdafa0d62c748e916d427ce97cd64c7def49cb495078a41b25", size = 2054526, upload-time = "2026-06-25T09:58:18.007Z" },
-    { url = "https://files.pythonhosted.org/packages/b9/5e/edbaf56a93fe06c39cd89ee27ea4ff8470eee3f3309a1c023c46bbdbafc8/hea-0.1.6-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:3fe481109237fb93a108f1de89cbb8ae35f48325a7e06cb2aa8eeeae2cde52aa", size = 2205384, upload-time = "2026-06-25T09:58:19.781Z" },
-    { url = "https://files.pythonhosted.org/packages/df/94/f65f35c68973e6d453cf480c669f8322fa7da776812a95f91e2283878aaf/hea-0.1.6-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:7901652aa62902686d4dbf096a252e8b106497daf7d06382e1a7f9fb4a9b57d8", size = 2260285, upload-time = "2026-06-25T09:58:21.663Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/2d/f33e7ca8c02117e8d93e8f3cccae17743ae50c817a28244431f7d0d5c038/hea-0.1.6-cp310-abi3-win_amd64.whl", hash = "sha256:ae8858e09c53c39033aaf3bc284bceddf723c99d8b42d3bc82f63e383f536f74", size = 1921151, upload-time = "2026-06-25T09:58:23.507Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/14/16482542e84afd6b7d009c5033c2eab9cfc89801485c088223f1c343fa81/hea-0.1.7-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:82ce24a1dc9f1e504c5771e93b217e2c516c3b8169945230b342156196234b7e", size = 2220828, upload-time = "2026-07-08T11:34:16.51Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/48/96b71eb7e806b9c326dee70f97a13d057128baa80283d1201536a27b09c0/hea-0.1.7-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:ca4c2dd6833cc5a8734af4edeb9c1a109815030eec1b88a12418e80e27509b70", size = 2195235, upload-time = "2026-07-08T11:34:18.675Z" },
+    { url = "https://files.pythonhosted.org/packages/49/29/9cdf7788dfe49654b981b982d3b00b3c0408b9a82ca313679e4883498426/hea-0.1.7-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:26b8e14df2eeb3ddb8b0c5897540f6c2a82f1ea069289030f96f16f90d3b2ed6", size = 2255714, upload-time = "2026-07-08T11:34:20.486Z" },
+    { url = "https://files.pythonhosted.org/packages/64/a8/3f0be1654d15b5893f321e4012aa346709dd3f0ced4baa422a8be6ba32d3/hea-0.1.7-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8fb02f7fe12605012f60aeae6fb82eaea12d51ffefa2ed41ee8914e6e8dac2e1", size = 2290222, upload-time = "2026-07-08T11:34:22.11Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/32/2dc69ebcac98f785f1b7acb6cf50e66ba91a1dbfd7fc59003e141cd55c43/hea-0.1.7-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:1e0a7511d91e45752f0950b631416f1e70c8ae22bf0f1275d9a553e6a534e14d", size = 2431896, upload-time = "2026-07-08T11:34:23.767Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/8a/c3e831f6107e80b4831ff189dfdcac7c1d9f81fe1569a39728f2926a4a17/hea-0.1.7-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8eaf6298b7b911e656bf9600a2dc9fb903bebc5f19e3bca341697dadc9bbf0ef", size = 2496404, upload-time = "2026-07-08T11:34:25.861Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/35/f7f0b7ab1452ed630b7a1a18652c2bd8ac4c486fbb83d0da7da936d91714/hea-0.1.7-cp310-abi3-win_amd64.whl", hash = "sha256:d71c73d906ea8150ba7777e0301bc750258f29f1abca40b8ee777b502e77d7d4", size = 2163798, upload-time = "2026-07-08T11:34:27.445Z" },
 ]
 
 [[package]]
@@ -2002,7 +2002,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hea", specifier = ">=0.1.5" },
+    { name = "hea", specifier = ">=0.1.7" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.31.0" },
     { name = "matplotlib" },
     { name = "mkdocs", marker = "extra == 'dev'" },
