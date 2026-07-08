@@ -898,8 +898,8 @@ def _rotate_response(out, loc, ref):
     return out
 
 
-def circ_gam(formula, data, family=None, knots=None, method="REML", center=True,
-             **gam_kwargs):
+def circ_gam(formula, data, family=None, knots=None, method="REML",
+             center=True, weights=None, **gam_kwargs):
     """Circular GAM — ``hea.models.gam`` with circular defaults.
 
     A deliberately thin front door: everything forwards to
@@ -940,6 +940,16 @@ def circ_gam(formula, data, family=None, knots=None, method="REML", center=True,
       disable it, or a number to set the reference angle directly. A no-op for
       ``pnlss`` (a derived atan2 direction, no wall) and the linear ``l~c``
       leg; a mean that must *wind through* the wall still needs ``pnlss``.
+    - ``weights=`` — per-observation prior weights (hea's ``gam(weights=)``:
+      frequency/precision multipliers on each log-likelihood term). Named
+      explicitly for discoverability and because a finite-mixture EM M-step
+      fits weighted by responsibilities; the same vector also weights the
+      ``center`` reference (a component's responsibility-weighted mean).
+      Defaults to hea's unit weights. There is no ``subset``/``na.action`` fit
+      knob as in R's ``gam`` — pre-filter the frame (``df.filter(...)``) to
+      subset, and NA rows are dropped automatically. An ``offset`` goes in the
+      per-LP formula as an ``offset(...)`` atom (hea's rule for the multi-LP
+      families here), not as an argument. The circlss ``weights=`` twin.
 
     The circlss/mgcv twin call — cyclic knots auto-pinned to the period::
 
@@ -1009,7 +1019,7 @@ def circ_gam(formula, data, family=None, knots=None, method="REML", center=True,
         if resp in df.columns:
             yc = np.asarray(df[resp].to_numpy(), dtype=float)
             if yc.size:
-                w = gam_kwargs.get("weights")
+                w = weights
                 if w is not None:
                     wa = np.asarray(w, dtype=float).ravel()
                     w = wa if wa.size == yc.size else None
@@ -1022,6 +1032,16 @@ def circ_gam(formula, data, family=None, knots=None, method="REML", center=True,
                     ref = 0.0
     merged = _resolve_cyclic_knots_data(formulas, df, knots)
     payload = formulas if len(formulas) > 1 else formulas[0]
+    # `weights` is a plain hea gam kwarg (no R-style NSE to route around);
+    # forwarded only when set so hea keeps its own default (unit weights). It
+    # also fed the center reference above. An `offset` is NOT a constructor arg
+    # for the general (multi-LP) families circ_gam fits — hea wants it as an
+    # ``offset(...)`` atom in the per-LP formula — so it is left to pass through
+    # ``**gam_kwargs`` unchanged (hea validates it). `subset` / `na.action` have
+    # no hea fit-time knob: pre-filter the frame (``df.filter(...)``) to subset,
+    # and NA rows are dropped automatically (na.omit).
+    if weights is not None:
+        gam_kwargs["weights"] = weights
     fit = gam(payload, df, family=fam, knots=merged, method=method, **gam_kwargs)
     # reclass in place into the circular result object (the Python analog of R's
     # `class(fit) <- c("circ_gam", class(fit))`): every hea gam attribute/method
@@ -1430,6 +1450,42 @@ class CircGAM(_CircRegressionMixin, gam):
     #: (see :func:`circ_gam`); 0.0 for an uncentred fit. The class default keeps
     #: pre-``circ_center`` pickles and any directly built CircGAM safe.
     circ_center = 0.0
+
+    def __repr__(self):
+        """hea ``gam``'s print output, prefixed with a geometry-aware
+        ``circ_gam`` header — the circlss ``print.circ_gam`` twin. The header
+        names the leg (circular-linear / circular-circular / linear-circular /
+        location-scale, from :meth:`_geometry`), the family and — when the
+        family exposes them — its response parameters, and, for a centred fit,
+        the rotation applied. A plain (non-distributional) family gets hea's
+        output unchanged, as R leaves an ordinary ``gaussian()`` fit unheaded.
+
+        ``__str__`` is inherited from hea's ``gam`` and defers to
+        ``self.__repr__()``, so ``print(fit)`` picks this header up too."""
+        fam = self.family
+        n_lp = getattr(fam, "n_lp", None) or 0
+        if not (isinstance(fam, CircularLL) or n_lp >= 2):
+            return super().__repr__()  # plain family: hea's repr, no header
+        kind, resp_circular, _, _ = self._geometry()
+        head = {
+            "cl": "Circular GAM (circular-linear)",
+            "cc": "Circular GAM (circular-circular)",
+            "lc": "Linear-circular GAM",
+            "ll": "Location-scale GAM",
+        }.get(kind, "Circular GAM" if resp_circular else "Location-scale GAM")
+        fam_name = getattr(fam, "name", None) or type(fam).__name__
+        line = f"{head} via circ_gam() -- family {fam_name}"
+        params = getattr(fam, "params", None)
+        if params:
+            line += f", parameters: {', '.join(params)}"
+        header = line + "\n"
+        ref = getattr(self, "circ_center", 0.0)
+        if ref:
+            header += (
+                f"  centered at {ref:+.4g} rad for fitting; "
+                "directions reported in original frame\n"
+            )
+        return header + super().__repr__()
 
     def predict(self, *args, **kwargs):
         """``hea.models.gam.predict`` with the centring rotation undone on the

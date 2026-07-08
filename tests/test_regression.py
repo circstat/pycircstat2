@@ -908,6 +908,95 @@ def test_circ_gam_center_numeric_and_wall_free_family():
     assert gp.circ_center == 0.0
 
 
+# --- geometry classification, print header, front-end weights ---------------
+# Ported from circlss test-circ_gam.R (.circ_geometry 2x2 + print.circ_gam
+# header + weights= plumbing).
+
+
+def test_circ_gam_geometry_classifies_cl_cc_lc():
+    """_geometry names the leg from (response circular?, covariate cyclic?):
+    cl = circular ~ linear, cc = circular ~ cyclic, lc = linear ~ cyclic — the
+    circlss .circ_geometry 2x2. The circular/linear split is by family type
+    (isinstance CircularLL), so hea's native gaulss is the linear leg with no
+    response_circular flag needed."""
+    rng = np.random.default_rng(11)
+    n = 130
+    x = rng.uniform(0, 1, n)
+    phi = rng.uniform(0, 2 * np.pi, n)
+    theta = np.mod(2 * np.arctan(np.sin(2 * np.pi * x)) + rng.vonmises(0, 4, n), 2 * np.pi)
+    thc = np.mod(np.sin(phi) + rng.vonmises(0, 4, n), 2 * np.pi)
+    yl = 2 + 1.5 * np.sin(phi) + rng.normal(0, 0.3, n)
+    ctl = {"efs_tol": 1e-6, "epsilon": 1e-8}
+    cl = circ_gam("theta ~ s(x)", pl.DataFrame({"theta": theta, "x": x}),
+                  family="vmlss", control=ctl)
+    cc = circ_gam(["thc ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
+                  pl.DataFrame({"thc": thc, "phi": phi}), family="vmlss", control=ctl)
+    lc = circ_gam(["yl ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
+                  pl.DataFrame({"yl": yl, "phi": phi}), family="gaulss", control=ctl)
+    assert cl._geometry()[:3] == ("cl", True, False)
+    assert cc._geometry()[:3] == ("cc", True, True)
+    assert lc._geometry()[:3] == ("lc", False, True)
+
+
+def test_circ_gam_print_header_names_geometry_and_family():
+    """print/repr prepends a geometry-aware header (the circlss print.circ_gam
+    twin): leg name, family, and — for a distributional family — its parameter
+    columns; plus a 'centered at' line for a centred fit. A plain gaussian gets
+    hea's output unheaded, as R leaves an ordinary gaussian() fit."""
+    rng = np.random.default_rng(12)
+    n = 150
+    x = rng.uniform(0, 1, n)
+    phi = rng.uniform(0, 2 * np.pi, n)
+    theta = np.mod(2 * np.arctan(np.sin(2 * np.pi * x)) + rng.vonmises(0, 5, n), 2 * np.pi)
+    yl = 2 + 1.5 * np.sin(phi) + rng.normal(0, 0.3, n)
+    ctl = {"efs_tol": 1e-6, "epsilon": 1e-8}
+    cl = circ_gam("theta ~ s(x)", pl.DataFrame({"theta": theta, "x": x}),
+                  family="vmlss", control=ctl)
+    assert repr(cl).splitlines()[0] == (
+        "Circular GAM (circular-linear) via circ_gam() -- "
+        "family vmlss, parameters: mu, kappa"
+    )
+    lc = circ_gam(["yl ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
+                  pl.DataFrame({"yl": yl, "phi": phi}), family="gaulss", control=ctl)
+    assert repr(lc).splitlines()[0] == "Linear-circular GAM via circ_gam() -- family gaulss"
+    # a centred fit adds the rotation line under the header
+    thw = np.mod(rng.normal(np.pi, 0.4, n), 2 * np.pi)
+    cen = circ_gam("theta ~ s(x)", pl.DataFrame({"theta": thw, "x": x}),
+                   family="vmlss", control=ctl)
+    assert cen.circ_center != 0.0
+    assert "centered at" in repr(cen).splitlines()[1]
+    # plain gaussian: no distributional params -> no circ_gam header, hea's repr
+    g = circ_gam("yl ~ s(phi)", pl.DataFrame({"yl": yl, "phi": phi}),
+                 family="gaussian", control=ctl)
+    assert "via circ_gam()" not in repr(g)
+
+
+def test_circ_gam_weights_arg_reaches_fit_and_center_ref():
+    """circ_gam's explicit weights= reaches BOTH the likelihood (a weighted fit
+    moves the coefficients) and the center reference (the responsibility-
+    weighted circular mean) — the line the front end now reads from the named
+    param, not **gam_kwargs. The circ_mix M-step contract."""
+    from pycircstat2.regression import _center_ref
+
+    rng = np.random.default_rng(4)
+    n = 300
+    x = rng.uniform(0, 1, n)
+    theta = np.mod(rng.normal(np.pi, 0.5, n), 2 * np.pi)  # hugs the wall
+    df = pl.DataFrame({"theta": theta, "x": x})
+    w = np.where(np.sin(theta) > 0, 5.0, 0.2)  # asymmetric across the wall
+    ctl = {"efs_tol": 1e-7, "epsilon": 1e-9}
+    g0 = circ_gam("theta ~ s(x)", df, control=ctl)
+    gw = circ_gam("theta ~ s(x)", df, weights=w, control=ctl)
+    # weights feed the center ref (stored circ_center == _center_ref weighted)
+    assert g0.circ_center == pytest.approx(_center_ref(theta))
+    assert gw.circ_center == pytest.approx(_center_ref(theta, w))
+    assert abs(gw.circ_center - g0.circ_center) > 0.05
+    # weights feed the likelihood: with centering off, a weighted fit still moves
+    g0f = circ_gam("theta ~ s(x)", df, center=False, control=ctl)
+    gwf = circ_gam("theta ~ s(x)", df, weights=w, center=False, control=ctl)
+    assert np.max(np.abs(np.asarray(gwf.coef) - np.asarray(g0f.coef))) > 1e-3
+
+
 # ===========================================================================
 # circ_lm — classical (parametric) circular regression.
 # lc returns a hea lm object; cl/cc return result dicts. References: the
