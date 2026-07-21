@@ -907,19 +907,30 @@ def _circ_prepare(formula, data, family, knots, center, weights):
     result reclass differ between them)."""
     fam = _resolve_gam_family(family)
     formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
-    if isinstance(fam, CircularLL):
+    # Every location-scale family gets the trailing `~ 1` fill, keyed on the
+    # family declaring more than one linear predictor — the circlss twin, whose
+    # gate is `!is.null(family$param_names)` and so covers its gausslss/gammalss
+    # linear-response forks as well as the circular ones. Keying on `n_lp` (a
+    # class attribute, so it reads on an uninstantiated hea family too) keeps
+    # hea's `gaulss`/`gammals` — pycircstat2's linear-circular leg, already
+    # weight-aware upstream — on the same path as the *lss families. A
+    # single-LP family (`gaussian`, `poisson`, …) has no `n_lp` and is left
+    # entirely to hea.
+    n_lp = getattr(fam, "n_lp", None)
+    if isinstance(n_lp, int) and n_lp >= 2:
         if "~" not in formulas[0] or not formulas[0].split("~", 1)[0].strip():
             raise ValueError(
                 'the first formula must name the response, e.g. "theta ~ s(x)".'
             )
-        if len(formulas) > fam.n_lp:
+        if len(formulas) > n_lp:
+            fam_name = getattr(fam, "name", None) or type(fam).__name__
             raise ValueError(
-                f"{fam.name} has {fam.n_lp} linear predictors; got "
+                f"{fam_name} has {n_lp} linear predictors; got "
                 f"{len(formulas)} formulas."
             )
         # fewer formulas than parameters: hold the rest constant (~ 1), e.g.
         # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
-        formulas += ["~ 1"] * (fam.n_lp - len(formulas))
+        formulas += ["~ 1"] * (n_lp - len(formulas))
     df = _to_polars(data)
     # center: rotate the circular response to a frame where the tan-half wall
     # (the antipode of the link origin, θ = π) clears the data, fit there, and
