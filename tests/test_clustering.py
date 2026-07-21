@@ -314,6 +314,10 @@ def test_circ_kmeans_is_seed_deterministic_and_guards_k():
     b = circ_kmeans(theta, 3, random_seed=7)
     assert np.array_equal(a["cluster"], b["cluster"])
     assert np.allclose(a["tot_withinss"], b["tot_withinss"])
+    # ... and an UNSEEDED call must simply run (random_seed=None draws its own)
+    c = circ_kmeans(theta, 3)
+    assert c["cluster"].shape == (40,)
+    assert int(c["size"].sum()) == 40
     with pytest.raises(ValueError, match="more cluster centres"):
         circ_kmeans(theta, 41)
     with pytest.raises(ValueError, match="centers"):
@@ -323,7 +327,7 @@ def test_circ_kmeans_is_seed_deterministic_and_guards_k():
 ############################
 #  Tests for circ_mix      #
 ############################
-# Following the circlss convention, these exercise the engine's pure logic --
+# These exercise the engine's pure logic --
 # the guards, formula dispatch, the E-step numerics, the responsibility
 # reshapes behind the automatic-K moves, the information-criterion arithmetic
 # and the component accessors -- with no fitting. The stochastic end-to-end
@@ -596,7 +600,7 @@ def test_circ_mix_control_defaults_and_guards():
     assert ct.init == "kmeans"  # the default
     assert ct.penalty == "auto"  # the default
     assert ct.sp_every == 5
-    assert ct.degen_strength == 1.0  # the default guard strength c = 1
+    assert ct.degen_strength == 0.05  # caps concentration near 10 * N_k
     assert ct.time_budget is None
     assert CircMixControl(init="random").init == "random"
     assert CircMixControl(sp_every=0).sp_every == 1  # coerced to >= 1
@@ -610,6 +614,26 @@ def test_circ_mix_control_defaults_and_guards():
         CircMixControl(time_budget=0)
     with pytest.raises(ValueError, match="moves"):
         CircMixControl(moves=("teleport",))
+
+
+def test_circ_mix_runs_with_no_control_at_all():
+    """The bare call must work: `control` defaults, and an unseeded control
+    must NOT require a seed to be passed: an unseeded fit rides the ambient
+    RNG stream."""
+    rng = np.random.default_rng(31)
+    n = 120
+    z = rng.integers(2, size=n)
+    y = np.mod(rng.vonmises(np.where(z == 0, -1.5, 1.5), 6.0), 2 * np.pi)
+    df = pl.DataFrame({"y": y})
+    m = circ_mix("y ~ 1", df, K=2, control={"restarts": 2})  # no seed
+    assert m.K == 2 and np.isfinite(m.loglik)
+    m2 = circ_mix("y ~ 1", df, K=2)  # no control whatsoever
+    assert m2.K == 2 and np.isfinite(m2.loglik)
+    # a seed is still honoured, and reproducible
+    a = circ_mix("y ~ 1", df, K=2, control={"restarts": 2, "seed": 5})
+    b = circ_mix("y ~ 1", df, K=2, control={"restarts": 2, "seed": 5})
+    assert a.loglik == pytest.approx(b.loglik)
+    np.testing.assert_allclose(a.gamma_, b.gamma_)
 
 
 def test_circ_mix_control_accepts_a_dict_of_overrides():
@@ -663,8 +687,7 @@ def test_circ_logpdf_is_invariant_to_the_centring_frame():
 
     It also pins the two frames apart: the DEFAULT newdata is ``fit.data``,
     which circ_gam already rotated, while a SUPPLIED newdata is in the original
-    frame and must be rotated. Getting that backwards double-counts the
-    centring (and is invisible until a fit actually rotates).
+    frame and must be rotated.
     """
     rng = np.random.default_rng(5)
     n = 200
@@ -722,6 +745,69 @@ def test_circ_mix_density_clustering_recovers_two_components():
     # the fitted mean directions bracket the two truths
     mus = np.sort([np.mod(p[0, 0], 2 * np.pi) for p in m.predict(type="response")])
     np.testing.assert_allclose(mus, np.sort(np.mod([-1.4, 1.4], 2 * np.pi)), atol=0.25)
+
+
+def test_circ_mix_matches_the_published_turtle_mle():
+    """Fisher's B3 turtles against the published two-component von Mises MLE
+    (Jammalamadaka & Vaidyanathan 2024: logLik -105.413, kappa = [2.619, 8.447],
+    pi = [0.84, 0.16]).
+
+    The regression this pins is the DEGENERACY GUARD's calibration. The guard
+    caps a component's concentration near ``N_k / (2*degen_strength)``, so a
+    strength large enough to matter shrinks the 12-observation concentrated
+    component well below its MLE -- at c = 1 it lands at kappa = 2.75, a 3x
+    error. At the default c = 0.05 the cap is ~10*N_k and the fit tracks the
+    published answer.
+    """
+    from pycircstat2 import load_data
+
+    d = load_data("B3", source="fisher")
+    # the dataset ships in degrees; every circular fit here is in radians
+    df = pl.DataFrame({"theta": np.deg2rad(np.asarray(d["θ"], dtype=float))})
+    m = circ_mix("theta ~ 1", df, K=2, control={"seed": 1})
+    kappa = np.sort([float(np.exp(np.atleast_1d(cp.fit.coef)[1])) for cp in m.components])
+    assert m.loglik == pytest.approx(-105.413, abs=0.05)
+    np.testing.assert_allclose(kappa, [2.619, 8.447], rtol=0.10)
+    np.testing.assert_allclose(np.sort(m.gating["pi"]), [0.16, 0.84], atol=0.02)
+    # the guard is quiet here: under a nat per component, so repr stays silent
+    assert not m.degen["binding"].any()
+
+    # ... and cranking it up is what breaks the fit, not the data
+    hard = circ_mix("theta ~ 1", df, K=2,
+                    control={"seed": 1, "degen_strength": 1.0})
+    assert max(float(np.exp(np.atleast_1d(cp.fit.coef)[1])) for cp in hard.components) < 4.0
+    assert hard.degen["binding"].all()
+    assert "degeneracy guard" in repr(hard)
+
+
+def test_circ_mix_degen_report_measures_the_guard():
+    """`.degen` reports the penalty each component actually paid, in nats.
+
+    For the linear kernel on a concentration the penalty is exactly
+    ``c * kappa`` (lambda_k = c/N_k times N_k weighted rows), which makes it a
+    direct read on the log-likelihood the M-step traded away -- the quantity
+    `loglik`/`bic` omit.
+    """
+    rng = np.random.default_rng(7)
+    n = 200
+    z = rng.integers(2, size=n)
+    y = np.mod(rng.vonmises(np.where(z == 0, -1.4, 1.4), 4.0), 2 * np.pi)
+    df = pl.DataFrame({"y": y})
+    ctl = {"restarts": 2, "seed": 1, "max_iter": 60}
+
+    m = circ_mix("y ~ 1", df, K=2, control={**ctl, "degen_strength": 0.5})
+    dg = m.degen
+    assert dg["strength"] == 0.5
+    Nk = np.maximum(m.gamma_, m.control.wfloor).sum(axis=0)
+    np.testing.assert_allclose(dg["lambda_"], 0.5 / Nk, rtol=1e-6)
+    kappa = np.array([float(np.exp(np.atleast_1d(cp.fit.coef)[1])) for cp in m.components])
+    np.testing.assert_allclose(dg["penalty"], 0.5 * kappa, rtol=1e-6)
+    assert [set(p) for p in dg["by_param"]] == [{"kappa"}, {"kappa"}]
+
+    # switching the guard off retires the report entirely
+    off = circ_mix("y ~ 1", df, K=2, control={**ctl, "degen_strength": 0.0})
+    assert off.degen is None
+    assert "degeneracy guard" not in repr(off)
 
 
 def test_circ_mix_predict_surfaces_agree():

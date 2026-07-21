@@ -43,8 +43,8 @@ class MovM:
     """
     Mixture of von Mises (MovM) Clustering.
 
-    This class implements the Expectation-Maximization (EM) algorithm for clustering 
-    circular data using a mixture of von Mises distributions. It is analogous to 
+    This class implements the Expectation-Maximization (EM) algorithm for clustering
+    circular data using a mixture of von Mises distributions. It is analogous to
     Gaussian Mixture Models (GMM) but adapted for directional statistics.
 
     Parameters
@@ -177,7 +177,9 @@ class MovM:
             if all(np.any(labels == c) for c in range(n_clusters_init)):
                 break
         else:
-            raise RuntimeError("Failed to initialise clusters without empty components.")
+            raise RuntimeError(
+                "Failed to initialise clusters without empty components."
+            )
 
         means = np.zeros(n_clusters_init, dtype=float)
         resultants = np.zeros(n_clusters_init, dtype=float)
@@ -274,9 +276,7 @@ class MovM:
                 break
         else:
             if verbose:
-                print(
-                    f"Reached max iter {self.n_iters}. Final nLL = {nLL:.3f}\n"
-                )
+                print(f"Reached max iter {self.n_iters}. Final nLL = {nLL:.3f}\n")
 
         self.nLL = nLL_history[~np.isnan(nLL_history)]
 
@@ -285,7 +285,8 @@ class MovM:
         self.p_ = p
         self.kappa_ = kappa
         self.params_ = [
-            {"mu": float(self.m_[i]), "kappa": float(self.kappa_[i])} for i in range(self.n_clusters)
+            {"mu": float(self.m_[i]), "kappa": float(self.kappa_[i])}
+            for i in range(self.n_clusters)
         ]
         log_gamma_final = self._log_gamma(alpha, p, means, kappa)
         log_norm_final = np.logaddexp.reduce(log_gamma_final, axis=0, keepdims=True)
@@ -293,7 +294,6 @@ class MovM:
         self.gamma_ = gamma_final
         self.labels_ = gamma_final.argmax(axis=0)
         return self
-
 
     def compute_gamma(
         self,
@@ -595,7 +595,9 @@ class MoKJ:
         initialize KJ params via method-of-moments."""
         n = len(x_rad)
         if n_clusters_init > n:
-            raise ValueError("Number of clusters exceeds sample size during initialization.")
+            raise ValueError(
+                "Number of clusters exceeds sample size during initialization."
+            )
 
         labels = None
         if "CircKMeans" in globals():
@@ -621,7 +623,9 @@ class MoKJ:
                     labels = candidate
                     break
             else:
-                raise RuntimeError("Failed to initialize clusters without empty components.")
+                raise RuntimeError(
+                    "Failed to initialize clusters without empty components."
+                )
 
         mu0 = np.zeros(n_clusters_init, float)
         gamma0 = np.zeros(n_clusters_init, float)
@@ -644,7 +648,9 @@ class MoKJ:
         sin_lam = np.sin(lam)
         return (rho * cos_lam - gamma) ** 2 + (rho * sin_lam) ** 2
 
-    def _regularise_params(self, params: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
+    def _regularise_params(
+        self, params: Tuple[float, float, float, float]
+    ) -> Tuple[float, float, float, float]:
         mu, gamma, rho, lam = params
         mu = float(np.mod(mu, 2.0 * np.pi))
         gamma = float(np.clip(gamma, self._gamma_floor, 1.0 - self._gamma_margin))
@@ -660,14 +666,16 @@ class MoKJ:
             # steer back inside feasible disk
             s, phi = katojones._aux_from_rho_lam(gamma, rho, lam)
             s = float(np.clip(s, 0.0, 1.0 - self._s_shrink))
-            s *= (1.0 - self._s_shrink)
+            s *= 1.0 - self._s_shrink
             rho, lam = katojones._rho_lam_from_aux(gamma, s, phi)
             rho = float(np.clip(rho, 0.0, 1.0 - self._rho_margin))
             lam = float(np.mod(lam, 2.0 * np.pi))
 
         return mu, gamma, rho, lam
 
-    def _violates_or_degenerate(self, params: Tuple[float, float, float, float]) -> bool:
+    def _violates_or_degenerate(
+        self, params: Tuple[float, float, float, float]
+    ) -> bool:
         mu, gamma, rho, lam = params
         if not np.all(np.isfinite([mu, gamma, rho, lam])):
             return True
@@ -676,7 +684,10 @@ class MoKJ:
         limit = (1.0 - gamma) ** 2
         if limit <= 0.0:
             return True
-        return self._constraint_value(gamma, rho, lam) >= limit - self._constraint_margin / 2.0
+        return (
+            self._constraint_value(gamma, rho, lam)
+            >= limit - self._constraint_margin / 2.0
+        )
 
     # ---------- core likelihood pieces ----------
 
@@ -692,7 +703,9 @@ class MoKJ:
         K = mu.size
         logs = np.vstack(
             [
-                katojones.logpdf(alpha, mu=mu[k], gamma=gamma[k], rho=rho[k], lam=lam[k])
+                katojones.logpdf(
+                    alpha, mu=mu[k], gamma=gamma[k], rho=rho[k], lam=lam[k]
+                )
                 for k in range(K)
             ]
         )
@@ -771,7 +784,9 @@ class MoKJ:
 
                 # Start from current params; do weighted MLE as in the EM literature
                 mle_params = None
-                initial_params = self._regularise_params((mu[k], gamma[k], rho[k], lam[k]))
+                initial_params = self._regularise_params(
+                    (mu[k], gamma[k], rho[k], lam[k])
+                )
                 for start_params in (initial_params, moment_est):
                     try:
                         est, _info = katojones.fit(
@@ -780,7 +795,10 @@ class MoKJ:
                             weights=w,
                             initial=start_params,
                             optimizer="L-BFGS-B",
-                            options={"maxiter": self.mle_maxiter, "ftol": self.mle_ftol},
+                            options={
+                                "maxiter": self.mle_maxiter,
+                                "ftol": self.mle_ftol,
+                            },
                             return_info=True,
                         )
                         est = self._regularise_params(est)
@@ -844,7 +862,9 @@ class MoKJ:
         """
         if self.gamma_resp_ is None:
             raise ValueError("Model must be fitted before computing BIC.")
-        nLL = self._nll(self.alpha, self.p_, self.mu_, self.gamma_, self.rho_, self.lam_)
+        nLL = self._nll(
+            self.alpha, self.p_, self.mu_, self.gamma_, self.rho_, self.lam_
+        )
         nparams = 5 * self.n_clusters - 1
         return 2 * nLL + np.log(self.n) * nparams
 
@@ -863,7 +883,9 @@ class MoKJ:
         full_cycle = self.full_cycle if full_cycle is None else full_cycle
         x = np.asarray(x, dtype=float).reshape(-1)
         alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
-        log_resp = self._log_gamma(alpha, self.p_, self.mu_, self.gamma_, self.rho_, self.lam_)
+        log_resp = self._log_gamma(
+            alpha, self.p_, self.mu_, self.gamma_, self.rho_, self.lam_
+        )
         log_norm = logsumexp(log_resp, axis=0, keepdims=True)
         return np.exp(log_resp - log_norm)
 
@@ -898,7 +920,9 @@ class MoKJ:
         alpha = x if unit == "radian" else data2rad(x, k=full_cycle)
 
         dens = np.zeros_like(alpha, dtype=float)
-        for pc, muc, gc, rhoc, lamc in zip(self.p_, self.mu_, self.gamma_, self.rho_, self.lam_):
+        for pc, muc, gc, rhoc, lamc in zip(
+            self.p_, self.mu_, self.gamma_, self.rho_, self.lam_
+        ):
             dens += pc * katojones.pdf(alpha, mu=muc, gamma=gc, rho=rhoc, lam=lamc)
         return dens
 
@@ -947,7 +971,9 @@ class MoCD:
         random_seed: Optional[int] = None,
     ) -> None:
         if not isinstance(distribution, CircularContinuous):
-            raise TypeError("`distribution` must be an instance of CircularContinuous (e.g. vonmises).")
+            raise TypeError(
+                "`distribution` must be an instance of CircularContinuous (e.g. vonmises)."
+            )
         if n_clusters <= 0:
             raise ValueError("`n_clusters` must be positive.")
         if n_iters <= 0:
@@ -993,7 +1019,9 @@ class MoCD:
         else:
             shapes = getattr(self.distribution, "shapes", None)
             if shapes:
-                inferred_names = [name.strip() for name in shapes.split(",") if name.strip()]
+                inferred_names = [
+                    name.strip() for name in shapes.split(",") if name.strip()
+                ]
 
         if not inferred_names:
             raise ValueError(
@@ -1009,9 +1037,9 @@ class MoCD:
 
         distribution_name = distribution_name_key
         if (
-            (fit_method is None or (isinstance(fit_method, str) and fit_method.lower() == "auto"))
-            and distribution_name in {"vonmises_flattopped", "inverse_batschelet"}
-        ):
+            fit_method is None
+            or (isinstance(fit_method, str) and fit_method.lower() == "auto")
+        ) and distribution_name in {"vonmises_flattopped", "inverse_batschelet"}:
             self._method_candidates = ["mle"]
 
         # Model attributes populated after fitting
@@ -1049,7 +1077,9 @@ class MoCD:
     def _params_to_array(self, params: Dict[str, float]) -> np.ndarray:
         return np.array([float(params[name]) for name in self.param_names], dtype=float)
 
-    def _array_to_params(self, values: Union[Dict[str, float], Tuple[float, ...], List[float]]) -> Dict[str, float]:
+    def _array_to_params(
+        self, values: Union[Dict[str, float], Tuple[float, ...], List[float]]
+    ) -> Dict[str, float]:
         if isinstance(values, dict):
             return {name: float(values[name]) for name in self.param_names}
         arr = np.atleast_1d(values).astype(float)
@@ -1082,7 +1112,9 @@ class MoCD:
             fit_options["weights"] = weights
 
             try:
-                params_est, _info = self.distribution.fit(alpha, return_info=True, **fit_options)
+                params_est, _info = self.distribution.fit(
+                    alpha, return_info=True, **fit_options
+                )
             except TypeError:
                 fit_options.pop("return_info", None)
                 try:
@@ -1105,17 +1137,23 @@ class MoCD:
             f"{self._method_candidates} with last error: {last_error}"
         )
 
-    def _initialize(self, alpha: np.ndarray) -> Tuple[List[Dict[str, float]], np.ndarray]:
+    def _initialize(
+        self, alpha: np.ndarray
+    ) -> Tuple[List[Dict[str, float]], np.ndarray]:
         n = alpha.size
         if self.n_clusters > n:
-            raise ValueError("Number of clusters cannot exceed number of observations during initialisation.")
+            raise ValueError(
+                "Number of clusters cannot exceed number of observations during initialisation."
+            )
 
         for _ in range(128):
             labels = self._rng.integers(self.n_clusters, size=n)
             if all(np.any(labels == c) for c in range(self.n_clusters)):
                 break
         else:
-            raise RuntimeError("Failed to initialise mixture components without empty clusters.")
+            raise RuntimeError(
+                "Failed to initialise mixture components without empty clusters."
+            )
 
         params_list: List[Dict[str, float]] = []
         for c in range(self.n_clusters):
@@ -1177,7 +1215,9 @@ class MoCD:
                 if np.allclose(weights.sum(), 0.0):
                     params_updated.append(params_list[c])
                     continue
-                params_updated.append(self._fit_component(alpha, weights, current_params=params_list[c]))
+                params_updated.append(
+                    self._fit_component(alpha, weights, current_params=params_list[c])
+                )
             params_list = params_updated
 
             nLL = -float(np.sum(log_norm))
@@ -1198,12 +1238,16 @@ class MoCD:
                 break
         else:
             if verbose:
-                print(f"Reached max iter {self.n_iters}. Final nLL = {nLL_history[self.n_iters - 1]:.3f}\n")
+                print(
+                    f"Reached max iter {self.n_iters}. Final nLL = {nLL_history[self.n_iters - 1]:.3f}\n"
+                )
 
         self.nLL = nLL_history[~np.isnan(nLL_history)]
         self.p_ = p
         self.params_ = params_list
-        self.param_matrix_ = np.vstack([self._params_to_array(params) for params in params_list])
+        self.param_matrix_ = np.vstack(
+            [self._params_to_array(params) for params in params_list]
+        )
 
         final_log = self._log_gamma(alpha, p, params_list)
         final_norm = logsumexp(final_log, axis=0, keepdims=True)
@@ -1366,10 +1410,7 @@ class CircHAC:
 
     def _initialize_clusters(self, alpha: np.ndarray) -> Dict[int, List[int]]:
         n_samples = alpha.size
-        if (
-            self.n_init_clusters is None
-            or self.n_init_clusters >= n_samples
-        ):
+        if self.n_init_clusters is None or self.n_init_clusters >= n_samples:
             return {i: [i] for i in range(n_samples)}
 
         # Pre-cluster using CircKMeans to obtain a manageable starting point
@@ -1425,7 +1466,10 @@ class CircHAC:
         merges: List[List[float]] = []
 
         while len(clusters) > self.n_clusters:
-            means = {cid: circ_mean_and_r(alpha[indices])[0] for cid, indices in clusters.items()}
+            means = {
+                cid: circ_mean_and_r(alpha[indices])[0]
+                for cid, indices in clusters.items()
+            }
             cluster_ids = list(clusters.keys())
 
             best_dist = np.inf
@@ -1442,7 +1486,9 @@ class CircHAC:
 
             cid_i, cid_j = best_pair
             merged_indices = clusters[cid_i] + clusters[cid_j]
-            merges.append([cid_i, cid_j, float(abs(best_dist)), float(len(merged_indices))])
+            merges.append(
+                [cid_i, cid_j, float(abs(best_dist)), float(len(merged_indices))]
+            )
 
             del clusters[cid_i]
             del clusters[cid_j]
@@ -1463,7 +1509,9 @@ class CircHAC:
         self.labels_ = labels
         self.centers_ = centers
         self.r_ = resultants
-        self.merges_ = np.array(merges, dtype=float) if merges else np.empty((0, 4), dtype=float)
+        self.merges_ = (
+            np.array(merges, dtype=float) if merges else np.empty((0, 4), dtype=float)
+        )
         return self
 
     def predict(self, alpha):
@@ -1486,7 +1534,10 @@ class CircHAC:
 
         labels = np.zeros(alpha.size, dtype=int)
         for i, angle in enumerate(alpha):
-            distances = [abs(circ_dist(angle, center, metric=self.metric)) for center in self.centers_]
+            distances = [
+                abs(circ_dist(angle, center, metric=self.metric))
+                for center in self.centers_
+            ]
             labels[i] = int(np.argmin(distances))
         return labels
 
@@ -1511,6 +1562,7 @@ class CircHAC:
         ax : matplotlib Axes
         """
         import matplotlib.pyplot as plt
+
         if ax is None:
             fig, ax = plt.subplots(figsize=(6, 4))
         merges = self.merges_
@@ -1547,11 +1599,10 @@ class CircHAC:
         ax.set_ylabel("Distance")
         return ax
 
-
     def silhouette_score(self):
         """
         Compute the average silhouette for a cluster assignment on circular data.
-        
+
         angles: np.ndarray shape (n,) in radians
         labels: np.ndarray shape (n,) in {0,1,...,K-1}
         metric: "chord", "geodesic", "center", etc.
@@ -1572,13 +1623,13 @@ class CircHAC:
 
         # Precompute all pairwise distances
         # shape => (n,n)
-        pairwise = circ_dist(angles[:,None], angles[None,:], metric=metric)
+        pairwise = circ_dist(angles[:, None], angles[None, :], metric=metric)
         pairwise = np.abs(pairwise)  # ensure nonnegative
 
         for i in range(n):
             c_i = labels[i]
             # points in cluster c_i
-            in_cluster_i = (labels == c_i)
+            in_cluster_i = labels == c_i
             # average distance to own cluster
             # excluding the point itself
             a_i = pairwise[i, in_cluster_i].mean() if in_cluster_i.sum() > 1 else 0.0
@@ -1588,15 +1639,17 @@ class CircHAC:
             for c_other in np.unique(labels):
                 if c_other == c_i:
                     continue
-                in_other = (labels == c_other)
+                in_other = labels == c_other
                 dist_i_other = pairwise[i, in_other].mean()
                 if dist_i_other < b_i:
                     b_i = dist_i_other
 
-            silhouette_values[i] = (b_i - a_i) / max(a_i, b_i) if max(a_i, b_i) > 0 else 0.0
+            silhouette_values[i] = (
+                (b_i - a_i) / max(a_i, b_i) if max(a_i, b_i) > 0 else 0.0
+            )
 
         return silhouette_values.mean()
-    
+
 
 class CircKMeans:
     """
@@ -1653,7 +1706,7 @@ class CircKMeans:
         unit="degree",
         full_cycle=360,
         tol=1e-6,
-        random_seed=None
+        random_seed=None,
     ):
         self.n_clusters = n_clusters
         self.max_iter = max_iter
@@ -1713,7 +1766,7 @@ class CircKMeans:
             # 3) update step
             new_centers = np.zeros_like(centers)
             for c in range(self.n_clusters):
-                mask = (labels_new == c)
+                mask = labels_new == c
                 if np.any(mask):
                     # circular mean of assigned points
                     m, _ = circ_mean_and_r(alpha[mask])
@@ -1723,7 +1776,9 @@ class CircKMeans:
                     new_centers[c] = centers[c]
 
             # check for shift
-            shift = np.sum(np.abs(np.angle(np.exp(1j*centers) / np.exp(1j*new_centers))))
+            shift = np.sum(
+                np.abs(np.angle(np.exp(1j * centers) / np.exp(1j * new_centers)))
+            )
             # or a simpler approach: sum of circ_dist(centers, new_centers)
             # shift = float(np.sum(np.abs(circ_dist(centers, new_centers, metric=self.metric))))
 
@@ -1740,7 +1795,7 @@ class CircKMeans:
         # compute final inertia => sum of distances from points to assigned center
         total_dist = 0.0
         for c in range(self.n_clusters):
-            mask = (labels == c)
+            mask = labels == c
             if np.any(mask):
                 dvals = np.abs(circ_dist(alpha[mask], centers[c], metric=self.metric))
                 total_dist += dvals.sum()
@@ -1778,7 +1833,7 @@ class CircKMeans:
 # =========================================================================== #
 #  circ_kmeans — k-means on the circle / torus
 # =========================================================================== #
-# The circlss ``circ_kmeans`` twin. Distinct from the :class:`CircKMeans` class
+# Distinct from the :class:`CircKMeans` class
 # above, which is 1-D, seeds from random data points and minimises a
 # ``circ_dist`` metric: this one is the *torus* Lloyd iteration whose
 # dissimilarity is the summed cosine distance Σ_j {1 − cos(θ_j − μ_j)} and whose
@@ -1786,6 +1841,28 @@ class CircKMeans:
 # the hard-assignment limit of a von Mises mixture with common concentration
 # (Banerjee et al. 2005), which is exactly why ``circ_mix`` seeds and splits its
 # components with it and not with the class.
+def _mix_rng(seed: Optional[int]) -> RMersenneTwister:
+    """The R-bit-exact Mersenne Twister every random draw here runs on.
+
+    ``seed=None`` draws a fresh nondeterministic seed, so an unseeded call
+    simply works and varies run to run, the way an unseeded fit rides the
+    ambient global RNG stream. Pass an integer for a reproducible fit."""
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1, dtype=np.uint32)[0])
+    return RMersenneTwister(int(seed))
+
+
+def _mix_seeds(rng: RMersenneTwister, R: int) -> np.ndarray:
+    """``R`` independent restart seeds drawn from ``rng``.
+
+    Sampled with replacement: the seeds only have to start *different* streams,
+    and the collision probability over R draws is ~R²/2^32 (≈1e-5 at R = 10),
+    where a collision merely repeats one random restart. Sampling without
+    replacement over the 2^31 seed space is orders of magnitude slower.
+    """
+    return rng.sample_int(_MIX_INT_MAX, int(R), True)
+
+
 def _circ_costs(x: np.ndarray, mu: np.ndarray) -> np.ndarray:
     """``n × K`` summed cosine distances Σ_j {1 − cos(x_ij − μ_kj)} — the torus
     dissimilarity, additive over the ``d`` angular coordinates."""
@@ -1883,7 +1960,7 @@ def circ_kmeans(
     iter_max: int = 50,
     random_seed: Optional[int] = None,
 ):
-    """k-means clustering on the circle / torus — the circlss ``circ_kmeans`` twin.
+    """k-means clustering on the circle / torus.
 
     A Lloyd iteration whose dissimilarity is the summed cosine distance
     :math:`\\sum_j \\{1 - \\cos(\\theta_j - \\mu_j)\\}` and whose centres are the
@@ -1967,17 +2044,16 @@ def circ_kmeans(
         raise ValueError(
             f"circ_kmeans: more cluster centres ({K}) than data points ({n})."
         )
-    return _circ_kmeans_run(x, K, nstart, iter_max, RMersenneTwister(random_seed))
+    return _circ_kmeans_run(x, K, nstart, iter_max, _mix_rng(random_seed))
 
 
 def _euclid_kmeans(
     x: np.ndarray, K: int, nstart: int, iter_max: int, rng: RMersenneTwister
 ) -> Dict[str, Any]:
-    """Ordinary (squared-Euclidean) k-means for the linear ``l~c`` leg — where
-    circlss calls ``stats::kmeans``. Same k-means++/Lloyd shape as
-    :func:`_circ_kmeans_run` so the two read alike; scikit-learn is not a
-    pycircstat2 dependency and Hartigan-Wong's exact swap sequence is not a
-    contract anything here relies on (this only *seeds* the EM)."""
+    """Ordinary (squared-Euclidean) k-means for the linear ``l~c`` leg.
+
+    Same k-means++/Lloyd shape as :func:`_circ_kmeans_run`. Only used to
+    *seed* the EM."""
 
     def costs(a: np.ndarray, mu: np.ndarray) -> np.ndarray:
         return ((a[:, None, :] - mu[None, :, :]) ** 2).sum(axis=2)
@@ -2050,11 +2126,10 @@ def _mix_assign(x: np.ndarray, centers: np.ndarray, circular: bool) -> np.ndarra
 # =========================================================================== #
 #  circ_mix — formula grammar
 # =========================================================================== #
-# circlss carries R formula objects; here a component spec is a **string**, a
-# list of strings (circ_gam's own location-scale grammar: further linear
-# predictors of ONE response), or a list mixing strings and nested lists (a
-# joint / torus density: one chain-rule factor per distinct left-hand side).
-# These five helpers are the string twins of circlss's `all.vars`-based ones.
+# A component spec is a **string**, a list of strings (circ_gam's own
+# location-scale grammar: further linear predictors of ONE response), or a list
+# mixing strings and nested lists (a joint / torus density: one chain-rule
+# factor per distinct left-hand side). These five helpers parse that grammar.
 _MIX_VAR_RE = re.compile(r"[^\W\d_]\w*")
 
 
@@ -2154,10 +2229,8 @@ def _mix_formula_smooth(formula) -> bool:
 
 def _mix_resp_circular(family) -> bool:
     """Response geometry is a family fact — circular iff the family is one of
-    pycircstat2's ``CircularLL`` laws. (circlss instead reads a
-    ``response_circular`` flag off the family, because its ``gausslss`` fork
-    shares the same class; here the linear ``l~c`` leg is hea's own ``gaulss``
-    /``gammals``, which simply is not a ``CircularLL``.)"""
+    the ``CircularLL`` laws. The linear ``l~c`` leg rides hea's ``gaulss`` /
+    ``gammals``, which are not ``CircularLL``."""
     return isinstance(family, CircularLL)
 
 
@@ -2193,8 +2266,10 @@ def _mix_group_index(group, data, n: int) -> Dict[str, Any]:
 def _mix_rowsum(x: np.ndarray, grp: np.ndarray, n_units: int) -> np.ndarray:
     """Sum a per-ROW matrix within unit → an ``n_units × K`` per-unit matrix.
     Identity (a view) when every row is its own unit."""
-    if x.shape[0] == n_units and grp.size == n_units and np.array_equal(
-        grp, np.arange(n_units)
+    if (
+        x.shape[0] == n_units
+        and grp.size == n_units
+        and np.array_equal(grp, np.arange(n_units))
     ):
         return x
     return np.column_stack(
@@ -2205,7 +2280,9 @@ def _mix_rowsum(x: np.ndarray, grp: np.ndarray, n_units: int) -> np.ndarray:
     )
 
 
-def _mix_unit_feature(row_feat: np.ndarray, grp: np.ndarray, n_units: int) -> np.ndarray:
+def _mix_unit_feature(
+    row_feat: np.ndarray, grp: np.ndarray, n_units: int
+) -> np.ndarray:
     """Aggregate a per-ROW feature matrix to per-UNIT means (identity when each
     row is its own unit). The unit average of a circular response's (cos, sin)
     is its mean resultant — a sensible curve summary for subject init."""
@@ -2217,7 +2294,7 @@ def _mix_unit_feature(row_feat: np.ndarray, grp: np.ndarray, n_units: int) -> np
 def _mix_unit_angle(theta: np.ndarray, grp: np.ndarray, n_units: int) -> np.ndarray:
     """Aggregate per-ROW angle(s) to the per-UNIT circular mean (identity for
     rows). A vector → a per-unit vector; a matrix, one column per response →
-    a per-unit matrix, column-wise — the angular counterpart of
+    a per-unit matrix, column-wise. The angular form of
     :func:`_mix_unit_feature`, used to seed ``circ_kmeans`` under a group."""
     th = np.asarray(theta, dtype=float)
     vec = th.ndim == 1
@@ -2301,8 +2378,7 @@ def _circ_logpdf(fit, newdata=None) -> np.ndarray:
     newdata = _to_polars(newdata if supplied else fit.data)
     if resp not in newdata.columns:
         raise ValueError(
-            f"newdata must carry the response {resp!r} for the density to be "
-            "evaluated."
+            f"newdata must carry the response {resp!r} for the density to be evaluated."
         )
     Xlp = fit.predict(newdata, type="lpmatrix")  # carries the per-LP column split
     y = np.asarray(newdata[resp].to_numpy(), dtype=float)
@@ -2379,10 +2455,69 @@ def _mix_has_smooth(cp: _MixComponent) -> bool:
     factor is)? Drives the EM's monotonicity expectation — parametric /
     fixed-sp EM is monotone, a live REML penalty need not be.
 
-    circlss reads ``length(fit$smooth)``; hea exposes no per-smooth list, but
-    ``sp`` is empty exactly for a penalty-free fit, which is the same predicate.
+    Keyed on ``sp``, which is empty exactly for a penalty-free fit.
     """
     return any(np.asarray(f.sp, dtype=float).size > 0 for f in cp.fits)
+
+
+def _fit_degen_penalty(fit, w, lam) -> Dict[str, float]:
+    """One fit's MAP penalty λ Σᵢ wᵢ ρ(vᵢ) at its own fitted parameters, per
+    guarded parameter. Mirrors ``_lss_map_penalty``'s ``l0`` term exactly — same
+    ``_param_values`` seam, same kernels — so it reports the penalty the M-step
+    really paid rather than a re-derivation of it."""
+    fam = fit.family
+    kernels = getattr(fam, "degen", ()) or ()
+    if not kernels:
+        return {}
+    X = fit.predict(_to_polars(fit.data), type="lpmatrix")
+    params = fam._param_values(fam._etas(X, np.asarray(fit.coef, dtype=float),
+                                         [np.asarray(ix, dtype=int) for ix in fit.lpi],
+                                         None))
+    out = {}
+    for kern in kernels:
+        v = np.broadcast_to(np.asarray(params[kern.param], dtype=float), w.shape)
+        out[kern.param] = float(lam * np.sum(w * kern.rho0(v)))
+    return out
+
+
+def _mix_degen_report(components, gamma, grp, control) -> Optional[dict]:
+    """How hard the degeneracy guard pulled at the fitted optimum.
+
+    ``None`` when the guard is off or the family declares no guarded parameter.
+    Otherwise ``{"strength", "lambda_", "penalty", "by_param", "binding"}``:
+    each component's λ_k = c/N_k, the penalty it paid in nats, the split of that
+    penalty by guarded parameter, and whether it exceeds ``_MIX_DEGEN_LOUD``.
+
+    The penalty is on the log-likelihood scale and upper-bounds nothing, but it
+    tracks the unpenalised log-likelihood the M-step traded away for that
+    component — which is the number a user needs, because ``loglik``/``bic`` are
+    reported *without* it.
+    """
+    cc = float(control.degen_strength or 0.0)
+    if cc <= 0 or not any(
+        getattr(f.family, "degen", ()) for cp in components for f in cp.fits
+    ):
+        return None
+    lam, pen, by_param = [], [], []
+    for k, cp in enumerate(components):
+        w = np.maximum(gamma[grp, k], control.wfloor)
+        Nk = float(w.sum())
+        lk = (cc / Nk) if Nk > 0 else 0.0
+        parts: Dict[str, float] = {}
+        for f in cp.fits:
+            for name, val in _fit_degen_penalty(f, w, lk).items():
+                parts[name] = parts.get(name, 0.0) + val
+        lam.append(lk)
+        by_param.append(parts)
+        pen.append(float(sum(parts.values())))
+    pen_arr = np.asarray(pen, dtype=float)
+    return {
+        "strength": cc,
+        "lambda_": np.asarray(lam, dtype=float),
+        "penalty": pen_arr,
+        "by_param": by_param,
+        "binding": pen_arr > _MIX_DEGEN_LOUD,
+    }
 
 
 def _mix_fit_component(
@@ -2443,50 +2578,81 @@ def _mix_fit_component(
     def nth(seq, j):
         return seq[j] if isinstance(seq, (list, tuple)) and len(seq) > j else None
 
+    def fit_one(spec, start_j, fx, warm_j):
+        """One factor's weighted fit."""
+        return circ_gam(
+            spec, data, family=family, weights=weights, start=start_j,
+            sp=fx, center=center, **search_args(fx, warm_j), **gam_kwargs,
+        )
+
     specs = _mix_factor_specs(formula)
     if len(specs) == 1:
-        fx = norm_sp(sp)
-        fit = circ_gam(
-            specs[0],
-            data,
-            family=family,
-            weights=weights,
-            start=start,
-            sp=fx,
-            center=center,
-            **search_args(fx, warm),
-            **gam_kwargs,
-        )
-        return _MixComponent(fit)
+        return _MixComponent(fit_one(specs[0], start, norm_sp(sp), warm))
     fits, names = [], []
     for j, spec in enumerate(specs):
-        fx = norm_sp(nth(sp, j))
         fits.append(
-            circ_gam(
-                spec,
-                data,
-                family=family,
-                weights=weights,
-                start=nth(start, j),
-                sp=fx,
-                center=center,
-                **search_args(fx, nth(warm, j)),
-                **gam_kwargs,
-            )
+            fit_one(spec, nth(start, j), norm_sp(nth(sp, j)), nth(warm, j))
         )
         names.append(_mix_factor_response(spec))
     return _MixProduct(fits, names)
 
 
-def _mix_zero_start(ref_cp: _MixComponent):
-    """A neutral link-scale start shaped like ``ref_cp``'s coefficients — all
-    zeros, i.e. this component's own (centred) mean location and unit scale, the
-    diffuse model. Used only to retry an M-step that would not start; every
-    component shares one design, so any sibling that fitted gives the shape."""
-    co = _cmp_coef(ref_cp)
-    if isinstance(co, list):
-        return [np.zeros(np.asarray(c).size) for c in co]
-    return np.zeros(np.asarray(co).size)
+def _mix_moment_start(ref_cp: _MixComponent, weights):
+    """A start shaped like ``ref_cp``'s coefficients but carrying THIS
+    component's weighted moments, for retrying an M-step that would not start.
+
+    Every component shares one design, so any sibling that fitted supplies the
+    coefficient layout. The values come from the component's own
+    responsibilities: the concentration from its weighted mean resultant (which
+    is rotation-invariant, so the sibling's frame is safe to read the response
+    from), the location intercept from 0 — correct in the component's own
+    centred frame — and shape parameters from the symmetric reduction member.
+
+    An all-zero start would instead mean concentration = 1, the diffuse model.
+    For a *concentrated* component that is the worst available start, and since
+    it is exactly the concentrated components whose M-step fails, a zero retry
+    collapses them and drives EM downhill.
+    """
+    w = np.asarray(weights, dtype=float).ravel()
+    outs = []
+    for f in ref_cp.fits:
+        n = np.asarray(f.coef, dtype=float).size
+        coef = np.zeros(n)
+        fam = f.family
+        dist = getattr(fam, "dist", None)
+        roles = getattr(dist, "param_roles", None)
+        conc = getattr(dist, "_concentration_start", None)
+        lpi = getattr(f, "lpi", None)
+        links = getattr(fam, "links", None)
+        ok = (
+            roles is not None and conc is not None and lpi is not None
+            and links is not None
+            and sum(1 for p in fam.params if roles[p] == "location") == 1
+            and all(hasattr(lk, "link") for lk in links[: len(fam.params)])
+        )
+        if ok:
+            resp = _mix_factor_response(f.formula)
+            y = np.asarray(f.data[resp].to_numpy(), dtype=float)
+            if w.size == y.size and float(w.sum()) > 0:
+                sw = float(w.sum())
+                rbar = float(
+                    np.hypot(
+                        np.sum(w * np.sin(y)) / sw, np.sum(w * np.cos(y)) / sw
+                    )
+                )
+                vals = [
+                    0.0
+                    if roles[p] == "location"
+                    else (float(conc(rbar)) if roles[p] == "concentration" else 0.0)
+                    for p in fam.params
+                ]
+                for j, idx in enumerate(lpi):
+                    if j < len(vals) and len(idx):
+                        coef[int(idx[0])] = float(links[j].link(vals[j]))
+                if not np.all(np.isfinite(coef)):
+                    coef = np.zeros(n)
+        outs.append(coef)
+    return outs if isinstance(ref_cp, _MixProduct) else outs[0]
 
 
 def _mix_pooled_sp(formula, data, family, **gam_kwargs):
@@ -2590,6 +2756,10 @@ def _mix_objective(state: Dict[str, Any], lam: float) -> float:
 _MIX_INT_MAX = 2**31 - 1
 _MIX_PENALTIES = ("auto", "fixed", "scheduled")
 _MIX_MOVES = ("split", "merge", "death", "birth")
+# A component's degeneracy penalty (nats) above which the guard is called out in
+# repr(): one nat is roughly the log-likelihood a single parameter buys, so past
+# it the guard is shaping the reported fit rather than merely bounding it.
+_MIX_DEGEN_LOUD = 1.0
 
 
 @dataclass
@@ -2650,22 +2820,39 @@ class CircMixControl:
     min_size : int, default=5
         The soft-size floor n_k = Σ_i γ_ik below which a component is dropped by
         a death move, and the minimum members a component must have to be split.
-    degen_strength : float, default=1.0
-        Strength ``c`` of the size-aware degeneracy guard, in diffuse
-        pseudo-observations per component (``0`` turns the guard off, recovering
-        the unguarded EM). A finite mixture's likelihood is unbounded — a
-        component can raise it without limit by concentrating onto a
-        responsibility-weighted subset (its concentration κ → ∞, or a bounded
+    degen_strength : float, default=0.05
+        Strength ``c`` of the size-aware degeneracy guard (``0`` turns the guard
+        off, recovering the unguarded EM). A finite mixture's likelihood is
+        unbounded — a component can raise it without limit by concentrating onto
+        a responsibility-weighted subset (its concentration κ → ∞, or a bounded
         shape parameter driven to its singular boundary, where the Hessian blows
         up and the M-step crashes or grinds). The guard adds to each component's
         weighted M-step a MAP penalty pulling its concentration / shape toward
         the family's diffuse model with strength λ_k = c / N_k, where
-        N_k = Σ_i γ_ik is the effective component size: it is worth about ``c``
-        diffuse observations, so it **vanishes for a well-populated component**
-        and bites only as a component collapses onto a thin subset. It never
-        alters the per-observation density used by the E-step, so the reported
-        mixture log-likelihood and BIC stay on the data scale. Inert for the
-        linear-response legs.
+        N_k = Σ_i γ_ik is the effective component size.
+
+        **Read it as a soft cap on the concentration.** For a κ-type parameter
+        the M-step solves ``A₁(κ̂) = R̄ − c/N_k`` instead of ``A₁(κ̂) = R̄``, and
+        since ``A₁⁻¹(1 − x) ≈ 1/(2x)`` no component can exceed
+
+            κ_max ≈ N_k / (2c)
+
+        — at the default ``c = 0.05``, about ``10·N_k``, so a 12-observation
+        component is capped near κ ≈ 120 and an honestly tight cluster is left
+        alone, while a collapsing one is still bounded. The induced shrinkage is
+        ``Δκ ≈ 2κ²c/N_k``: **quadratic in κ**, so raising ``c`` biases exactly
+        the best-determined components hardest. ``c = 1`` caps at κ ≈ N_k/2,
+        which clips ordinary data — prefer the default and reach for a larger
+        ``c`` only against a specific, diagnosed collapse.
+
+        The guard is *not* a component-selection device: dropping spurious
+        components is the job of ``min_size``, the ``death`` move, and BIC.
+
+        It never alters the per-observation density used by the E-step, so the
+        reported mixture log-likelihood and BIC stay on the *unpenalised* data
+        scale — a guarded fit therefore looks like a slightly failed MLE. See
+        :attr:`CircMix.degen` for how hard the guard actually pulled. Inert for
+        the linear-response legs.
     time_budget : float, optional
         Per-restart wall-clock budget in seconds (``None`` turns it off). A
         backstop behind ``degen_strength``: an EM run exceeding it is aborted
@@ -2681,12 +2868,6 @@ class CircMixControl:
     assign : {"soft", "hard"}
         Set by :func:`circ_mix` from its own ``assign=`` argument; it rides the
         control so the EM core reads it without a further threaded argument.
-
-    Notes
-    -----
-    circlss additionally carries ``cores`` (forked parallel restarts via
-    ``mclapply``) and a deprecated ``kappa_cap``. Neither is ported: the restarts
-    run serially here, and ``kappa_cap`` is subsumed by ``degen_strength``.
     """
 
     lambda_: Optional[float] = None
@@ -2703,7 +2884,7 @@ class CircMixControl:
     tol: float = 1e-6
     max_iter: int = 200
     min_size: int = 5
-    degen_strength: float = 1.0
+    degen_strength: float = 0.05
     time_budget: Optional[float] = None
     wfloor: float = 1e-8
     seed: Optional[int] = None
@@ -2712,9 +2893,7 @@ class CircMixControl:
 
     def __post_init__(self):
         if self.init == "emEM":
-            raise ValueError(
-                'init="emEM" is not supported; use "kmeans" or "random".'
-            )
+            raise ValueError('init="emEM" is not supported; use "kmeans" or "random".')
         if self.init not in ("kmeans", "random"):
             raise ValueError('`init` should be one of "kmeans", "random".')
         if self.penalty not in _MIX_PENALTIES:
@@ -2913,16 +3092,10 @@ def _mix_em_core(
             except Exception as exc:  # retried below from a neutral start
                 components[k] = None
                 pending.append((k, wk, fam_k, exc))
-        # A component whose weighted M-step will not start is retried from a
-        # neutral link-scale start (all-zero coefficients: this component's own
-        # centred mean, unit scale — the diffuse model). Every component shares
-        # one design, so a sibling that DID fit gives the coefficient shape.
-        # Only the first iteration is really exposed: from iteration 2 the warm
-        # start is the previous coefficients. The retry is strictly additive —
-        # a fit that succeeds normally never sees it — and it matters because
-        # the fits that fail are the informative, well-separated ones (the
-        # kmeans-seeded restart), so losing them silently degrades the whole run
-        # to whatever the diffuse random restarts found.
+        # A component whose weighted M-step will not start is retried from its
+        # own weighted moments, laid out by a sibling that did fit. The failing
+        # fits are the CONCENTRATED components, so the retry start decides
+        # whether they survive: a diffuse one collapses them and EM descends.
         if pending:
             sib = next((cp for cp in components if cp is not None), None)
             if sib is None:
@@ -2930,9 +3103,8 @@ def _mix_em_core(
                     f"circ_mix: every component's M-step failed at iter {it} "
                     f"({pending[0][3]})."
                 ) from pending[0][3]
-            z0 = _mix_zero_start(sib)
             for k, wk, fam_k, _exc in pending:
-                components[k] = fit_k(k, wk, fam_k, z0)
+                components[k] = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk))
         start_k = [_cmp_coef(cp) for cp in components]
         if parametric is None:  # fixed across iterations
             parametric = not any(_mix_has_smooth(cp) for cp in components)
@@ -2993,15 +3165,9 @@ def _mix_em_core(
     #     tracks the effective component size N_k and so moves whenever the
     #     responsibilities do.
     # The M-step maximises the PENALISED objective, so while either penalty is
-    # live the reported (unpenalised) mixture log-likelihood may dip -- that is
-    # the guard working, not a defect, and is not flagged.
-    #
-    # circlss omits the second clause (`monotone_expected <- isTRUE(parametric)
-    # || identical(penalty, "fixed")`): its degeneracy guard landed after this
-    # predicate and was never folded in, so an R parametric mixture warns
-    # spuriously at the default degen_strength = 1. This implements the rule
-    # circlss states in its own comment -- "monotone is EXPECTED only when the
-    # penalty does not move" -- rather than the rule it wrote.
+    # live the reported (unpenalised) mixture log-likelihood may dip; that is
+    # expected and is not flagged. Both clauses are required: at any positive
+    # degen_strength the guard's penalty moves even for a parametric spec.
     penalty_moves = penalty in ("auto", "scheduled") and not parametric
     monotone_expected = not (penalty_moves or degen_moves)
     monotone = (not monotone_expected) or worst_drop <= 1e-6 * (abs(ll) + 1)
@@ -3021,7 +3187,17 @@ def _mix_em_core(
 
 
 def _mix_em_once(
-    formula, data, family, K, control, resp, init_method, grp, n_units, rng, **gam_kwargs
+    formula,
+    data,
+    family,
+    K,
+    control,
+    resp,
+    init_method,
+    grp,
+    n_units,
+    rng,
+    **gam_kwargs,
 ) -> Dict[str, Any]:
     """One EM run from a chosen init method."""
     feat = _mix_init_features(formula, data, family, grp, n_units)
@@ -3041,7 +3217,7 @@ def _mix_restarts(
     seeded from a stream drawn ONCE here, so the runs are independent and the
     result does not depend on the order they are executed in.
     """
-    seeds = rng.sample_int(_MIX_INT_MAX, R, False)
+    seeds = _mix_seeds(rng, R)
     fits: List[Optional[Dict[str, Any]]] = []
     lls = np.full(R, np.nan)
     for r in range(R):
@@ -3219,7 +3395,7 @@ def _mix_eval(g_new, move, cx, J_cur, **gam_kwargs) -> Optional[Dict[str, Any]]:
     # warm did not improve (or failed): verify with restarts at the new K
     Kp = g_new.shape[1]
     R = cx["control"].restarts
-    seeds = cx["rng"].sample_int(_MIX_INT_MAX, R, False)
+    seeds = _mix_seeds(cx["rng"], R)
     fits = [] if warm is None else [warm]
     for r in range(R):
         init_r = cx["control"].init if r == 0 else "random"
@@ -3514,17 +3690,24 @@ def _mix_logmix(obj: "CircMix", newdata) -> np.ndarray:
 def _mix_palette(K: int) -> List[str]:
     """A fixed, version-stable categorical palette (recycled past 10)."""
     base = [
-        "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
-        "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
+        "#1f77b4",
+        "#d62728",
+        "#2ca02c",
+        "#9467bd",
+        "#ff7f0e",
+        "#8c564b",
+        "#e377c2",
+        "#17becf",
+        "#bcbd22",
+        "#7f7f7f",
     ]
     return [base[k % len(base)] for k in range(K)]
 
 
 def _mix_band_circular(ax, grid, mid, csd, color, view=(0.0, 2.0 * np.pi)):
     """The ± circular-SD band of a component's location, tiled across the 0/2π
-    cut — the per-component colour counterpart of ``regression._band_fill_circular``
-    (which is fixed to one series colour), built on the same unwrap/tile
-    primitives so the two read identically."""
+    cut, in a per-component colour. Built on the same unwrap/tile primitives as
+    ``regression._band_fill_circular``, which is fixed to one series colour."""
     grid = np.asarray(grid, dtype=float)
     csd = np.broadcast_to(np.asarray(csd, dtype=float), np.asarray(mid).shape)
     for idx, phase in _unwrap_runs(mid):
@@ -3586,9 +3769,8 @@ def _mix_deparse(formula) -> str:
 class CircMix:
     """A fitted finite mixture of circular distributional GAMs.
 
-    Returned by :func:`circ_mix`; see that function for the model. Attribute
-    names follow the circlss ``circ_mix`` object, with this package's trailing
-    underscore on the fitted per-observation arrays.
+    Returned by :func:`circ_mix`; see that function for the model. Fitted
+    per-observation arrays carry a trailing underscore.
 
     Attributes
     ----------
@@ -3625,6 +3807,15 @@ class CircMix:
     move_trace : polars.DataFrame or None
         ``None`` for ``search="fixed"``; the accepted moves for ``"greedy"``;
         the K sweep for ``"grid"``.
+    degen : dict or None
+        The degeneracy guard at the fitted optimum, or ``None`` when it is off
+        (``control.degen_strength = 0``) or the family declares no guarded
+        parameter. ``penalty`` is the log-likelihood each component traded away
+        to the guard, in nats, and ``by_param`` splits it by guarded parameter;
+        ``lambda_`` is the per-component strength λ_k = c/N_k. Because
+        ``loglik`` and ``bic`` are reported *without* the penalty, a component
+        with a large ``penalty`` is not a failed fit — it is a deliberately
+        shrunk one, and lowering ``degen_strength`` will move it.
     geometry : str
         The leg — ``"cl"``, ``"cc"``, ``"lc"``, ``"ll"`` or ``"joint"``.
     """
@@ -3664,9 +3855,7 @@ class CircMix:
             For ``type="density"``, return the log-density.
         """
         if type not in ("cluster", "density", "response"):
-            raise ValueError(
-                '`type` must be one of "cluster", "density", "response".'
-            )
+            raise ValueError('`type` must be one of "cluster", "density", "response".')
         # the ORIGINAL training frame, not a component's fit frame: components
         # may each carry a different centring rotation, and _circ_logpdf applies
         # each one itself.
@@ -3707,8 +3896,7 @@ class CircMix:
         )
         fam_name = getattr(self.family, "name", None) or type(self.family).__name__
         out = [
-            f"Finite mixture of circular GAMs (circ_mix) -- "
-            f"{_mix_leg(self.geometry)}",
+            f"Finite mixture of circular GAMs (circ_mix) -- {_mix_leg(self.geometry)}",
             f"  family {fam_name} | K = {self.K} component"
             f"{'s' if self.K > 1 else ''} | {units}"
             f"{' | hard (CEM)' if hard else ''}",
@@ -3724,8 +3912,7 @@ class CircMix:
             )
         if self.Gtilde < self.K:
             out.append(
-                f"  {self.K - self.Gtilde} of {self.K} components are empty "
-                "under MAP."
+                f"  {self.K - self.Gtilde} of {self.K} components are empty under MAP."
             )
         # auto-K provenance: how the component count was decided
         if self.search == "greedy":
@@ -3755,8 +3942,18 @@ class CircMix:
             )
         out.append(tail + ".")
         if self.K > 1 and not self.monotone:
+            out.append("  note: a non-monotone EM step was seen -- inspect .ll_path.")
+        # logLik/BIC above are UNPENALISED, so a component the guard shrank looks
+        # like a failed fit unless the guard says otherwise.
+        dg = getattr(self, "degen", None)
+        if dg is not None and np.any(dg["binding"]):
+            which = np.flatnonzero(dg["binding"])
+            hit = ", ".join(f"{k + 1} ({dg['penalty'][k]:.1f} nats)" for k in which)
+            plural = "s" if which.size > 1 else ""
             out.append(
-                "  note: a non-monotone EM step was seen -- inspect .ll_path."
+                f"  note: the degeneracy guard (degen_strength = "
+                f"{dg['strength']:g}) is shrinking component{plural} {hit}; "
+                "logLik/BIC are reported unpenalised -- see .degen."
             )
         return "\n".join(out)
 
@@ -3870,10 +4067,12 @@ class CircMix:
                     continue
                 ax.scatter(
                     yw[m],
-                    np.full(int(m.sum()), k) + 0.14 * np.random.default_rng(k).uniform(
-                        -1, 1, int(m.sum())
-                    ),
-                    s=12, color=cols[k], alpha=0.65, linewidths=0,
+                    np.full(int(m.sum()), k)
+                    + 0.14 * np.random.default_rng(k).uniform(-1, 1, int(m.sum())),
+                    s=12,
+                    color=cols[k],
+                    alpha=0.65,
+                    linewidths=0,
                 )
             if resp_circ:
                 nd = self.data.head(1)
@@ -3956,9 +4155,7 @@ class CircMix:
         conditional on y."""
         resps = _mix_responses(self.formula)  # (conditional, parent) order
         circ = _mix_resp_circular(self.family)
-        vals = [
-            np.asarray(self.data[r].to_numpy(), dtype=float) for r in resps[:2]
-        ]
+        vals = [np.asarray(self.data[r].to_numpy(), dtype=float) for r in resps[:2]]
 
         def w(v):
             return _to_02pi(v) if circ else v
@@ -3967,24 +4164,40 @@ class CircMix:
             m = z == k
             if m.any():
                 ax.scatter(
-                    w(vals[1])[m], w(vals[0])[m],
-                    s=12, color=cols[k], alpha=0.6, linewidths=0,
+                    w(vals[1])[m],
+                    w(vals[0])[m],
+                    s=12,
+                    color=cols[k],
+                    alpha=0.6,
+                    linewidths=0,
                 )
         for k in range(self.K):
             wk = self.gamma_[:, k]
             if circ:
-                cx = float(np.arctan2(np.sum(wk * np.sin(vals[1])),
-                                      np.sum(wk * np.cos(vals[1]))))
-                cy = float(np.arctan2(np.sum(wk * np.sin(vals[0])),
-                                      np.sum(wk * np.cos(vals[0]))))
+                cx = float(
+                    np.arctan2(
+                        np.sum(wk * np.sin(vals[1])), np.sum(wk * np.cos(vals[1]))
+                    )
+                )
+                cy = float(
+                    np.arctan2(
+                        np.sum(wk * np.sin(vals[0])), np.sum(wk * np.cos(vals[0]))
+                    )
+                )
             else:
                 sw = float(wk.sum())
-                cx, cy = float(np.sum(wk * vals[1]) / sw), float(
-                    np.sum(wk * vals[0]) / sw
+                cx, cy = (
+                    float(np.sum(wk * vals[1]) / sw),
+                    float(np.sum(wk * vals[0]) / sw),
                 )
             ax.scatter(
-                w(cx), w(cy), s=140, facecolor=cols[k], edgecolor="black",
-                linewidths=2, zorder=5,
+                w(cx),
+                w(cy),
+                s=140,
+                facecolor=cols[k],
+                edgecolor="black",
+                linewidths=2,
+                zorder=5,
             )
         ax.set_xlabel(resps[1])
         ax.set_ylabel(resps[0])
@@ -4017,8 +4230,6 @@ def circ_mix(
     only through that small interface, one engine spans density clustering, the
     circular–linear / circular–circular / linear–circular regression trio, and
     everything in between — the response geometry is set entirely by ``family``.
-
-    The circlss ``circ_mix`` twin.
 
     Parameters
     ----------
@@ -4117,10 +4328,6 @@ def circ_mix(
     broadcasts that responsibility back to the subject's rows, and the BIC
     counts n = the number of subjects.
 
-    **Serial restarts.** circlss can fork its restarts across ``cores``;
-    pycircstat2 runs them serially (results are identical, only slower — and
-    circlss already forces serial for penalised smooths, whose large BLAS calls
-    are not fork-safe on every build).
 
     See Also
     --------
@@ -4212,7 +4419,7 @@ def circ_mix(
             )
             ctl.penalty = "auto"
 
-    rng = RMersenneTwister(ctl.seed)
+    rng = _mix_rng(ctl.seed)
     lam = float(np.log(n_units)) if ctl.lambda_ is None else float(ctl.lambda_)
     args = (formula, data, fam, K, ctl, resp, grp, n_units, lam, rng)
     if search == "fixed":
@@ -4284,5 +4491,6 @@ def circ_mix(
         },
         move_trace=res["trace"],
         geometry=geometry,
+        degen=_mix_degen_report(best["components"], best["gamma"], grp, ctl),
         control=ctl,
     )
