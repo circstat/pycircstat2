@@ -2450,6 +2450,24 @@ def _cmp_sp(cp: _MixComponent):
     return np.asarray(cp.fit.sp, dtype=float).ravel()
 
 
+def _cmp_converged(cp: _MixComponent) -> bool:
+    """Did every factor's weighted fit converge? The engine sets ``converged``
+    exactly when it did not have to warn about the final step, so this is the
+    same signal the user sees on stderr — and the one an EM M-step must act on,
+    since a stalled fit returns its start unchanged."""
+    return all(bool(getattr(f, "converged", True)) for f in cp.fits)
+
+
+def _mix_wll(cp: _MixComponent, data, weights) -> float:
+    """A component's weighted log-likelihood Σᵢ wᵢ log f_k(yᵢ | xᵢ) — the
+    quantity its M-step maximises, for ranking two candidate fits of the same
+    component. Unpenalised: the degeneracy guard shifts both candidates the same
+    way, and this only ever separates a converged fit from a stalled one."""
+    w = np.asarray(weights, dtype=float).ravel()
+    ll = float(np.sum(w * _cmp_logpdf(cp, data)))
+    return ll if np.isfinite(ll) else -np.inf
+
+
 def _mix_has_smooth(cp: _MixComponent) -> bool:
     """Does a component carry any penalised smooth (a product is "smooth" if ANY
     factor is)? Drives the EM's monotonicity expectation — parametric /
@@ -3073,7 +3091,7 @@ def _mix_em_core(
                     sp_k[k] = spk
             return cp
 
-        pending = []
+        pending, stalled = [], []
         for k in range(K):
             wk = np.maximum(g[grp, k], control.wfloor)
             fam_k = family
@@ -3088,15 +3106,19 @@ def _mix_em_core(
                 fam_k = copy.copy(family)
                 fam_k.map_lambda = (cc / Nk) if Nk > 0 else None
             try:
-                components[k] = fit_k(k, wk, fam_k, start_k[k])
+                cp = fit_k(k, wk, fam_k, start_k[k])
             except Exception as exc:  # retried below from a neutral start
                 components[k] = None
                 pending.append((k, wk, fam_k, exc))
+                continue
+            components[k] = cp
+            if not _cmp_converged(cp):
+                stalled.append((k, wk, fam_k))
         # A component whose weighted M-step will not start is retried from its
         # own weighted moments, laid out by a sibling that did fit. The failing
         # fits are the CONCENTRATED components, so the retry start decides
         # whether they survive: a diffuse one collapses them and EM descends.
-        if pending:
+        if pending or stalled:
             sib = next((cp for cp in components if cp is not None), None)
             if sib is None:
                 raise RuntimeError(
@@ -3105,6 +3127,23 @@ def _mix_em_core(
                 ) from pending[0][3]
             for k, wk, fam_k, _exc in pending:
                 components[k] = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk))
+            # A step the engine reports as NOT converged is a different failure
+            # from a throw and needs the same escape. It is usually the warm
+            # start itself: a stalled fit returns its start unchanged, that dead
+            # point becomes the next iteration's start, and the component is
+            # pinned there for the rest of the run — silently, except for one
+            # engine warning per iteration. Retrying from the component's own
+            # weighted moments breaks the loop; the retry is kept only if it
+            # converged or scores better, so this can never lose ground.
+            for k, wk, fam_k in stalled:
+                try:
+                    alt = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk))
+                except Exception:
+                    continue
+                if _cmp_converged(alt) or _mix_wll(alt, data, wk) > _mix_wll(
+                    components[k], data, wk
+                ):
+                    components[k] = alt
         start_k = [_cmp_coef(cp) for cp in components]
         if parametric is None:  # fixed across iterations
             parametric = not any(_mix_has_smooth(cp) for cp in components)

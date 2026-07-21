@@ -10,6 +10,7 @@ from pycircstat2.clustering import (
     MovM,
     _circ_logpdf,
     _cmp_coef,
+    _cmp_converged,
     _cmp_edf,
     _cmp_sp,
     _mix_classify,
@@ -534,10 +535,11 @@ def test_circ_mix_rowsum_collapses_rows_to_units():
 class _FakeFit:
     """The fields the _cmp_* accessors read."""
 
-    def __init__(self, coef, edf, sp=()):
+    def __init__(self, coef, edf, sp=(), converged=True):
         self.coef = np.asarray(coef, dtype=float)
         self.edf = np.asarray(edf, dtype=float)
         self.sp = np.asarray(sp, dtype=float)
+        self.converged = converged
 
 
 def test_circ_mix_component_accessors():
@@ -547,6 +549,26 @@ def test_circ_mix_component_accessors():
     np.testing.assert_allclose(_cmp_sp(cp), [2.5])
     assert _mix_has_smooth(cp)  # a non-empty sp IS the smooth predicate
     assert not _mix_has_smooth(_MixComponent(_FakeFit([0.0], [1.0])))
+
+
+def test_circ_mix_component_convergence_is_product_aware():
+    """`_cmp_converged` is the M-step's retry trigger, so it must see every
+    factor: a product component is converged only if all of its fits are.
+
+    A fit that did not converge returns its start unchanged, which would then
+    become the next EM iteration's warm start and pin the component there for
+    the rest of the run -- hence the retry.
+    """
+    assert _cmp_converged(_MixComponent(_FakeFit([0.5], [1.0])))
+    assert not _cmp_converged(_MixComponent(_FakeFit([0.5], [1.0], converged=False)))
+    ok = _FakeFit([0.1], [1.0])
+    bad = _FakeFit([0.2], [1.0], converged=False)
+    assert _cmp_converged(_MixProduct([ok, ok], ["a", "b"]))
+    assert not _cmp_converged(_MixProduct([ok, bad], ["a", "b"]))
+    # a fit that does not carry the flag at all is taken at face value
+    plain = _MixComponent(_FakeFit([0.3], [1.0]))
+    del plain.fit.converged
+    assert _cmp_converged(plain)
 
 
 def test_circ_mix_product_component_accessors():
