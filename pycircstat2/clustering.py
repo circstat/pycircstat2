@@ -2450,22 +2450,48 @@ def _cmp_sp(cp: _MixComponent):
     return np.asarray(cp.fit.sp, dtype=float).ravel()
 
 
-def _cmp_converged(cp: _MixComponent) -> bool:
-    """Did every factor's weighted fit converge? The engine sets ``converged``
-    exactly when it did not have to warn about the final step, so this is the
-    same signal the user sees on stderr — and the one an EM M-step must act on,
-    since a stalled fit returns its start unchanged."""
-    return all(bool(getattr(f, "converged", True)) for f in cp.fits)
+def _fit_obj_at(fit, coefs, w, lam=None) -> np.ndarray:
+    """One fit's weighted M-step OBJECTIVE at arbitrary coefficient vectors,
+    scored on its own design: Σᵢ wᵢ log f(yᵢ) minus the degeneracy guard's
+    penalty at ``lam``. Lets candidate starts be priced without paying for a
+    fit; the candidates share one ``lpmatrix`` build, which is the whole cost.
+
+    The guard term is not optional book-keeping. The M-step maximises the
+    PENALISED objective, so on the unpenalised scale a *different* point
+    routinely outscores the fit by a few thousandths of a nat — measured at the
+    default guard strength, an unpenalised comparison called the fit a failure
+    on 50% of M-steps against 1.6% with the guard off.
+    """
+    fam = fit.family
+    data = _to_polars(fit.data)
+    y = np.asarray(data[_mix_factor_response(fit.formula)].to_numpy(), dtype=float)
+    X = fit.predict(data, type="lpmatrix")
+    jj = [np.asarray(ix, dtype=int) for ix in fit.lpi]
+    w = np.asarray(w, dtype=float).ravel()
+    kernels = (getattr(fam, "degen", ()) or ()) if lam else ()
+    out = np.empty(len(coefs))
+    for i, coef in enumerate(coefs):
+        params = fam._param_values(
+            fam._etas(X, np.asarray(coef, dtype=float).ravel(), jj, None)
+        )
+        obj = float(np.sum(w * np.asarray(fam._loglik_values(y, params)).ravel()))
+        for kern in kernels:
+            v = np.broadcast_to(np.asarray(params[kern.param], dtype=float), w.shape)
+            obj -= float(lam) * float(np.sum(w * kern.rho0(v)))
+        out[i] = obj if np.isfinite(obj) else -np.inf
+    return out
 
 
-def _mix_wll(cp: _MixComponent, data, weights) -> float:
-    """A component's weighted log-likelihood Σᵢ wᵢ log f_k(yᵢ | xᵢ) — the
-    quantity its M-step maximises, for ranking two candidate fits of the same
-    component. Unpenalised: the degeneracy guard shifts both candidates the same
-    way, and this only ever separates a converged fit from a stalled one."""
-    w = np.asarray(weights, dtype=float).ravel()
-    ll = float(np.sum(w * _cmp_logpdf(cp, data)))
-    return ll if np.isfinite(ll) else -np.inf
+def _cmp_obj_at(cp: _MixComponent, coefs, w, lam=None) -> np.ndarray:
+    """A component's weighted M-step objective at each of several candidate
+    coefficient sets, summed over a product component's chain-rule factors. Each
+    candidate carries the layout :func:`_cmp_coef` and :func:`_mix_moment_start`
+    produce."""
+    prod = isinstance(cp, _MixProduct)
+    total = np.zeros(len(coefs))
+    for j, f in enumerate(cp.fits):
+        total += _fit_obj_at(f, [c[j] if prod else c for c in coefs], w, lam)
+    return total
 
 
 def _mix_has_smooth(cp: _MixComponent) -> bool:
@@ -3112,8 +3138,32 @@ def _mix_em_core(
                 pending.append((k, wk, fam_k, exc))
                 continue
             components[k] = cp
-            if not _cmp_converged(cp):
-                stalled.append((k, wk, fam_k))
+            # Sanity-check the M-step against the component's own weighted
+            # moments -- a closed-form estimate the maximiser must beat. A fit
+            # that scores WORSE than that start did not maximise anything, and
+            # the engine does not always say so: warm-started below the diffuse
+            # concentration it can return the diffuse model exactly, reporting
+            # convergence and issuing no warning. Pricing the start costs one
+            # ll(deriv=0), no fit; the refit below runs only when it is beaten.
+            # Two independent tells that the M-step did not maximise anything,
+            # each catching failures the other misses:
+            #   * the engine reports it did not converge -- a stalled fit hands
+            #     back its own start, and that dead point would become the next
+            #     iteration's warm start, pinning the component for the run;
+            #   * it scores below the component's own weighted moments, a
+            #     closed-form estimate any maximiser must beat. The engine does
+            #     NOT always report this one: warm-started below the diffuse
+            #     concentration it can return the diffuse model exactly, claim
+            #     convergence, and issue no warning.
+            # Pricing the moments costs one ll(deriv=0); the refit runs only on
+            # a tell, and is kept only if it scores better.
+            ms = _mix_moment_start(cp, wk)
+            lam_k = getattr(fam_k, "map_lambda", None)
+            at_moments, at_fit = _cmp_obj_at(cp, [ms, _cmp_coef(cp)], wk, lam_k)
+            if at_moments > at_fit or not all(
+                bool(getattr(f, "converged", True)) for f in cp.fits
+            ):
+                stalled.append((k, wk, fam_k, ms, lam_k))
         # A component whose weighted M-step will not start is retried from its
         # own weighted moments, laid out by a sibling that did fit. The failing
         # fits are the CONCENTRATED components, so the retry start decides
@@ -3127,21 +3177,20 @@ def _mix_em_core(
                 ) from pending[0][3]
             for k, wk, fam_k, _exc in pending:
                 components[k] = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk))
-            # A step the engine reports as NOT converged is a different failure
-            # from a throw and needs the same escape. It is usually the warm
-            # start itself: a stalled fit returns its start unchanged, that dead
-            # point becomes the next iteration's start, and the component is
-            # pinned there for the rest of the run — silently, except for one
-            # engine warning per iteration. Retrying from the component's own
-            # weighted moments breaks the loop; the retry is kept only if it
-            # converged or scores better, so this can never lose ground.
-            for k, wk, fam_k in stalled:
+            # A fit the moments beat is refitted FROM those moments. Left alone
+            # it would also poison the next iteration, whose warm start is this
+            # coefficient vector — that is how one bad step pins a component for
+            # a whole run. The refit is kept only if it scores better, so the
+            # check can never lose ground.
+            for k, wk, fam_k, ms, lam_k in stalled:
                 try:
-                    alt = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk))
+                    alt = fit_k(k, wk, fam_k, ms)
                 except Exception:
                     continue
-                if _cmp_converged(alt) or _mix_wll(alt, data, wk) > _mix_wll(
-                    components[k], data, wk
+                keep = components[k]
+                if (
+                    _cmp_obj_at(alt, [_cmp_coef(alt)], wk, lam_k)[0]
+                    > _cmp_obj_at(keep, [_cmp_coef(keep)], wk, lam_k)[0]
                 ):
                     components[k] = alt
         start_k = [_cmp_coef(cp) for cp in components]

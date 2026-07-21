@@ -10,8 +10,8 @@ from pycircstat2.clustering import (
     MovM,
     _circ_logpdf,
     _cmp_coef,
-    _cmp_converged,
     _cmp_edf,
+    _cmp_obj_at,
     _cmp_sp,
     _mix_classify,
     _mix_control,
@@ -535,11 +535,10 @@ def test_circ_mix_rowsum_collapses_rows_to_units():
 class _FakeFit:
     """The fields the _cmp_* accessors read."""
 
-    def __init__(self, coef, edf, sp=(), converged=True):
+    def __init__(self, coef, edf, sp=()):
         self.coef = np.asarray(coef, dtype=float)
         self.edf = np.asarray(edf, dtype=float)
         self.sp = np.asarray(sp, dtype=float)
-        self.converged = converged
 
 
 def test_circ_mix_component_accessors():
@@ -551,24 +550,39 @@ def test_circ_mix_component_accessors():
     assert not _mix_has_smooth(_MixComponent(_FakeFit([0.0], [1.0])))
 
 
-def test_circ_mix_component_convergence_is_product_aware():
-    """`_cmp_converged` is the M-step's retry trigger, so it must see every
-    factor: a product component is converged only if all of its fits are.
+def test_circ_mix_scores_candidate_coefficients_without_refitting():
+    """`_cmp_obj_at` prices coefficient vectors on a fitted component's own
+    design -- the M-step's guard against a fit that did not maximise anything.
 
-    A fit that did not converge returns its start unchanged, which would then
-    become the next EM iteration's warm start and pin the component there for
-    the rest of the run -- hence the retry.
+    It must agree with the fitted log-likelihood at the fitted coefficients,
+    rank a worse vector below them, sum over a product's factors, and carry the
+    degeneracy penalty: the M-step maximises the PENALISED objective, so an
+    unpenalised comparison would call an ordinary fit a failure.
     """
-    assert _cmp_converged(_MixComponent(_FakeFit([0.5], [1.0])))
-    assert not _cmp_converged(_MixComponent(_FakeFit([0.5], [1.0], converged=False)))
-    ok = _FakeFit([0.1], [1.0])
-    bad = _FakeFit([0.2], [1.0], converged=False)
-    assert _cmp_converged(_MixProduct([ok, ok], ["a", "b"]))
-    assert not _cmp_converged(_MixProduct([ok, bad], ["a", "b"]))
-    # a fit that does not carry the flag at all is taken at face value
-    plain = _MixComponent(_FakeFit([0.3], [1.0]))
-    del plain.fit.converged
-    assert _cmp_converged(plain)
+    rng = np.random.default_rng(3)
+    n = 120
+    y = np.mod(rng.vonmises(1.0, 4.0, n), 2 * np.pi)
+    df = pl.DataFrame({"y": y})
+    w = np.full(n, 0.75)
+    fit = circ_gam("y ~ 1", df, family="vmlss", weights=w)
+    cp = _MixComponent(fit)
+    beta = np.asarray(fit.coef, dtype=float).ravel()
+
+    at_fit = _cmp_obj_at(cp, [beta], w)[0]
+    # same quantity the E-step reads, weighted -- the two seams must agree
+    assert at_fit == pytest.approx(float(np.sum(w * _circ_logpdf(fit))), rel=1e-10)
+    # the fit maximises it: perturbing either coefficient scores lower
+    worse = _cmp_obj_at(cp, [beta + [0.0, 0.5], beta + [0.3, 0.0]], w)
+    assert worse.shape == (2,)
+    assert (worse < at_fit).all()
+    # a product component sums its chain-rule factors
+    prod = _MixProduct([fit, fit], ["y", "y"])
+    assert _cmp_obj_at(prod, [[beta, beta]], w)[0] == pytest.approx(2.0 * at_fit)
+    # lam subtracts the guard's penalty -- exactly c*kappa for the linear kernel
+    lam = 0.5 / float(w.sum())
+    kappa = float(np.exp(beta[1]))
+    penalised = _cmp_obj_at(cp, [beta], w, lam)[0]
+    assert penalised == pytest.approx(at_fit - 0.5 * kappa, rel=1e-9)
 
 
 def test_circ_mix_product_component_accessors():
@@ -796,7 +810,7 @@ def test_circ_mix_matches_the_published_turtle_mle():
 
     # ... and cranking it up is what breaks the fit, not the data
     hard = circ_mix("theta ~ 1", df, K=2,
-                    control={"seed": 1, "degen_strength": 1.0})
+                    control={"seed": 1, "degen_strength": 1.0, "restarts": 2})
     assert max(float(np.exp(np.atleast_1d(cp.fit.coef)[1])) for cp in hard.components) < 4.0
     assert hard.degen["binding"].all()
     assert "degeneracy guard" in repr(hard)
