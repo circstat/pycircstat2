@@ -1346,6 +1346,84 @@ def test_vonmises_random_state_reproducibility():
     np.testing.assert_allclose(seq_e, seq_f)
 
 
+class _LongDefaultRandomState(np.random.RandomState):
+    """``RandomState`` whose ``randint`` defaults to int32, as on Windows.
+
+    ``np.dtype(int)`` is a 32-bit C long there, so any ``randint(0, 2**32)``
+    call that relies on the default dtype raises "high is out of bounds".
+    """
+
+    def randint(self, low, high=None, size=None, dtype=int):
+        if dtype is int:
+            dtype = np.int32
+        return super().randint(low, high, size, dtype=dtype)
+
+
+RVS_PARAMS = [
+    (circularuniform, {}),
+    (triangular, {"rho": 0.2}),
+    (cardioid, {"mu": 1.0, "rho": 0.3}),
+    (cartwright, {"mu": 0.3, "zeta": 1.5}),
+    (wrapnorm, {"mu": 0.8, "rho": 0.4}),
+    (wrapcauchy, {"mu": 1.1, "rho": 0.7}),
+    (vonmises, {"mu": 0.0, "kappa": 1.0}),
+    (vonmises_flattopped, {"mu": 0.5, "kappa": 2.0, "nu": 0.2}),
+    (jonespewsey, {"mu": 0.5, "kappa": 2.0, "psi": 0.5}),
+    (jonespewsey_sineskewed, {"xi": 0.5, "kappa": 2.0, "psi": 0.5, "lmbd": 0.3}),
+    (jonespewsey_asym, {"xi": 0.5, "kappa": 2.0, "psi": 0.5, "nu": 0.3}),
+    (inverse_batschelet, {"xi": 0.9, "kappa": 2.2, "nu": -0.35, "lmbd": 0.4}),
+    (wrapstable, {"delta": 0.0, "alpha": 1.5, "beta": 0.0, "gamma": 1.0}),
+    (katojones, {"mu": 0.0, "gamma": 0.5, "rho": 0.3, "lam": 0.2}),
+]
+
+
+@pytest.mark.parametrize("dist, params", RVS_PARAMS)
+def test_rvs_default_random_state_on_32bit_long(dist, params, monkeypatch):
+    """Default ``random_state=None`` must not seed through a platform-sized int.
+
+    Regression test for issue #22: SciPy caches NumPy's global ``RandomState``
+    on every distribution, and drawing a 32-bit seed from it failed on Windows.
+    """
+    monkeypatch.setattr(dist, "_random_state", _LongDefaultRandomState(0), raising=False)
+
+    samples = dist.rvs(size=5, random_state=None, **params)
+
+    assert samples.shape == (5,)
+    assert np.all(np.isfinite(samples))
+
+
+def test_rvs_default_random_state_on_32bit_long_projectednormal(monkeypatch):
+    from pycircstat2.distributions import projectednormal as _pn
+
+    monkeypatch.setattr(_pn, "_random_state", _LongDefaultRandomState(0), raising=False)
+
+    samples = _pn.rvs(mu1=1.0, mu2=1.0, size=5, random_state=None)
+
+    assert samples.shape == (5,)
+    assert np.all(np.isfinite(samples))
+
+
+def test_rvs_default_random_state_follows_global_seed(monkeypatch):
+    """``random_state=None`` must keep deferring to the distribution's own state.
+
+    Caching a fresh ``Generator`` on the (module-level, shared) distribution
+    would silently detach it from ``np.random.seed`` after the first call.
+    """
+    params = {"mu": 1.05, "kappa": 2.5}
+    rs = np.random.RandomState(2046)
+    monkeypatch.setattr(vonmises, "_random_state", rs)
+
+    seq_a = vonmises.rvs(size=6, random_state=None, **params)
+    rs.seed(2046)
+    seq_b = vonmises.rvs(size=6, random_state=None, **params)
+    np.testing.assert_allclose(seq_a, seq_b)
+
+    seq_c = vonmises.rvs(size=6, random_state=None, **params)
+    assert not np.allclose(seq_b, seq_c)
+
+    assert vonmises._random_state is rs
+
+
 @pytest.mark.parametrize(
     "dist, params",
     [
@@ -1506,7 +1584,7 @@ def test_inverse_batschelet_warps_match_brentq():
     original per-point `brentq` inversion to ~machine precision, including the
     ν→±1 / λ→±1 near-boundary regime where the warp slope → 0. This pins the
     performance rewrite to the algorithm it replaced (≈10⁵ scalar root-finds
-    per `fit`); see dev/plans/vectorize-distributions-and-ibslss.md §A1."""
+    per `fit`)."""
     from scipy.optimize import root_scalar
 
     from pycircstat2.distributions import _slmbdinv, _tnu
@@ -1547,8 +1625,7 @@ def test_inverse_batschelet_log_c_array_matches_scalar():
     tested scalar `_c_invbatschelet` to machine precision on the full value
     grid, across the interior (κ>0, |λ|<1) the log/tanh links guarantee — and
     fall back to the scalar at the κ≈0 / |λ|≈1 edges. This pins the per-pair
-    Python loop the vectorization replaced (the κ(x)/λ(x) fit hotspot); see
-    dev/plans/vectorize-distributions-and-ibslss.md."""
+    Python loop the vectorization replaced (the κ(x)/λ(x) fit hotspot)."""
     from pycircstat2.distributions import (
         _INVBAT_NUMERIC_GRID,
         _c_invbatschelet,
@@ -1595,7 +1672,7 @@ def test_inverse_batschelet_dlogpdf_matches_finite_difference(params):
     """l1: the regression-overlay score (`ibslss`) vs central differences of
     `logpdf`, w.r.t. each parameter. The ξ/ν entries are fully analytic
     (implicit differentiation of the two warps); κ/λ carry the FD'd normalizer
-    gradient (dev/plans/vectorize-distributions-and-ibslss.md §5.2)."""
+    gradient."""
     rng = np.random.default_rng(0)
     x = np.sort(rng.uniform(0.0, 2.0 * np.pi, 12))
     ana = inverse_batschelet.dlogpdf(x, **params)

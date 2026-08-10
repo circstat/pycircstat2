@@ -1374,7 +1374,8 @@ class CircularContinuous(rv_continuous):
         Normalize the ``random_state`` argument to a NumPy ``Generator``.
 
         Accepts integers, ``RandomState`` instances, ``Generator`` objects, or
-        ``None`` (in which case the distribution's cached generator is used).
+        ``None`` (in which case the distribution's own ``random_state`` is used,
+        which SciPy defaults to NumPy's global ``RandomState``).
         """
         candidate = random_state if random_state is not None else getattr(self, "_random_state", None)
 
@@ -1382,11 +1383,13 @@ class CircularContinuous(rv_continuous):
             return candidate
 
         if isinstance(candidate, np.random.RandomState):
-            seed = candidate.randint(0, 2**32)
-            generator = np.random.default_rng(seed)
-            if random_state is None:
-                self._random_state = generator
-            return generator
+            # ``dtype`` must be given explicitly: ``randint`` otherwise defaults
+            # to the platform's C long, which is 32-bit on Windows and rejects
+            # ``high=2**32``. Drawing here also advances ``candidate``, so
+            # successive calls get fresh streams while ``np.random.seed`` still
+            # controls them.
+            seed = int(candidate.randint(0, 2**32, dtype=np.uint32))
+            return np.random.default_rng(seed)
 
         if candidate is None:
             generator = np.random.default_rng()

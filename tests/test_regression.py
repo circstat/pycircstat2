@@ -73,8 +73,7 @@ def test_ibslss_intercept_only_matches_marginal_mle():
     intercept-only the mgcv-inside-link and the marginal parameterizations
     coincide. This pins the whole bridge at once: ll, dlogpdf, the FD-grade
     d2logpdf Hessian, the closed-form null start, the EFS optimizer, and the
-    per-observation normalizer (dev/plans/vectorize-distributions-and-ibslss.md
-    §7)."""
+    per-observation normalizer."""
     from pycircstat2.distributions import ibslss, inverse_batschelet
     from pycircstat2.regression import circ_gam
 
@@ -139,7 +138,7 @@ def test_ibslss_recovers_covariate_concentration():
     scalar path). Simulate κ(x)=exp(0.7+0.9 sin x) (binned scalar draws), fit a
     concentration smooth, and confirm the recovered log-κ tracks the truth.
     This is the permanent guard on the vectorized normalizer that the κ(x)/λ(x)
-    perf rewrite enabled (dev/plans/vectorize-distributions-and-ibslss.md)."""
+    perf rewrite enabled."""
     from pycircstat2.distributions import ibslss, inverse_batschelet
     from pycircstat2.regression import circ_gam
 
@@ -583,7 +582,7 @@ def test_circ_gam_closed_form_null_start_avoids_indefinite_hessian():
     ``gam.fit5``'s penalized Hessian indefinite ("indefinite penalized
     likelihood"); the neutral shape=0 start stays in the well-conditioned
     basin. kjlss is the same failure mode via the disc-chart blow-up
-    |u| -> ~1e4 (now bounded at 8). See dev/plans/pycircstat2-divergences.md.
+    |u| -> ~1e4 (now bounded at 8).
     """
     from pycircstat2 import distributions as D
 
@@ -721,7 +720,7 @@ def test_circ_gam_cyclic_summary_general_family(capsys):
     0 → hea's reTest/_recov path) under a general family. Crashed with
     AttributeError('_fisher_w') before hea@97a244b; fixed by consuming the
     stored gam.fit5.post.proc R factor (R'R = −lbb, mgcv's object$R) in
-    _recov — see hea/.claude/plans/fit5-recov-summary-fix.md."""
+    _recov."""
     rng = np.random.default_rng(8)
     n = 150
     phi = rng.uniform(0, 2 * np.pi, n)
