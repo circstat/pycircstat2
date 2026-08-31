@@ -17,6 +17,7 @@ from .descriptive import circ_dist, circ_kappa, circ_mean_and_r
 from .distributions import CircularContinuous, CircularLL, katojones, vmlss, vonmises
 from .regression import (
     _SMOOTH_RE,
+    _center_ref,
     _circ_sd_quad,
     _lines_circular,
     _resolve_gam_family,
@@ -2641,21 +2642,57 @@ def _mix_fit_component(
     return _MixProduct(fits, names)
 
 
-def _mix_moment_start(ref_cp: _MixComponent, weights):
+def _mix_tally_fit(health, fn, *args, **kwargs) -> _MixComponent:
+    """Run one weighted M-step fit, tallying it into ``health`` =
+    ``[fits, stalls]``.
+
+    The engine re-raises a convergence warning per component per EM iteration,
+    and those warnings stay on stderr where the user can see them: they are the
+    only live signal that the M-step is stalling, and the remaining fragility
+    behind them belongs upstream, not behind a filter here. What this adds is
+    the *denominator* the stderr stream cannot give — how many fits ran, so a
+    handful of warnings out of hundreds of fits reads differently from a
+    warning on every one. :attr:`CircMix.fit_health` reports the pair.
+
+    ``fit.converged`` is the same signal the warning carries (the engine sets
+    the flag exactly when it warns), so the tally is counted off the flag and
+    needs no message matching. A throw propagates untouched, and is not tallied:
+    the caller's own retry path owns that case."""
+    cp = fn(*args, **kwargs)
+    health[0] += 1
+    health[1] += not all(bool(getattr(f, "converged", True)) for f in cp.fits)
+    return cp
+
+
+def _mix_moment_start(ref_cp: _MixComponent, weights, center=True):
     """A start shaped like ``ref_cp``'s coefficients but carrying THIS
     component's weighted moments, for retrying an M-step that would not start.
 
     Every component shares one design, so any sibling that fitted supplies the
     coefficient layout. The values come from the component's own
-    responsibilities: the concentration from its weighted mean resultant (which
-    is rotation-invariant, so the sibling's frame is safe to read the response
-    from), the location intercept from 0 — correct in the component's own
-    centred frame — and shape parameters from the symmetric reduction member.
+    responsibilities: the concentration from its weighted mean resultant, the
+    location intercept from its weighted circular mean, and shape parameters
+    from the symmetric reduction member.
 
-    An all-zero start would instead mean concentration = 1, the diffuse model.
-    For a *concentrated* component that is the worst available start, and since
-    it is exactly the concentrated components whose M-step fails, a zero retry
-    collapses them and drives EM downhill.
+    An all-zero start would instead mean concentration = 1 at direction 0 — the
+    diffuse model, pointing at the link origin. For a *concentrated* component
+    that is the worst available start, and since it is exactly the concentrated
+    components whose M-step fails, a zero retry collapses them and drives EM
+    downhill.
+
+    **Frames.** The start must be expressed in the frame the retry will FIT in,
+    and that frame is not the reference component's. ``ref_cp`` supplies only
+    the layout; the retry re-derives its own ``_center_ref`` rotation from
+    *these* weights, and that rotation is 0 whenever the weighted mean clears
+    the tan-half wall — the common case. The location
+    is therefore built in the original frame (undoing ``ref_cp``'s own
+    ``circ_center``) and rotated into the retry's frame here. The concentration
+    needs none of this: the mean resultant is rotation-invariant, so any frame
+    reads it correctly.
+
+    ``center`` mirrors :func:`_mix_fit_component`'s own argument, so a caller
+    that turned centring off (or pinned it to a fixed angle) is started in the
+    frame it will actually fit in.
     """
     w = np.asarray(weights, dtype=float).ravel()
     outs = []
@@ -2679,13 +2716,31 @@ def _mix_moment_start(ref_cp: _MixComponent, weights):
             y = np.asarray(f.data[resp].to_numpy(), dtype=float)
             if w.size == y.size and float(w.sum()) > 0:
                 sw = float(w.sum())
-                rbar = float(
-                    np.hypot(
-                        np.sum(w * np.sin(y)) / sw, np.sum(w * np.cos(y)) / sw
-                    )
+                cbar = float(np.sum(w * np.cos(y)) / sw)
+                sbar = float(np.sum(w * np.sin(y)) / sw)
+                rbar = float(np.hypot(cbar, sbar))
+                # the weighted mean direction, carried back to the ORIGINAL
+                # frame and then into the frame the retry will fit in (see the
+                # docstring); 0 for a location link that carries no rotation.
+                loc = 0.0
+                j_loc = next(
+                    j for j, pn in enumerate(fam.params) if roles[pn] == "location"
                 )
+                if links[j_loc].name == "tanhalf":
+                    yo = _to_02pi(y + float(getattr(f, "circ_center", 0.0) or 0.0))
+                    ref = (
+                        _center_ref(yo, w)
+                        if center is True
+                        else (0.0 if center is False else float(center))
+                    )
+                    loc = float(
+                        _wrap(
+                            np.arctan2(sbar, cbar)
+                            + (float(getattr(f, "circ_center", 0.0) or 0.0) - ref)
+                        )
+                    )
                 vals = [
-                    0.0
+                    loc
                     if roles[p] == "location"
                     else (float(conc(rbar)) if roles[p] == "concentration" else 0.0)
                     for p in fam.params
@@ -3018,9 +3073,18 @@ def _mix_em_core(
     # "auto"/"scheduled"); None for a parametric spec (no search) so those fits
     # stay bit-identical to hea's default.
     opt = control.optimizer if _mix_formula_smooth(formula) else None
+    # the M-step's centring setting, needed by _mix_moment_start to build a
+    # retry start in the frame the retry will actually fit in.
+    ctr_arg = gam_kwargs.get("center", True)
+    # [fits attempted, fits the engine reported as not converged] over this run
+    # -- the denominator for the engine's per-fit convergence warnings, which
+    # still reach stderr unfiltered.
+    health = [0, 0]
 
     if K == 1:
-        cp = _mix_fit_component(
+        cp = _mix_tally_fit(
+            health,
+            _mix_fit_component,
             formula,
             data,
             family,
@@ -3031,6 +3095,8 @@ def _mix_em_core(
         )
         ll = float(_mix_rowsum(_cmp_logpdf(cp, data)[:, None], grp, n_units).sum())
         return {
+            "n_fit": health[0],
+            "n_stall": health[1],
             "components": [cp],
             "pi": np.ones(1),
             "gamma": np.ones((nu, 1)),
@@ -3099,7 +3165,9 @@ def _mix_em_core(
         pi = g.mean(axis=0)
 
         def fit_k(k, wk, fam_k, start):
-            cp = _mix_fit_component(
+            cp = _mix_tally_fit(
+                health,
+                _mix_fit_component,
                 formula,
                 data,
                 fam_k,
@@ -3157,7 +3225,7 @@ def _mix_em_core(
             #     convergence, and issue no warning.
             # Pricing the moments costs one ll(deriv=0); the refit runs only on
             # a tell, and is kept only if it scores better.
-            ms = _mix_moment_start(cp, wk)
+            ms = _mix_moment_start(cp, wk, ctr_arg)
             lam_k = getattr(fam_k, "map_lambda", None)
             at_moments, at_fit = _cmp_obj_at(cp, [ms, _cmp_coef(cp)], wk, lam_k)
             if at_moments > at_fit or not all(
@@ -3176,7 +3244,7 @@ def _mix_em_core(
                     f"({pending[0][3]})."
                 ) from pending[0][3]
             for k, wk, fam_k, _exc in pending:
-                components[k] = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk))
+                components[k] = fit_k(k, wk, fam_k, _mix_moment_start(sib, wk, ctr_arg))
             # A fit the moments beat is refitted FROM those moments. Left alone
             # it would also poison the next iteration, whose warm start is this
             # coefficient vector — that is how one bad step pins a component for
@@ -3260,6 +3328,8 @@ def _mix_em_core(
     monotone_expected = not (penalty_moves or degen_moves)
     monotone = (not monotone_expected) or worst_drop <= 1e-6 * (abs(ll) + 1)
     return {
+        "n_fit": health[0],
+        "n_stall": health[1],
         "components": components,
         "pi": pi,
         "gamma": g,
@@ -3892,6 +3962,15 @@ class CircMix:
     restarts : dict
         ``R``, the per-restart log-likelihoods ``lls`` and the ``basin_hits``
         count (how many restarts reached the kept optimum — a health signal).
+    fit_health : dict
+        ``n_fit`` weighted M-step fits were run in the kept EM run, of which
+        ``n_stall`` were reported by the engine as not converged. This is the
+        denominator for the ``gam.fit5 step failed`` warnings on stderr, which
+        are left unfiltered: a handful out of hundreds of fits is routine — the
+        engine's final Newton step often cannot improve on an already-converged
+        fit, and each stall is retried from the component's weighted moments
+        with the better fit kept — while a count approaching ``n_fit`` means the
+        M-step is genuinely struggling.
     move_trace : polars.DataFrame or None
         ``None`` for ``search="fixed"``; the accepted moves for ``"greedy"``;
         the K sweep for ``"grid"``.
@@ -4031,6 +4110,13 @@ class CircMix:
         out.append(tail + ".")
         if self.K > 1 and not self.monotone:
             out.append("  note: a non-monotone EM step was seen -- inspect .ll_path.")
+        fh = getattr(self, "fit_health", None)
+        if fh and fh["n_stall"]:
+            out.append(
+                f"  note: {fh['n_stall']} of {fh['n_fit']} weighted M-step fits "
+                "did not converge; each was retried from its weighted moments "
+                "and the better kept -- see .fit_health."
+            )
         # logLik/BIC above are UNPENALISED, so a component the guard shrank looks
         # like a failed fit unless the guard says otherwise.
         dg = getattr(self, "degen", None)
@@ -4045,12 +4131,83 @@ class CircMix:
             )
         return "\n".join(out)
 
+    def params(self, newdata=None) -> Dict[str, Any]:
+        """Each component's fitted parameters on the RESPONSE scale.
+
+        The values the family is parameterised by — ``(mu, kappa)`` for
+        ``vmlss``, and so on — one row per observation, in the ORIGINAL
+        (un-centred) frame: a component that
+        :func:`~pycircstat2.regression.circ_gam` rotated off the tan-half wall
+        reports its direction back where the data live, not where it was
+        fitted. This is what :meth:`coef` cannot give: coefficients are on the
+        LINK scale and in the component's own fit frame, so a centred
+        component's location intercept reads as 0 whatever its actual mean
+        direction.
+
+        Returns a ``{"component1": DataFrame, ...}`` mapping — a list of frames,
+        one per chain-rule factor, for a joint (product) component.
+
+        Parameters
+        ----------
+        newdata : DataFrame, optional
+            Where to evaluate. Omitting it uses the training frame. For an
+            intercept-only (density-clustering) spec the parameters are constant
+            and every row is identical.
+        """
+        nd = _to_polars(self.data if newdata is None else newdata)
+
+        def frame(cp, arr):
+            f0 = cp.fits[0]
+            names = getattr(f0.family, "params", None) or [
+                f"p{j + 1}" for j in range(np.shape(arr)[1])
+            ]
+            a = np.asarray(arr, dtype=float)
+            return pl.DataFrame(
+                {nm: a[:, j] for j, nm in enumerate(names[: a.shape[1]])}
+            )
+
+        out: Dict[str, Any] = {}
+        for k, cp in enumerate(self.components):
+            pr = _cmp_predict(cp, nd, "response")
+            out[f"component{k + 1}"] = (
+                [frame(_MixComponent(f), a) for f, a in zip(cp.fits, pr)]
+                if isinstance(cp, _MixProduct)
+                else frame(cp, pr)
+            )
+        return out
+
     def summary(self) -> None:
-        """Print the model header plus the per-component coefficients."""
+        """Print the model header, the per-component response-scale parameters
+        and the link-scale coefficients."""
         print(self)
-        print("\n  per-component coefficients:")
-        for k, (name, cf) in enumerate(self.coef().items()):
+        print("\n  per-component parameters (response scale, original frame):")
+        for k, (_, pf) in enumerate(self.params().items()):
             print(f"  [component {k + 1}]")
+            for j, fr in enumerate([pf] if isinstance(pf, pl.DataFrame) else pf):
+                pre = (
+                    "    " if isinstance(pf, pl.DataFrame) else f"    factor {j + 1}: "
+                )
+                parts = []
+                for nm in fr.columns:
+                    v = fr[nm].to_numpy()
+                    parts.append(
+                        f"{nm} = {v[0]:.4f}"
+                        if np.ptp(v) <= 1e-8
+                        else f"{nm} in [{v.min():.4f}, {v.max():.4f}]"
+                    )
+                print(pre + "  ".join(parts))
+        print("\n  per-component coefficients (link scale, fit frame):")
+        for k, (_, cf) in enumerate(self.coef().items()):
+            ctr = [
+                float(getattr(f, "circ_center", 0.0) or 0.0)
+                for f in self.components[k].fits
+            ]
+            tag = (
+                f"  [centred at {', '.join(f'{c:+.4g}' for c in ctr)} rad]"
+                if any(ctr)
+                else ""
+            )
+            print(f"  [component {k + 1}]{tag}")
             if isinstance(cf, list):
                 for j, c in enumerate(cf):
                     print(f"    factor {j + 1}: {np.round(c, 4)}")
@@ -4576,6 +4733,10 @@ def circ_mix(
             "R": best["R"],
             "lls": best["restart_lls"],
             "basin_hits": best["basin_hits"],
+        },
+        fit_health={
+            "n_fit": int(best.get("n_fit", 0)),
+            "n_stall": int(best.get("n_stall", 0)),
         },
         move_trace=res["trace"],
         geometry=geometry,

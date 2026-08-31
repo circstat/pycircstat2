@@ -1,3 +1,6 @@
+import types
+import warnings
+
 import numpy as np
 import polars as pl
 import pytest
@@ -27,6 +30,8 @@ from pycircstat2.clustering import (
     _mix_loglik_rows,
     _mix_n_responses,
     _mix_objective,
+    _mix_moment_start,
+    _mix_tally_fit,
     _mix_response,
     _mix_responses,
     _mix_responsibilities,
@@ -1025,3 +1030,115 @@ def test_circ_mix_circ_plot_density_and_joint_cells():
     plt.close(mj.circ_plot())
     with pytest.warns(RuntimeWarning, match="joint geometry surface"):
         plt.close(mj.circ_plot(view="geometry"))
+
+
+# ---- the M-step retry start, and the noise it is reached through ---------- #
+
+@pytest.mark.parametrize("shift", [0.0, 1.0, np.pi, -2.0])
+def test_mix_moment_start_lands_on_the_weighted_moments(shift):
+    """The retry start must carry the component's OWN weighted moments into the
+    frame the retry will fit in -- for a centred component and an uncentred one
+    alike.
+
+    The location is the part that can go wrong: circ_gam only rotates a response
+    that hugs the tan-half wall, so a component clear of the wall is fitted
+    uncentred and a location of 0 there means direction 0, not "my own mean".
+    Sweeping ``shift`` walks the data through both regimes; the invariant is the
+    same in each.
+    """
+    rng = np.random.default_rng(11)
+    y = np.mod(rng.vonmises(0.0, 6.0, 200) + shift, 2 * np.pi)
+    w = rng.uniform(0.2, 1.0, y.size)
+    df = pl.DataFrame({"y": y})
+    fit = circ_gam("y ~ 1", df, family=vmlss, weights=w, center=True)
+    cp = _MixComponent(fit)
+
+    ms = np.asarray(_mix_moment_start(cp, w), dtype=float)
+    # the start's implied direction, carried back to the ORIGINAL frame
+    mu_start = np.angle(np.exp(1j * (2 * np.arctan(ms[0]) + fit.circ_center)))
+    mu_w = float(np.arctan2(np.sum(w * np.sin(y)), np.sum(w * np.cos(y))))
+    assert np.angle(np.exp(1j * (mu_start - mu_w))) == pytest.approx(0.0, abs=1e-9)
+
+    # and it really is a good start: within a whisker of the fitted optimum on
+    # the very objective the M-step maximises.
+    at_start, at_fit = _cmp_obj_at(cp, [ms, _cmp_coef(cp)], w)
+    assert at_fit - at_start < 0.5
+
+
+def test_mix_moment_start_respects_center_false():
+    """With centring off the retry fits in the original frame, so the start's
+    location must be the weighted mean itself -- not a rotated one."""
+    rng = np.random.default_rng(12)
+    y = np.mod(rng.vonmises(np.pi, 6.0, 200), 2 * np.pi)  # hugging the wall
+    w = np.ones(y.size)
+    df = pl.DataFrame({"y": y})
+    fu = circ_gam("y ~ 1", df, family=vmlss, weights=w, center=False)
+    assert fu.circ_center == 0.0
+    ms = np.asarray(_mix_moment_start(_MixComponent(fu), w, center=False), dtype=float)
+    mu_w = float(np.arctan2(np.sum(w * np.sin(y)), np.sum(w * np.cos(y))))
+    assert 2 * np.arctan(ms[0]) == pytest.approx(mu_w, abs=1e-9)
+
+
+def test_mix_tally_fit_counts_fits_and_stalls_without_filtering():
+    """The M-step tally counts [fits, stalls] off the engine's own converged
+    flag, and passes every warning through untouched -- the engine's stderr is
+    the live signal that the M-step is stalling and is never filtered here."""
+    health = [0, 0]
+
+    def fake(converged):
+        warnings.warn("gam.fit5 step failed: max magnitude relative grad = 1e-8")
+        return _MixComponent(types.SimpleNamespace(converged=converged))
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        _mix_tally_fit(health, fake, False)
+        _mix_tally_fit(health, fake, True)
+    assert len(rec) == 2  # nothing swallowed
+    assert health == [2, 1]  # two fits attempted, one of them stalled
+
+    # a throw is the caller's business, and is not tallied
+    def boom():
+        raise RuntimeError("no")
+
+    with pytest.raises(RuntimeError):
+        _mix_tally_fit(health, boom)
+    assert health == [2, 1]
+
+
+def test_circ_mix_reports_the_m_step_tally():
+    """.fit_health gives the denominator the engine's stderr cannot: how many
+    weighted M-step fits ran, and how many of them stalled."""
+    rng = np.random.default_rng(3)
+    n = 160
+    z = rng.integers(2, size=n)
+    y = np.mod(rng.vonmises(np.where(z == 0, -1.4, 1.4), 6.0), 2 * np.pi)
+    m = circ_mix("y ~ 1", pl.DataFrame({"y": y}), K=2,
+                 control={"restarts": 3, "seed": 4})
+    fh = m.fit_health
+    assert fh["n_fit"] >= m.iter and 0 <= fh["n_stall"] <= fh["n_fit"]
+    assert ("did not converge" in repr(m)) == bool(fh["n_stall"])
+
+
+def test_circ_mix_params_report_the_original_frame():
+    """params() gives the response-scale parameters where the DATA live. coef()
+    cannot: a centred component's location intercept is 0 in its own fit frame
+    whatever its mean direction, which is exactly the reading that misleads."""
+    rng = np.random.default_rng(7)
+    n = 200
+    z = rng.integers(2, size=n)
+    y = np.mod(rng.vonmises(np.where(z == 0, np.pi - 0.5, 0.4), 8.0), 2 * np.pi)
+    m = circ_mix("y ~ 1", pl.DataFrame({"y": y}), K=2,
+                 control={"restarts": 3, "seed": 2})
+    assert any(float(cp.fit.circ_center) != 0.0 for cp in m.components)
+    pr = m.params()
+    assert list(pr) == ["component1", "component2"]
+    for k, fr in enumerate(pr.values()):
+        assert fr.columns == ["mu", "kappa"]
+        assert fr.height == n
+        # constant across rows for an intercept-only spec ...
+        assert np.ptp(fr["mu"].to_numpy()) == pytest.approx(0.0, abs=1e-9)
+        # ... and it is the component's MAP-cluster mean direction, not 0
+        mk = np.asarray(m.labels_) == k
+        mu_hat = float(np.arctan2(np.sin(y[mk]).sum(), np.cos(y[mk]).sum()))
+        d = np.angle(np.exp(1j * (float(fr["mu"][0]) - mu_hat)))
+        assert abs(d) < 0.2
