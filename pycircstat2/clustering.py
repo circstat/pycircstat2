@@ -1544,12 +1544,12 @@ class CircHAC:
 
     def plot_dendrogram(self, ax=None, **kwargs):
         """
-        Plot a rudimentary dendrogram from merges_.
+        Plot a dendrogram from merges_.
 
-        This is a basic approach that uses cluster IDs directly as "labels"
-        on the x-axis. Because cluster IDs might not be contiguous or in ascending
-        order, the result can look jumbled. A more sophisticated approach
-        would re-compute a consistent labeling for each step.
+        Each merge is drawn as a "u" joining the two merged clusters at the
+        height of their merge distance. The x-axis is the raw internal cluster
+        ID, which is neither contiguous nor ordered, so the "u"s cross and the
+        layout carries no ordering information — read heights, not positions.
 
         Parameters
         ----------
@@ -1572,30 +1572,18 @@ class CircHAC:
             return ax
 
         # merges_ is (step, 4): [clusterA, clusterB, dist, new_size]
-        # We want to plot something like a dendrogram:
-        #  - each row is a merge event
-        #  - x-axis might show cluster A and cluster B, y the 'distance'
-        # But cluster IDs might keep re-labelling, so a quick hack is we show them as is.
-
         for step, (ca, cb, distval, new_size) in enumerate(merges):
             ca = int(ca)
             cb = int(cb)
-            # We'll draw a "u" connecting ca and cb at height distval
-            # Then the newly formed cluster could get ID=cb or something
-            # This is a naive approach that won't produce a fancy SciPy-like dendrogram
-            # but enough to illustrate what's happening.
-
             x1, x2 = ca, cb
             y = distval
-            # a line from (x1, 0) to (x1, y), from (x2, 0) to (x2, y),
-            # then a horizontal line across at y
-            # we can color them or style them with kwargs
-
+            # the "u": a riser at each merged ID up to the merge distance, then
+            # a horizontal join across at that height
             ax.plot([x1, x1], [0, y], **kwargs)
             ax.plot([x2, x2], [0, y], **kwargs)
             ax.plot([x1, x2], [y, y], **kwargs)
 
-        ax.set_title("Rudimentary Dendrogram")
+        ax.set_title("Dendrogram")
         ax.set_xlabel("Cluster ID (raw internal IDs)")
         ax.set_ylabel("Distance")
         return ax
@@ -2457,11 +2445,11 @@ def _fit_obj_at(fit, coefs, w, lam=None) -> np.ndarray:
     penalty at ``lam``. Lets candidate starts be priced without paying for a
     fit; the candidates share one ``lpmatrix`` build, which is the whole cost.
 
-    The guard term is not optional book-keeping. The M-step maximises the
-    PENALISED objective, so on the unpenalised scale a *different* point
-    routinely outscores the fit by a few thousandths of a nat — measured at the
-    default guard strength, an unpenalised comparison called the fit a failure
-    on 50% of M-steps against 1.6% with the guard off.
+    The guard term is not optional book-keeping: pass ``lam`` whenever the
+    M-step ran under the guard. The M-step maximises the PENALISED objective,
+    so on the unpenalised scale a *different* point routinely outscores the fit
+    by a few thousandths of a nat, and any caller comparing a candidate against
+    the fit on the wrong scale calls most healthy M-steps failures.
     """
     fam = fit.family
     data = _to_polars(fit.data)
@@ -2683,9 +2671,9 @@ def _mix_moment_start(ref_cp: _MixComponent, weights, center=True):
     **Frames.** The start must be expressed in the frame the retry will FIT in,
     and that frame is not the reference component's. ``ref_cp`` supplies only
     the layout; the retry re-derives its own ``_center_ref`` rotation from
-    *these* weights, and that rotation is 0 whenever the weighted mean clears
-    the tan-half wall — the common case. The location
-    is therefore built in the original frame (undoing ``ref_cp``'s own
+    *these* weights, and each component centres on its own weighted mean, so the
+    two frames differ by however far the two components' means are apart. The
+    location is therefore built in the original frame (undoing ``ref_cp``'s own
     ``circ_center``) and rotated into the retry's frame here. The concentration
     needs none of this: the mean resultant is rotation-invariant, so any frame
     reads it correctly.

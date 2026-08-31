@@ -830,13 +830,13 @@ def _resolve_cyclic_knots_data(formulas, data, user_knots):
 
 
 # --------------------------------------------------------------------------- #
-# center=True — rotate a circular response off the tan-half wall before fitting
+# center=True — rotate a circular response to the link origin before fitting
 # --------------------------------------------------------------------------- #
-# circlss's center machinery, ported. A tan-half location (μ = 2·atan(η)) lives
-# in an open 2π-window whose antipode θ = π is unreachable; data hugging that
-# wall fits poorly. We rotate the response to a frame whose origin is the data's
-# circular mean (only when that mean is near the wall), fit there, and rotate
-# response-scale directions back. See ``circ_gam``'s ``center`` argument.
+# A tan-half location (μ = 2·atan(η)) lives in an open 2π-window whose antipode
+# θ = π is unreachable, and η = tan(μ/2) grows without bound as μ approaches it.
+# Rotating the response so its circular mean sits at the link origin puts η at
+# ≈ 0 — the best-conditioned point of the link — and the fit's directions are
+# rotated back on the response scale. See ``circ_gam``'s ``center`` argument.
 def _wall_loc(fam):
     """Column index of the tan-half circular-location LP — the parameter
     carrying the antipode wall at θ = π — or ``None`` when the family has none.
@@ -853,15 +853,33 @@ def _wall_loc(fam):
     return None
 
 
-def _center_ref(theta, weights=None, snap=0.05):
-    """Reference angle to rotate a circular response by so the tan-half wall
-    (θ = π) lands away from the data — the circlss ``.circ_center_ref`` twin.
+#: Mean resultant length below which a circular mean is treated as having no
+#: direction at all. Orders of magnitude under any statistically meaningful
+#: resultant (a uniform sample of n draws sits near 1/sqrt(n)), so it fires only
+#: on numerically balanced data, where the angle would be rounding noise.
+_CENTER_RBAR_FLOOR = 1e-8
 
-    The centre is the (weighted) **circular mean**: the only rotation-
-    equivariant choice, an exact fixed point for already-centred data. It is
-    applied only when that mean sits in the wall's half of the circle
-    (``|wrap(μ − π)| < π/2 + snap``); a mean well clear of the wall returns 0
-    (an exact no-op), as does a mean already within ``snap`` of the origin.
+
+def _center_ref(theta, weights=None):
+    """Reference angle to rotate a circular response by before fitting: the
+    (weighted) **circular mean**, unconditionally.
+
+    Rotating the mean to the link origin puts the fitted location coefficient
+    at η ≈ 0 for *every* fit, which is where the tan-half link is best
+    conditioned. Do not gate this on the response being near the wall: a gated
+    rotation leaves a well-clear response fitting at η = tan(μ/2), which does
+    not change the reachable optimum but does raise the solver's
+    non-convergence rate, and it makes the frame a discontinuous function of
+    the weights — so a mixture component whose mean drifts across the gate
+    changes frame mid-EM. The circular mean is the only rotation-equivariant
+    choice and is an exact fixed point for already-centred data, so a response
+    already at the origin gets ref ≈ 0 without a special case.
+
+    Returns 0 when the mean carries no direction: an empty response, no weight
+    anywhere, or a mean resultant length at the floating-point floor (balanced
+    data, where ``arctan2`` would resolve rounding noise into an arbitrary angle
+    that then moves unpredictably between a mixture's M-steps).
+
     ``weights`` (a circ_mix component's responsibilities, say) weight the mean;
     ``None`` is the plain mean over the whole response."""
     theta = np.asarray(theta, dtype=float)
@@ -870,10 +888,15 @@ def _center_ref(theta, weights=None, snap=0.05):
     if theta.size == 0:
         return 0.0
     w = np.ones_like(theta) if weights is None else np.asarray(weights, float)[ok]
-    mu = float(np.arctan2(float(np.sum(w * np.sin(theta))),
-                          float(np.sum(w * np.cos(theta)))))
-    ref = mu if abs(float(_wrap(mu - np.pi))) < np.pi / 2 + snap else 0.0
-    return 0.0 if (not np.isfinite(ref) or abs(ref) < snap) else ref
+    sw = float(np.sum(w))
+    C = float(np.sum(w * np.cos(theta)))
+    S = float(np.sum(w * np.sin(theta)))
+    if not (np.isfinite(sw) and np.isfinite(C) and np.isfinite(S)) or sw <= 0.0:
+        return 0.0
+    if np.hypot(C, S) / sw <= _CENTER_RBAR_FLOOR:
+        return 0.0
+    ref = float(np.arctan2(S, C))
+    return ref if np.isfinite(ref) else 0.0
 
 
 def _rotate_response(out, loc, ref):
@@ -932,13 +955,13 @@ def _circ_prepare(formula, data, family, knots, center, weights):
         # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
         formulas += ["~ 1"] * (n_lp - len(formulas))
     df = _to_polars(data)
-    # center: rotate the circular response to a frame where the tan-half wall
-    # (the antipode of the link origin, θ = π) clears the data, fit there, and
-    # report response-scale directions back via predict(type="response") /
-    # circ_plot. A no-op for families with no wall (pnlss's derived direction,
-    # the linear l~c leg) and for data already clear of it (ref snaps to 0).
+    # center: rotate the circular response so its mean sits at the link origin,
+    # fit there, and report response-scale directions back via
+    # predict(type="response") / circ_plot. A no-op for families with no wall
+    # (pnlss's derived direction, the linear l~c leg) and for a response whose
+    # mean is already at the origin (the mean is a fixed point, so ref ≈ 0).
     # Only the response column is rotated; the cyclic-smooth covariates — and so
-    # the knots resolved below — are untouched. The circlss center=TRUE twin.
+    # the knots resolved below — are untouched.
     ref = 0.0
     loc = _wall_loc(fam)
     if loc is not None and center is not False:
@@ -990,13 +1013,13 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
       predictors are filled with ``~ 1`` (held constant), so
       ``circ_gam("theta ~ s(x)", df, family="jplss")`` smooths μ and pins
       κ, ψ. The first formula must name the response.
-    - ``center=True`` (default) rotates a circular response off the tan-half
-      wall before fitting. The ``tanhalf``-linked families (``vmlss``,
+    - ``center=True`` (default) rotates a circular response to the tan-half
+      link's origin before fitting. The ``tanhalf``-linked families (``vmlss``,
       ``wclss``, the shape families) place μ in an open 2π-window whose antipode
-      θ = π is unreachable, so a response sitting near that wall fits poorly.
-      ``circ_gam`` rotates the response to a frame centred on its circular mean
-      — only when that mean is near the wall, otherwise an exact no-op — fits
-      there, and rotates response-scale directions back:
+      θ = π is unreachable, and η = tan(μ/2) is worst conditioned the closer μ
+      sits to it. ``circ_gam`` rotates the response to a frame centred on its
+      circular mean — so the fit runs at η ≈ 0 whatever the data's direction —
+      fits there, and rotates response-scale directions back:
       ``predict(type="response")`` and ``circ_plot`` report in the original
       frame, while the link scale (``coef``, ``predict(type="link")``) and the
       raw ``fitted_values`` stay in the centred fit frame. The applied rotation
@@ -1004,6 +1027,9 @@ def circ_gam(formula, data, family=None, knots=None, method="REML",
       disable it, or a number to set the reference angle directly. A no-op for
       ``pnlss`` (a derived atan2 direction, no wall) and the linear ``l~c``
       leg; a mean that must *wind through* the wall still needs ``pnlss``.
+      The rotation applies to every ``tanhalf`` fit, so read fitted directions
+      off ``predict(type="response")`` (or ``CircMix.params()``), never off
+      ``coef()``.
     - ``weights=`` — per-observation prior weights (hea's ``gam(weights=)``:
       frequency/precision multipliers on each log-likelihood term). Named
       explicitly for discoverability and because a finite-mixture EM M-step

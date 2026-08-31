@@ -1304,12 +1304,12 @@ def test_watson_u2_randomization():
 
 
 def test_wheeler_watson_randomization_with_ties():
-    """wheeler_watson_test now handles tied data via midranks, and its randomization
+    """wheeler_watson_test resolves tied data via midranks, and its randomization
     p-value tracks the χ² approximation (Pewsey et al. 2013, §7.5.3; data = B10)."""
     df = load_data("B10", source="fisher")  # ant data, 3 groups, contains ties
     groups = [np.deg2rad(df.filter(pl.col("set") == s)["θ"].to_numpy().astype(float)) for s in (1, 2, 3)]
 
-    asy = wheeler_watson_test(groups)  # previously crashed on ties
+    asy = wheeler_watson_test(groups)
     rnd = wheeler_watson_test(groups, n_resamples=9999, seed=1)
     assert rnd.method == "randomization" and rnd.n_resamples == 9999
     assert 0.10 < rnd.pval < 0.17  # book ≈ 0.1407; χ² approximation ≈ 0.13

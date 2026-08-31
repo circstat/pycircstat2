@@ -1580,11 +1580,10 @@ def test_inverse_batschelet_pdf_scalar_consistency():
 
 
 def test_inverse_batschelet_warps_match_brentq():
-    """The vectorized monotone solver (`_tnu`/`_slmbdinv`) must reproduce the
-    original per-point `brentq` inversion to ~machine precision, including the
-    ν→±1 / λ→±1 near-boundary regime where the warp slope → 0. This pins the
-    performance rewrite to the algorithm it replaced (≈10⁵ scalar root-finds
-    per `fit`)."""
+    """The vectorized monotone solver (`_tnu`/`_slmbdinv`) must agree with a
+    per-point `brentq` inversion to ~machine precision, including the
+    ν→±1 / λ→±1 near-boundary regime where the warp slope → 0. `brentq` is the
+    reference the fast path is allowed to be fast against."""
     from scipy.optimize import root_scalar
 
     from pycircstat2.distributions import _slmbdinv, _tnu
@@ -3105,7 +3104,7 @@ def test_circularll_deviance_saturated_reference_is_density_peak():
     y = np.mod(rng.uniform(0, 2 * np.pi, 200), 2 * np.pi)
 
     # symmetric von Mises: deviance equals the anchor-reference value, since the
-    # mode IS the location (no change from the previous convention).
+    # mode IS the location.
     mu, k = 1.2, 3.0
     params = {"mu": np.full(y.size, mu), "kappa": np.full(y.size, k)}
     l_obs = vmlss._loglik_values(y, params)

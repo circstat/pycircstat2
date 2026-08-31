@@ -3194,10 +3194,9 @@ def harrison_kanji_test(
     tr = n * circ_r(alpha)
     kk = circ_kappa(tr / n)
 
-    # Per-cell and per-factor resultants (numpy; replaces the pandas
-    # groupby(...).unstack()). cn/cr are p×q matrices — rows index the sorted
-    # factor-A levels, cols the sorted factor-B levels — matching the old
-    # unstacked layout; pn/pr and qn/qr are the factor-A and factor-B
+    # Per-cell and per-factor resultants. cn/cr are p×q matrices — rows index
+    # the sorted factor-A levels, cols the sorted factor-B levels; pn/pr and
+    # qn/qr are the factor-A and factor-B
     # marginals. circ_r returns the mean resultant length, so multiplying by
     # the group count gives the resultant length R.
     a_levels = np.unique(idp)

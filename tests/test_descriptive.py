@@ -226,9 +226,8 @@ def test_circ_median_HL_oracle():
 
 
 def test_circ_median_grouped_odd_bins():
-    # _circ_median_grouped previously used `np.roll(w, 2)` with the wrong sign,
-    # which gave correct answers only by coincidence for n_bins == 5.
-    # For n_bins=9 with all mass in bin 0 the old code returned 80° instead of 20°.
+    # The half-turn offset must be derived from n_bins, not fixed: a fixed shift
+    # is only correct at n_bins == 5, so sweep several odd bin counts.
 
     # Single-bin mass: median should be that bin's center.
     for nb in [5, 7, 9, 11, 17]:
@@ -350,9 +349,8 @@ def test_circ_median_ci():
 
 
 def test_circ_median_ci_idx_wrap():
-    # Previously, when idx_ub computed to exactly n, the wrap guard
-    # `if idx_ub > n` did not trigger and `alpha[n]` raised IndexError.
-    # Sweep medians across a few sample sizes that expose the boundary.
+    # idx_ub == n must wrap: it is a valid index only after wrapping, so the
+    # guard has to be inclusive. Sweep sizes that put medians on that boundary.
     for n in [16, 20, 25]:
         alpha = np.linspace(0.0, np.pi, n)
         for k in range(n):
@@ -475,10 +473,8 @@ def test_circ_range():
 
 
 def test_circ_mean_zero_resultant_consistency():
-    # `circ_mean` and `circ_mean_and_r` should agree on whether r ≈ 0 means the
-    # mean is undefined. They previously used different tolerances (1e-8 vs
-    # 1e-12), so the same input could yield NaN from one and an angle from the
-    # other.
+    # `circ_mean` and `circ_mean_and_r` must share one r ≈ 0 tolerance, or the
+    # same input yields NaN from one and an angle from the other.
     rng = np.random.default_rng(0)
     alpha = np.deg2rad([0, 120, 240]) + rng.standard_normal(3) * 1e-10
     m1 = circ_mean(alpha)
@@ -550,9 +546,8 @@ def test_circ_quantile_supported_types():
     with pytest.raises(ValueError, match="Unsupported quantile"):
         circ_quantile(alpha, type=10)
 
-    # type=4 must agree with numpy's interpolated_inverted_cdf, not midpoint.
-    # (This was previously mismapped: type=4 → "midpoint" which is actually
-    # numpy's type=2.)
+    # type=4 must agree with numpy's interpolated_inverted_cdf. "midpoint" is
+    # numpy's type=2, and is the easy mis-mapping to make here.
     x = np.deg2rad(np.arange(0, 100, 10))
     expected = np.quantile(x, 0.5, method="interpolated_inverted_cdf")
     np.testing.assert_allclose(

@@ -717,10 +717,9 @@ def test_circ_gam_cartlss_location_warm_start_recovers_wiggly_mu():
 
 def test_circ_gam_cyclic_summary_general_family(capsys):
     """summary() on a fully-penalized smooth (bs='cc' → penalty null space
-    0 → hea's reTest/_recov path) under a general family. Crashed with
-    AttributeError('_fisher_w') before hea@97a244b; fixed by consuming the
-    stored gam.fit5.post.proc R factor (R'R = −lbb, mgcv's object$R) in
-    _recov."""
+    0 → hea's reTest/_recov path) under a general family. That path has no
+    Fisher weights to fall back on, so it must recover the R factor
+    (R'R = −lbb, mgcv's object$R) stored on gam.fit5's post-proc."""
     rng = np.random.default_rng(8)
     n = 150
     phi = rng.uniform(0, 2 * np.pi, n)
@@ -790,14 +789,34 @@ def test_circ_gam_family_default_is_vmlss():
 # end-to-end recovery of a wall-hugging location that the wall otherwise breaks.
 
 
-def test_circ_center_ref_noop_when_wall_clear():
-    """_center_ref is an exact no-op when the circular mean is clear of the
-    wall: concentrated near 0, and a wide symmetric fan, both mean ≈ 0 → 0."""
+def test_circ_center_ref_is_the_circular_mean_everywhere():
+    """_center_ref is the circular mean whatever the data's direction — the
+    rotation is unconditional, so every tanhalf fit runs at eta ~ 0. A response
+    already at the origin lands on ref ~ 0 because the mean is a fixed point,
+    not because a gate skipped it."""
     from pycircstat2.regression import _center_ref, _wrap
 
     rng = np.random.default_rng(1)
-    assert _center_ref(_wrap(rng.normal(0.0, 0.4, 200))) == 0.0
-    assert _center_ref(_wrap(np.linspace(-2.0, 2.0, 200))) == 0.0
+    for th in (_wrap(rng.normal(0.0, 0.4, 200)),      # already at the origin
+               _wrap(np.linspace(-2.0, 2.0, 200)),    # a wide symmetric fan
+               _wrap(rng.normal(1.0, 0.3, 200)),      # well clear of the wall
+               _wrap(rng.normal(2.6, 0.3, 200))):     # near the wall
+        mu = float(np.arctan2(np.sin(th).sum(), np.cos(th).sum()))
+        assert _center_ref(th) == pytest.approx(mu, abs=1e-12)
+        # and the rotation lands the mean on the origin
+        rot = th - _center_ref(th)
+        assert abs(float(np.arctan2(np.sin(rot).sum(), np.cos(rot).sum()))) < 1e-9
+
+
+def test_circ_center_ref_zero_when_the_mean_is_undefined():
+    """A resultant of length 0 leaves the mean undefined; ref falls back to 0
+    rather than to an arbitrary angle."""
+    from pycircstat2.regression import _center_ref
+
+    th = np.array([0.0, np.pi / 2, np.pi, 3 * np.pi / 2])   # exactly balanced
+    assert _center_ref(th) == 0.0
+    assert _center_ref(th, np.zeros(4)) == 0.0
+    assert _center_ref(np.array([])) == 0.0
 
 
 def test_circ_center_ref_moves_wall_off_straddling_pi():
@@ -814,9 +833,9 @@ def test_circ_center_ref_moves_wall_off_straddling_pi():
 
 
 def test_circ_center_ref_weighted_branch():
-    """The weighted branch (a circ_mix component's responsibilities) centers
-    the weighted mode: weight the near-π mass → ref ≈ π; weight the near-0
-    mass (clear of the wall) → no-op."""
+    """The weighted branch (a circ_mix component's responsibilities) centers on
+    the weighted mode, so each component of a mixture gets its own frame:
+    weight the near-π mass → ref ≈ π; weight the near-0 mass → ref ≈ 0."""
     from pycircstat2.regression import _center_ref, _wrap
 
     rng = np.random.default_rng(3)
@@ -824,7 +843,7 @@ def test_circ_center_ref_weighted_branch():
     w_pi = np.r_[np.ones(100), np.zeros(100)]
     w_0 = np.r_[np.zeros(100), np.ones(100)]
     assert abs(float(np.angle(np.exp(1j * (_center_ref(th, w_pi) - np.pi))))) < 0.3
-    assert _center_ref(th, w_0) == 0.0
+    assert abs(_center_ref(th, w_0)) < 0.3
 
 
 def test_wall_loc_flags_tanhalf_only():

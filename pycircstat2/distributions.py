@@ -3373,9 +3373,9 @@ class cartwright_gen(_RegressionReady, CircularContinuous):
         return float(result) if np.isscalar(zeta) else result
 
     def _pdf(self, x, mu, zeta):
-        # exp of the gammaln log form: the previous raw-gamma assembly
-        # (2^{−1+1/ζ}Γ²(1+1/ζ)/(πΓ(1+2/ζ))·(1+cos φ)^{1/ζ}) returned nan
-        # for ζ ≲ 0.008 in-range — Γ(1+2/ζ) overflows at 2/ζ ≳ 170
+        # exp of the gammaln log form. Assembling the raw-gamma expression
+        # 2^{−1+1/ζ}Γ²(1+1/ζ)/(πΓ(1+2/ζ))·(1+cos φ)^{1/ζ} directly gives nan
+        # for ζ ≲ 0.008, which is in range: Γ(1+2/ζ) overflows at 2/ζ ≳ 170
         return np.exp(self._logpdf(x, mu, zeta))
 
     def pdf(self, x, mu, zeta, *args, **kwargs):
@@ -4929,8 +4929,8 @@ class wrapcauchy_gen(_RegressionReady, CircularContinuous):
 
     def _logpdf(self, x, mu, rho):
         # exact log form on the same cancellation-free denominator as
-        # ``_pdf``: the previous log(clip(pdf, 1e-16)) floored the
-        # honest tail once ρ came within a few ulp of 1
+        # ``_pdf``. Do not route this through log(clip(pdf, ...)): the clip
+        # floors the honest tail once ρ comes within a few ulp of 1
         denom = (1 - rho) ** 2 + 4 * rho * np.sin(0.5 * (x - mu)) ** 2
         with np.errstate(divide="ignore"):
             return (
@@ -7275,11 +7275,10 @@ class vonmises_flattopped_gen(_RegressionReady, CircularContinuous):
         that serves `cdf`/`ppf`: uniform draws are pushed through the
         monotone inverse-cdf interpolant of the centered density and shifted
         by $\mu$ — one vectorized evaluation per call, with cost independent
-        of $\kappa$ and $\nu$. (An earlier acceptance–rejection scheme with
-        a curvature-matched von Mises envelope degraded catastrophically for
-        $\nu \ne 0$ at large $\kappa$: matching the mode curvature
-        under-covers a flat-topped density's shoulders, so the envelope
-        constant grew without bound.)
+        of $\kappa$ and $\nu$. Acceptance–rejection is not a viable
+        alternative here: a flat-topped density's shoulders are not covered by
+        an envelope matched to its mode curvature, so the envelope constant
+        grows without bound as $\kappa$ rises at $\nu \ne 0$.
 
         Parameters
         ----------
@@ -8326,12 +8325,12 @@ class jonespewsey_gen(_RegressionReady, CircularContinuous):
             return vonmises.rvs(mu=mu_val, kappa=kappa_val, size=size_tuple or None, random_state=rng)
 
         # Inverse transform on the ladder-graded kernel table — exact at
-        # any spike depth, one vectorized pass, no rejection loop. (The
-        # previous von Mises rejection envelope was calibrated on a
-        # 2048-point uniform grid, which cannot see the ψ < 0 spike once
-        # it is narrower than ~6e-3: draws were distributionally wrong
-        # from κψ ≈ −6 — KS p ~ 1e-113 at (κ=8, ψ=−1) — and the
-        # acceptance rate collapsed into an effective hang by κψ ≈ −50.)
+        # any spike depth, one vectorized pass, no rejection loop. A rejection
+        # envelope calibrated on a uniform grid cannot serve this family: a
+        # 2048-point grid stops seeing the ψ < 0 spike once it is narrower
+        # than ~6e-3, so draws go distributionally wrong from κψ ≈ −6
+        # (KS p ~ 1e-113 at κ=8, ψ=−1) and the acceptance rate collapses into
+        # an effective hang by κψ ≈ −50.
         phi_draws = _jp_sample_table(kappa_val, psi_val, total, rng)
         samples = np.mod(mu_val + phi_draws, two_pi)
         return samples.reshape(size_tuple)
@@ -8624,16 +8623,15 @@ def _jp_feature_scales(kappa, psi):
 
     The lower clip is a pure positivity guard at the denormal floor (the
     width formula underflows to 0 beyond |κψ| ≈ 745, which would hang the
-    geometric rung loop) — it must NOT be a resolution floor: under the
-    fixed-panel GL ladder any floor above the true feature scale silently
-    truncates the ladder and loses the ψ < 0 spike that carries all of the
-    mass. An earlier 1e-13 floor — harmless for the adaptive quadrature it
-    was written for — made the normalizer wrong beyond |κψ| ≈ 33 and
-    garbage by |κψ| ≈ 40 (caught against the exact ψ = −1 identity
-    Z ≡ 2π); a 1e-300 floor still broke |κψ| ≳ 690. Rungs below ~1e-320
-    only resolve because the peak sits at φ = 0, where doubles are
-    denormally dense — which is also why the asymmetric family must
-    integrate in its *unwarped* angle (see ``_jp_log_c_asym``)."""
+    geometric rung loop) — it must NOT be raised into a resolution floor:
+    under the fixed-panel GL ladder any floor above the true feature scale
+    silently truncates the ladder and loses the ψ < 0 spike that carries all
+    of the mass, so the normalizer degrades from |κψ| ≈ 33 (a 1e-13 floor)
+    or |κψ| ≈ 690 (1e-300) with no error raised. Rungs below ~1e-320 only
+    resolve because the peak sits at φ = 0, where doubles are denormally
+    dense — which is also why the asymmetric family must integrate in its
+    *unwarped* angle (see ``_jp_log_c_asym``). The exact ψ = −1 identity
+    Z ≡ 2π is the check that catches a bad floor."""
     A = kappa * psi
     if abs(A) < 1e-12:
         keff = max(kappa, 1e-12)
@@ -8786,10 +8784,9 @@ def _jp_sample_table(kappa, psi, total, rng):
 
 # --- deep-spike cdf/ppf branch ------------------------------------------------
 # The series cdf path (4096-point coefficient grid, ≤ 256 harmonics) cannot
-# represent ψ < 0 spikes much narrower than the harmonic cap resolves:
-# probed 2026-06-11, its cdf error is ≤ 4e-11 at κψ = −3 for ψ ∈
-# [−2.5, −0.3] but reaches 1.5e-4 by κψ = −4 and 1.0 (at spike-interior
-# points) by −7. Below the gate the cdf is evaluated exactly instead, by
+# represent ψ < 0 spikes much narrower than the harmonic cap resolves: its
+# cdf error is ≤ 4e-11 at κψ = −3 for ψ ∈ [−2.5, −0.3] but reaches 1.5e-4 by
+# κψ = −4 and 1.0 (at spike-interior points) by −7. Below the gate the cdf is evaluated exactly instead, by
 # composite Gauss–Legendre on the same feature-scale ladder that serves the
 # normalizer and the sampler: cached cumulatives at the ladder edges plus a
 # 24-point partial panel per query.
@@ -8979,25 +8976,23 @@ def _jp_log_c(kappa: float, psi: float) -> float:
     """log of the Jones–Pewsey normalizing constant, log c(κ, ψ) =
     −log ∫ kernel dφ (μ-invariant).
 
-    Same preference order as the historical linear-space normalizer
-    (uniform and von Mises reductions first; the Legendre closed form
-    ``1/(2π P_{1/ψ}(cosh κψ))`` stays banned — scipy's ``lpmv`` is the
-    *Ferrers* function, domain |x| ≤ 1, and off the cut it silently
-    returns garbage for non-integer degree: plausible near z = 1, −1e63
-    by z ≈ 10, nan beyond. The off-cut route via
-    ``hyp2f1(−ν, ν+1; 1; (1−z)/2)`` was probed 2026-06-11: ~1e-13 in the
-    moderate band but linear-space — overflows at the e^709 wall for
-    ψ > 0 and internally from κψ ≈ −30 for ψ < 0. This GL ladder *is*
-    the same function — the kernel integral is its Mehler–Dirichlet-type
-    representation — evaluated in log space at any depth), but evaluated
+    Preference order: uniform and von Mises reductions first; the Legendre
+    closed form ``1/(2π P_{1/ψ}(cosh κψ))`` is banned — scipy's ``lpmv`` is
+    the *Ferrers* function, domain |x| ≤ 1, and off the cut it silently
+    returns garbage for non-integer degree (plausible near z = 1, −1e63
+    by z ≈ 10, nan beyond). The off-cut route via
+    ``hyp2f1(−ν, ν+1; 1; (1−z)/2)`` reaches ~1e-13 in the moderate band but
+    is linear-space, so it overflows at the e^709 wall for ψ > 0 and
+    internally from κψ ≈ −30 for ψ < 0. This GL ladder *is* the same
+    function — the kernel integral is its Mehler–Dirichlet-type
+    representation — evaluated in log space at any depth, and is evaluated
     **entirely in log space** with the kernel's peak value e^κ factored
     out: the raw kernel
     maximum is exp(κ) for every ψ, so any linear-space evaluation turns
     the whole JP clan's pdf into nan for κ ≳ 709.
     The general branch integrates e^{h−κ} ≤ 1 by composite Gauss–Legendre
     on ``_jp_gl_panels`` — the same engine as the regression moment
-    machinery (``_jp_logZ_moments``), which retired the per-call adaptive
-    quadrature this replaced.
+    machinery (``_jp_logZ_moments``).
     """
     if kappa < _JP_KAPPA_TOL:
         return float(-np.log(2.0 * np.pi))
@@ -10506,8 +10501,9 @@ class jonespewsey_asym_gen(_RegressionReady, CircularContinuous):
         # (exact at any spike depth — see ``_jp_quantile_table``), accept
         # with the bounded weight ratio (1−|ν|)/g′ ≤ 1 (min g′ = 1 − |ν|
         # for either sign of ν), then invert the monotone warp by
-        # bisection. (The previous von Mises rejection envelope shared the
-        # symmetric sampler's blindness to sub-grid ψ < 0 spikes.)
+        # bisection. A von Mises rejection envelope is not usable here for the
+        # same reason as in the symmetric sampler: it is blind to ψ < 0 spikes
+        # narrower than its grid.
         two_pi_f = 2.0 * np.pi
         samples = np.empty(total, dtype=float)
         filled = 0
@@ -11618,9 +11614,9 @@ class inverse_batschelet_gen(_RegressionReady, CircularContinuous):
 
             # Vectorized safeguarded Newton on the monotone cdf: all targets
             # at once, each point's [phi_lo, phi_hi] bracket from the grid,
-            # converged points frozen. Replaces the per-point loop that called
-            # the Pchip interpolators ~30k times scalar (one call/iteration);
-            # now ≤ _INVBAT_NEWTON_MAXITER array evaluations total.
+            # converged points frozen — ≤ _INVBAT_NEWTON_MAXITER array
+            # evaluations of the Pchip interpolators in total, not one per
+            # point per iteration.
             i_hi = np.clip(np.searchsorted(cdf_grid, targets, side="right"),
                            1, len(phi_grid) - 1)
             phi_lo = phi_grid[i_hi - 1].astype(float, copy=True)
@@ -12170,11 +12166,10 @@ def _solve_monotone_increasing(rhs, g, gprime, *, lo=-np.pi, hi=np.pi,
     Newton from ``x0`` (default ``rhs``), each step clamped into the bracket,
     then a vectorized bisection mop-up for any point Newton leaves with a
     residual above ``1e-12`` — the near-boundary cases where ``gprime`` → 0
-    (ν, λ → ±1). Replaces the per-point ``brentq`` loop the inverse-Batschelet
-    warps used to run (≈10⁵ scalar root-finds per ``fit``): one warp call is
-    now a handful of array ops. Returns ``(y, gprime(y))`` — the root and its
-    local slope, the latter being the Jacobian factor the ``ibslss`` score
-    reuses."""
+    (ν, λ → ±1). One warp call is a handful of array ops; a scalar root-find
+    per point would be ≈10⁵ of them per ``fit``. Returns ``(y, gprime(y))`` —
+    the root and its local slope, the latter being the Jacobian factor the
+    ``ibslss`` score reuses."""
     rhs = np.asarray(rhs, dtype=float)
     y = (np.clip(rhs, lo, hi).copy() if x0 is None
          else np.clip(np.broadcast_to(x0, rhs.shape).astype(float), lo, hi))
