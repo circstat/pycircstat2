@@ -1,18 +1,82 @@
+"""Circular regression.
+
+- :func:`circ_lm` — classical parametric circular regression: circular response
+  on linear covariates (von Mises), circular on circular, and linear on circular
+  (harmonic), selected by ``type``. Returns a :class:`CircLM`.
+- :func:`circ_gam` — penalized-smooth distributional circular regression via
+  ``hea.models.gam``. Returns a :class:`CircGAM`.
+
+Both result objects expose the underlying fit directly (``CircGAM`` *is* the hea
+gam, reclassed in place; ``CircLM`` carries the estimates as attributes and as
+mapping keys, delegating the lc leg's full interface to its wrapped ``lm``) and
+add a shared circular-diagnostic surface:
+
+- ``.summary()`` — the regression tables, in the R ``print.circ_lm`` /
+  ``summary.gam`` style shared with the circlss sibling package (prints; returns
+  ``None``).
+- ``.circ_resid(type=...)`` — circular residuals: ``"quantile"`` (analytic PIT),
+  ``"deviance"``, ``"angular"``, ``"pearson"``.
+- ``.circ_check(which=...)`` — the diagnostic-panel grid (rose, observed-vs-
+  fitted, residual-vs-covariate, quantile-residual Q-Q with the Watson U² test,
+  and the opt-in deviance/influence panels) + a printed goodness-of-fit table;
+  returns the matplotlib Figure.
+- ``.circ_plot(view="flat"|"geometry"|"both")`` — the effect display: one panel
+  per modelled parameter, and the fitted location curve on its natural surface
+  (cylinder for circular–linear, torus for circular–circular, upright can for
+  linear–circular).
+"""
+
 import re
 import warnings
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import List, Tuple
 
 import numpy as np
-import pandas as pd
 import polars as pl
-from hea import lm as _hea_lm
-from scipy.linalg import lstsq
-from scipy.special import i0e
-from scipy.stats import chi2, norm, t as student_t
+from hea.formula import prepare_design
+from hea.models import bam, gam, lm
+from scipy.special import i0e, ive
+from scipy.stats import chi2, norm
 
-from .utils import A1, A1inv, significance_code
+# Circular families for circ_gam's family resolution.
+from .distributions import (
+    CircularLL,
+    _circular_family,
+    ajplss,
+    cardlss,
+    cartlss,
+    ibslss,
+    jplss,
+    kjlss,
+    pnlss,
+    ssjplss,
+    vmftlss,
+    vmlss,
+    wclss,
+    wnlss,
+)
+from .utils import A1, A1inv, A1prime, significance_code
 
-__all__ = ["CLRegression", "CCRegression", "LCRegression"]
+__all__ = ["circ_lm", "circ_gam", "circ_bam", "CircLM", "CircGAM", "CircBAM"]
+
+
+# --------------------------------------------------------------------------- #
+# shared helpers
+# --------------------------------------------------------------------------- #
+def _to_polars(data) -> "pl.DataFrame":
+    """Coerce a DataFrame to polars.
+
+    Polars frames pass through; pandas frames are accepted as a soft
+    convenience and converted via ``pl.from_pandas`` (which imports pandas
+    lazily — pandas is never a hard dependency, since a pandas input can only
+    exist if pandas is already installed).
+    """
+    if isinstance(data, pl.DataFrame):
+        return data
+    if type(data).__module__.startswith("pandas"):
+        return pl.from_pandas(data)
+    raise TypeError(
+        f"`data` must be a polars (or pandas) DataFrame; got {type(data).__name__}"
+    )
 
 
 def _safe_solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -29,1673 +93,2591 @@ def _safe_inverse(matrix: np.ndarray) -> np.ndarray:
         return np.linalg.pinv(matrix)
 
 
-class CLRegression:
-    """
-    Circular-Linear Regression.
+def _ravel(v) -> np.ndarray:
+    """Flatten an ``hea`` output (polars frame or ndarray) to a 1-D float array."""
+    if isinstance(v, pl.DataFrame):
+        return v.to_numpy().ravel()
+    return np.asarray(v, dtype=float).ravel()
 
-    Fits a circular response to linear predictors using iterative optimization.
+
+# A smooth term — s()/te()/ti()/t2(), mgcv's smooth constructors — routes a fit
+# to circ_gam (penalized REML/GCV smooths); circ_lm is parametric-only and
+# rejects it. The ``\b`` keeps the trailing ``s(`` of ``cos(``/``sin(`` from
+# matching the ``s`` smooth constructor (no word boundary between ``o`` and ``s``).
+_SMOOTH_RE = re.compile(r"\b(?:s|te|ti|t2)\s*\(")
+
+
+def _has_smooth(formula: str) -> bool:
+    """True if the formula RHS contains a smooth term (→ circ_gam)."""
+    rhs = formula.split("~", 1)[1] if "~" in formula else formula
+    return bool(_SMOOTH_RE.search(rhs))
+
+
+# Cyclic smooth bases (mgcv): bs='cc' (cyclic cubic) / bs='cp' (cyclic p-spline).
+# Their boundary knots set the *period*; for circular predictors that is 2π, so
+# circ_gam supplies it by default (mgcv otherwise defaults cyclic knots to the
+# data range, collapsing f(0)=f(period) for angles).
+_SMOOTH_TERM_RE = re.compile(r"\b(?:s|te|ti|t2)\s*\(([^)]*)\)")
+_CYCLIC_BS_RE = re.compile(r"""bs\s*=\s*['"](?:cc|cp)['"]""")
+_TERM_VAR_RE = re.compile(r"\s*([^\W\d_]\w*)")
+
+
+def _cyclic_smooth_vars(rhs: str) -> List[str]:
+    """Variables of cyclic smooths (``bs='cc'``/``'cp'``) in a formula RHS."""
+    out = []
+    for m in _SMOOTH_TERM_RE.finditer(rhs):
+        body = m.group(1)
+        if _CYCLIC_BS_RE.search(body):
+            vm = _TERM_VAR_RE.match(body)
+            if vm:
+                out.append(vm.group(1))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# circ_lm — classical (parametric) circular regression
+# --------------------------------------------------------------------------- #
+def circ_lm(
+    formula, data, type="cl", order=1, init=None, tol=1e-8, maxit=100, verbose=False
+):
+    """Classical (parametric) circular regression.
+
+    ``type`` selects the fit (hyphenated spellings such as ``"c-l"`` accepted):
+
+    - ``"cl"`` circular response ~ linear covariate(s): the Fisher & Lee (1992)
+      von Mises regression by Green's (1984) IRLS, with the mean / kappa / mixed
+      concentration extensions of Fisher (1993) §6.4. The mean direction is
+      ``μ_i = μ₀ + 2·atan(x_iᵀβ)``. A one- or two-formula list selects the
+      sub-model: ``"θ ~ x"`` (≡ ``["θ ~ x", "~ 1"]``) models μ with constant κ;
+      ``["θ ~ 1", "~ z"]`` models log κ with constant μ; ``["θ ~ x", "~ x"]`` is
+      the mixed model (μ and κ share one design).
+    - ``"cc"`` circular ~ circular: the Sarma & Jammalamadaka (1993) harmonic
+      least-squares fit of cos θ, sin θ on a degree-``order`` trigonometric
+      polynomial of the angular covariate, with the higher-order significance
+      test.
+    - ``"lc"`` linear ~ circular: an ordinary-least-squares fit of a linear
+      response on the angular harmonics. Write the terms in the formula
+      (``y ~ cos(θ) + sin(θ) + sin(2*θ)``); ``order`` is not used here.
+
+    A smooth term (``s()``/``te()``/…) raises, pointing to :func:`circ_gam`,
+    which also covers penalized smooths and other response families.
 
     Parameters
     ----------
-    formula : str, optional
-        A formula string like 'θ ~ x1 + x2 + x3' specifying the model.
-    data : pd.DataFrame, optional
-        A pandas DataFrame containing the response and predictors.
-    theta : np.ndarray, optional
-        A numpy array of circular response values in radians.
-    X : np.ndarray, optional
-        A numpy array of predictor values.
-    model_type : str, optional
-        Type of model to fit. Must be one of 'mean', 'kappa', or 'mixed'.
+    formula : str or list of str
+        A formula ``"y ~ x"``, or (``type="cl"``) a one/two-formula list
+        ``[μ-formula, logκ-formula]``. The first formula names the response.
+    data : polars.DataFrame
+        A polars (or pandas) DataFrame holding the response and covariates.
+    type : {"cl", "cc", "lc"}, optional
+        Which classical fit (default ``"cl"``). Hyphenated ``"c-l"``/``"c-c"``/
+        ``"l-c"`` are accepted.
+    order : int, optional
+        Trigonometric-polynomial order for ``"cc"`` (number of harmonics of the
+        angular predictor). Ignored for ``"cl"`` and ``"lc"``.
+    init : array-like, optional
+        Starting values for the mean-direction coefficients (``"cl"`` only);
+        defaults to zero.
+    tol, maxit, verbose : optional
+        IRLS convergence tolerance, iteration cap, and per-iteration logging
+        (``"cl"`` only).
 
-        - 'mean': Fit a model for the mean direction.
-        - 'kappa': Fit a model for the concentration parameter.
-        - 'mixed': Fit a mixed circular-linear model.
-
-    beta0 : np.ndarray, optional
-        Initial values for the beta coefficients.
-    alpha0 : float, optional
-        Initial value for the intercept.
-    gamma0 : np.ndarray, optional
-        Initial values for the gamma coefficients.
-    tol : float, optional
-        Convergence tolerance for the optimization.
-    max_iter : int, optional
-        Maximum number of iterations for the optimization.
-    verbose : bool, optional
-        Whether to print optimization progress.
-
-    Attributes
-    ----------
-    result : dict
-        A dictionary containing the estimated coefficients and other statistics.
-
-        - beta : np.ndarray
-            Estimated beta coefficients for the mean direction. Used by
-            'mean' and 'mixed' models; zero for 'kappa'.
-        - alpha : float
-            Estimated intercept for the concentration parameter.
-        - gamma : np.ndarray
-            Estimated coefficients for the concentration parameter.
-        - mu : float
-            Estimated mean direction of the circular response.
-        - kappa : float or np.ndarray
-            Concentration parameter. Scalar for 'mean'; n-element array
-            of per-observation values κ_i = exp(α + X_iᵀγ) for 'kappa'
-            and 'mixed'.
-        - log_likelihood : float
-            Log-likelihood of the model.
-
-    Methods
+    Returns
     -------
-    summary()
-        Print the coefficient table, mean direction, concentration, and fit
-        metrics.
-    predict(X_new)
-        Predict mean direction at new X (constant μ for ``model_type='kappa'``).
-    predict_kappa(X_new)
-        Predict per-observation κ̂(X) for ``model_type`` in
-        ``{'kappa', 'mixed'}``.
-    plot(figsize=None, n_curve=200, axes=None)
-        Two-panel diagnostic figure (fit overlay / κ curve / residuals,
-        depending on ``model_type`` and dimensionality).
-    AIC(), BIC()
-        Information criteria for the fitted model.
-
-    Notes
-    -----
-    The 'mean' branch is ported from ``lm.circular.cl`` in the ``circular``
-    R package (Agostinelli & Lund); SE formulas follow Fisher (1993)
-    eq. 6.62-6.64. The 'kappa' and 'mixed' branches extend that framework
-    to model the concentration as a log-linear function of predictors,
-    following Fisher (1993) §6.4.3-§6.4.4 (eq. 6.81, 6.82, 6.86, 6.87).
-    Per-observation SE for κ̂_i uses the delta method on (α̂, γ̂).
+    CircLM
+        A circular-regression result object. Every estimate is reachable both as
+        an attribute and as a mapping key (``m.mu`` or ``m["mu"]``, ``m.kappa``
+        / ``m["kappa"]`` …); the ``"cc"`` result carries the underlying
+        ``cos_lm`` / ``sin_lm`` fits, and the ``"lc"`` result wraps the
+        ``hea.models.lm`` and delegates its full interface (``bhat``, ``plot``,
+        ``predict``, ``ci_bhat`` …). Adds ``summary``, ``predict``, ``coef``,
+        ``logLik`` and the circular ``circ_check`` / ``circ_resid``.
 
     References
     ----------
-    - Fisher, N. I. (1993). Statistical analysis of circular data. Cambridge University Press.
-    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2014) Circular Statistics in R. Oxford University Press.
+    - Fisher, N. I. & Lee, A. J. (1992). Regression models for an angular
+      response. Biometrics 48, 665-677.
+    - Fisher, N. I. (1993). Statistical Analysis of Circular Data. Cambridge
+      University Press.
+    - Sarma, Y. & Jammalamadaka, S. R. (1993). Circular regression. In
+      Statistical Sciences and Data Analysis, 109-128. VSP, Utrecht.
+    - Pewsey, A., Neuhäuser, M. & Ruxton, G. D. (2013). Circular Statistics in
+      R. Oxford University Press.
     """
+    key = _circ_lm_type(type)
+    formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
+    if not formulas or not all(isinstance(f, str) for f in formulas):
+        raise ValueError("`formula` must be a formula string or a list of them.")
+    _circ_lm_no_smooth(formulas)
+    df = _to_polars(data)
 
-    def __init__(
-        self,
-        formula: Optional[str] = None,
-        data: Optional[pd.DataFrame] = None,
-        theta: Optional[np.ndarray] = None,
-        X: Optional[np.ndarray] = None,
-        model_type: str = "mixed",
-        beta0: Union[np.ndarray, None] = None,
-        alpha0: Union[float, None] = None,
-        gamma0: Union[np.ndarray, None] = None,
-        tol: float = 1e-8,
-        max_iter: int = 100,
-        verbose: bool = False,
-    ):
-        self.verbose = verbose
-        self.tol = tol
-        self.max_iter = max_iter
-        self.model_type = model_type
+    if key == "cl":
+        fields = _circ_lm_cl(formulas, df, init, tol, int(maxit), verbose)
+    elif key == "cc":
+        fields = _circ_lm_cc(formulas, df, int(order))
+    else:
+        fields = _circ_lm_lc(formulas, df)
+    return CircLM(key, fields)
 
-        # Parse inputs
-        if formula and data is not None:
-            theta_arr, X_arr, feature_names = self._parse_formula(formula, data)
-        elif theta is not None and X is not None:
-            feature_names = None
-            theta_arr, X_arr = theta, X
-        else:
-            raise ValueError("Provide either a formula + data or theta and X.")
 
-        self.theta, self.X = self._prepare_design(theta_arr, X_arr)
-        if feature_names is None:
-            self.feature_names = [f"x{i}" for i in range(self.X.shape[1])]
-        else:
-            self.feature_names = feature_names
+# --- circ_lm internals ------------------------------------------------------ #
+def _circ_lm_type(type) -> str:
+    """Normalize the leg selector: ``'cl'``/``'c-l'``/``'C-L'`` → ``'cl'`` …"""
+    key = str(type).strip().lower().replace("-", "")
+    if key not in ("cl", "cc", "lc"):
+        raise ValueError(
+            "type must be one of 'cl'/'c-l' (circular ~ linear), 'cc'/'c-c' "
+            "(circular ~ circular), or 'lc'/'l-c' (linear ~ circular); got "
+            f"{type!r}."
+        )
+    return key
 
-        # Validate model type
-        if model_type not in ["mean", "kappa", "mixed"]:
-            raise ValueError("Model type must be 'mean', 'kappa', or 'mixed'.")
 
-        # Initialize parameters
-        p = self.X.shape[1]
-        self.alpha = float(alpha0) if alpha0 is not None else 0.0
-        self.beta = self._coerce_vector(beta0, p, name="beta")
-        self.gamma = self._coerce_vector(gamma0, p, name="gamma")
-
-        # Fit the model
-        self.result = self._fit()
-
-    @staticmethod
-    def _coerce_vector(vec: Optional[np.ndarray], length: int, name: str) -> np.ndarray:
-        if vec is None:
-            return np.zeros(length, dtype=float)
-        arr = np.asarray(vec, dtype=float).reshape(-1)
-        if arr.size != length:
-            raise ValueError(f"Initial {name} must have length {length} (got {arr.size}).")
-        if not np.all(np.isfinite(arr)):
-            raise ValueError(f"Initial {name} contains non-finite values.")
-        return arr
-
-    @staticmethod
-    def _prepare_design(theta: Iterable[float], X: Iterable[Iterable[float]]) -> Tuple[np.ndarray, np.ndarray]:
-        theta_arr = np.asarray(theta, dtype=float).reshape(-1)
-        if theta_arr.size == 0:
-            raise ValueError("`theta` must contain at least one observation.")
-        if not np.all(np.isfinite(theta_arr)):
-            raise ValueError("`theta` contains non-finite values.")
-
-        X_arr = np.asarray(X, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr[:, None]
-        if X_arr.ndim != 2:
-            raise ValueError("`X` must be convertible to a 2D numeric array.")
-        if X_arr.shape[0] != theta_arr.size:
-            raise ValueError("`theta` and `X` must have matching numbers of rows.")
-        if not np.all(np.isfinite(X_arr)):
-            raise ValueError("`X` contains non-finite values.")
-        return theta_arr, X_arr
-
-    def _parse_formula(
-        self, formula: str, data: pd.DataFrame
-    ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        parts = formula.split("~")
-        if len(parts) != 2:
-            raise ValueError(
-                f"Formula must contain exactly one '~'; got: {formula!r}"
-            )
-        theta_col, x_cols = parts
-        theta_series = data[theta_col.strip()]
-        if theta_series.isnull().any():
-            raise ValueError("Response column contains missing values.")
-        theta = theta_series.to_numpy()
-        x_cols = [col.strip() for col in x_cols.split("+") if col.strip()]
-        if not x_cols:
-            raise ValueError(f"No predictors found in formula: {formula!r}")
-        X_df = data[x_cols]
-        if X_df.isnull().any().any():
-            raise ValueError("Predictor columns contain missing values.")
-        X = X_df.to_numpy()
-        return theta, X, x_cols
-
-    @staticmethod
-    def _A1_prime(kappa: np.ndarray) -> np.ndarray:
-        a1 = A1(kappa)
-        return 1 - a1 / kappa - a1**2
-
-    @staticmethod
-    def _safe_exp_kappa(eta: np.ndarray) -> np.ndarray:
-        # Bound the log-concentration to avoid exp overflow during iterations.
-        # exp(±50) ≈ {5e21, 2e-22}, comfortably finite.
-        return np.exp(np.clip(eta, -50.0, 50.0))
-
-    @staticmethod
-    def _log_i0(kappa: np.ndarray) -> np.ndarray:
-        # log I_0(κ) computed via the exponentially scaled Bessel to stay finite
-        # for large κ (raw i0 overflows around κ ≈ 710).
-        return np.asarray(kappa) + np.log(i0e(kappa))
-
-    @staticmethod
-    def _delta_se_kappa(
-        kappa: np.ndarray, X1: np.ndarray, cov_alpha_gamma: np.ndarray
-    ) -> np.ndarray:
-        # κ_i = exp(α + X_iᵀ γ); ∂κ_i/∂(α,γ) = κ_i · z_i with z_i = [1, X_i].
-        # Var(κ_i) ≈ κ_i² · z_iᵀ Σ z_i (delta method).
-        z_cov = X1 @ cov_alpha_gamma
-        quad = np.einsum("ij,ij->i", z_cov, X1)
-        var_kappa = (kappa**2) * np.clip(quad, 0.0, None)
-        return np.sqrt(var_kappa)
-
-    def _fit(self):
-        theta = self.theta
-        n = len(theta)
-        X = self.X
-        X1 = np.column_stack((np.ones(n), X))  # Add intercept
-        beta, alpha, gamma = self.beta, self.alpha, self.gamma
-        diff = self.tol + 1
-        log_likelihood_old = -np.inf
-
-        # Tiny ridge added to the normal-equation LHS to keep solves finite
-        # when XtX is near-singular. Hoisted out of the loop body.
-        ridge_X = 1e-8 * np.eye(X.shape[1])
-        ridge_X1 = 1e-8 * np.eye(X1.shape[1])
-
-        for iter_count in range(self.max_iter):
-            if self.model_type == "mean":
-                # Step 1: Compute mu and kappa
-                raw_deviation = theta - 2 * np.arctan(X @ beta)
-                S = np.mean(np.sin(raw_deviation))
-                C = np.mean(np.cos(raw_deviation))
-                R = np.hypot(S, C)
-                kappa = float(A1inv(R))
-                mu = np.arctan2(S, C)
-
-                # Step 2: Update beta
-                denom = 1 + (X @ beta) ** 2
-                G = 2 * X / denom[:, None]
-                weight = float(kappa * A1(kappa))
-                u = kappa * np.sin(raw_deviation - mu)
-                XtX = G.T @ G
-                rhs = G.T @ u + weight * XtX @ beta
-                mat = weight * XtX + ridge_X
-                beta_new = _safe_solve(mat, rhs)
-                alpha_new, gamma_new = alpha, gamma
-
-                # Log-likelihood
-                log_likelihood = -n * float(self._log_i0(kappa)) + kappa * np.sum(
-                    np.cos(raw_deviation - mu)
-                )
-
-            elif self.model_type == "kappa":
-                # Step 1: Compute mu and kappa
-                kappa = self._safe_exp_kappa(alpha + X @ gamma)
-                S = float(np.sum(kappa * np.sin(theta)))
-                C = float(np.sum(kappa * np.cos(theta)))
-                mu = np.arctan2(S, C)
-
-                # Step 2: Update gamma
-                a1_kappa = A1(kappa)
-                # Floor A1'(κ) to keep the IRLS step finite when some κ_i are
-                # very large (A1'(κ) → 0 as κ → ∞ ⇒ y_gamma blows up).
-                a1_prime = np.maximum(self._A1_prime(kappa), 1e-12)
-                residuals_gamma = np.cos(theta - mu) - a1_kappa
-                y_gamma = residuals_gamma / (a1_prime * kappa)
-                weights = (kappa**2) * a1_prime
-                XtWX = X1.T @ (weights[:, None] * X1)
-                XtWy = X1.T @ (weights * y_gamma)
-                update = _safe_solve(XtWX + ridge_X1, XtWy)
-                alpha_new = alpha + update[0]
-                gamma_new = gamma + update[1:]
-                beta_new = beta
-                # Log-likelihood
-                log_likelihood = -np.sum(self._log_i0(kappa)) + np.sum(
-                    kappa * np.cos(theta - mu)
-                )
-
-            elif self.model_type == "mixed":
-                # Step 1: Compute mu and kappa
-                kappa = self._safe_exp_kappa(alpha + X @ gamma)
-                raw_deviation = theta - 2 * np.arctan(X @ beta)
-                S = np.sum(kappa * np.sin(raw_deviation))
-                C = np.sum(kappa * np.cos(raw_deviation))
-                mu = np.arctan2(S, C)
-
-                # Step 2: Update beta — Fisher scoring step from current β.
-                # Score s(β) = Gᵀ (κ ⊙ sin(rdev − μ)); info I(β) = Gᵀ diag(κ A1(κ)) G.
-                # β_new solves I β_new = I β + s.
-                denom = 1 + (X @ beta) ** 2
-                G = 2 * X / denom[:, None]
-                weights_beta = kappa * A1(kappa)
-                XtWX_beta = G.T @ (weights_beta[:, None] * G)
-                u_beta = kappa * np.sin(raw_deviation - mu)
-                rhs_beta = G.T @ u_beta + XtWX_beta @ beta
-                beta_new = _safe_solve(XtWX_beta + ridge_X, rhs_beta)
-
-                # Step 3: Update gamma
-                a1_kappa = A1(kappa)
-                a1_prime = np.maximum(self._A1_prime(kappa), 1e-12)
-                residuals_gamma = np.cos(raw_deviation - mu) - a1_kappa
-                y_gamma = residuals_gamma / (a1_prime * kappa)
-                weights_gamma = (kappa**2) * a1_prime
-                XtWX = X1.T @ (weights_gamma[:, None] * X1)
-                XtWy = X1.T @ (weights_gamma * y_gamma)
-                update = _safe_solve(XtWX + ridge_X1, XtWy)
-                alpha_new = alpha + update[0]
-                gamma_new = gamma + update[1:]
-
-                # Log-likelihood
-                log_likelihood = -np.sum(self._log_i0(kappa)) + np.sum(
-                    kappa * np.cos(raw_deviation - mu)
-                )
-
-            # Convergence check
-            diff = np.abs(log_likelihood - log_likelihood_old)
-            if self.verbose:
-                print(
-                    f"Iteration {iter_count + 1}: Log-Likelihood = {log_likelihood:.5f}, diff = {diff:.2e}"
-                )
-            if diff < self.tol:
-                break
-
-            beta, alpha, gamma = beta_new, alpha_new, gamma_new
-            log_likelihood_old = log_likelihood
-        else:
-            warnings.warn(
-                f"CLRegression did not converge in {self.max_iter} iterations "
-                f"(last diff={diff:.2e}, tol={self.tol:.2e}).",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-
-        result = {
-            "beta": beta,
-            "alpha": alpha,
-            "gamma": gamma,
-            "mu": mu,
-            "kappa": kappa,
-            "log_likelihood": log_likelihood,
+def _circ_lm_no_smooth(formulas) -> None:
+    """Reject mgcv smooth constructors on any RHS — circ_lm is parametric only."""
+    bad = sorted(
+        {
+            m.group(0).split("(")[0].strip()
+            for f in formulas
+            for m in _SMOOTH_RE.finditer(f.split("~", 1)[1] if "~" in f else f)
         }
+    )
+    if bad:
+        terms = ", ".join(f"{b}()" for b in bad)
+        raise ValueError(
+            f"circ_lm fits parametric models only; smooth term(s) {terms} are "
+            "not allowed. Use circ_gam for penalized smooths."
+        )
 
-        se_result = self._compute_standard_errors(result)
 
-        result.update(se_result)
+def _circ_lm_design(formula, data, response) -> Tuple[np.ndarray, List[str]]:
+    """Intercept-free design matrix for the RHS of ``formula``, parsed by hea
+    (so ``cos()``/``sin()``/``harmonic()`` expressions and bare columns both
+    work). ``~ 1`` / ``~`` gives a 0-column design. ``response`` names the LHS
+    column for the parser (a dummy is added when it is not present, e.g. at
+    predict time). Returns ``(design (n × p), column names)``.
+    """
+    rhs = (formula.split("~", 1)[1] if "~" in formula else formula).strip()
+    if rhs in ("", "1"):
+        return np.empty((data.height, 0), dtype=float), []
+    if response not in data.columns:
+        data = data.with_columns(pl.lit(0.0).alias(response))
+    design = prepare_design(f"{response} ~ 0 + {rhs}", data, na_action="pass")
+    x = design.X
+    return x.to_numpy().astype(float), list(x.columns)
 
-        return result
 
-    def _compute_standard_errors(self, result):
-        """
-        Compute standard errors for the parameters based on the fitted model.
-        """
-        theta = self.theta
-        X = self.X
-        n = len(theta)
-        kappa = result["kappa"]
-        beta = result["beta"]
+def _circ_lm_one_predictor(formula, data):
+    """Resolve the single angular predictor of a ``"y ~ x"`` formula (cc).
 
-        se_results = {}
+    Takes the RHS identifiers that are data columns and requires exactly one.
+    Rows with a non-finite response or predictor are dropped. Returns
+    ``(response, var, y, x, n)``.
+    """
+    if "~" not in formula:
+        raise ValueError("the formula must name the response, e.g. 'theta ~ phi'.")
+    resp, rhs = (s.strip() for s in formula.split("~", 1))
+    if not resp:
+        raise ValueError("the formula must name the response, e.g. 'theta ~ phi'.")
+    cols = set(data.columns)
+    if resp not in cols:
+        raise ValueError(f"unknown response {resp!r}; columns are {sorted(cols)}.")
+    seen, vars_ = set(), []
+    for tok in re.findall(r"\w+", rhs):
+        if tok in cols and tok not in seen:
+            seen.add(tok)
+            vars_.append(tok)
+    if len(vars_) != 1:
+        found = ", ".join(repr(v) for v in vars_) if vars_ else "none"
+        raise ValueError(
+            f"circ_lm(type='cc') takes exactly one angular predictor; got {found}."
+        )
+    var = vars_[0]
+    y = np.asarray(data[resp].to_numpy(), dtype=float)
+    x = np.asarray(data[var].to_numpy(), dtype=float)
+    keep = np.isfinite(y) & np.isfinite(x)
+    return resp, var, y[keep], x[keep], int(keep.sum())
 
-        if self.model_type == "mean":
-            # Mean Direction Model
-            denom = 1 + (X @ beta) ** 2
-            G = 2 * X / denom[:, None]
-            weight = float(kappa * A1(kappa))
-            XtAX = weight * (G.T @ G)
-            cov_beta = _safe_inverse(XtAX)
-            se_beta = np.sqrt(np.diag(cov_beta))
 
-            denom_mu = max((n - X.shape[1]) * kappa * A1(kappa), 1e-12)
-            se_mu = 1 / np.sqrt(denom_mu)
-            denom_kappa = n * (1 - A1(kappa) ** 2 - A1(kappa) / kappa)
-            se_kappa = np.sqrt(1 / max(denom_kappa, 1e-12))
+def _circ_lm_rhs_vars(formulas, data) -> List[str]:
+    """The data-column identifiers on the RHS of the given formulas, in
+    first-seen order (the raw covariates, distinct from hea's ``cos(x)`` design
+    terms). One value ⇒ the fit's single covariate, used by the plot/check
+    geometry views and the residual-vs-covariate panel."""
+    cols = set(data.columns)
+    seen, out = set(), []
+    for f in formulas:
+        rhs = f.split("~", 1)[1] if "~" in f else f
+        for tok in re.findall(r"\w+", rhs):
+            if tok in cols and tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+    return out
 
-            se_results.update(
-                {
-                    "se_beta": se_beta,
-                    "se_mu": se_mu,
-                    "se_kappa": se_kappa,
-                }
+
+# === cl — Fisher-Lee von Mises regression (mean / kappa / mixed) ============ #
+def _circ_lm_cl(formulas, data, init, tol, maxit, verbose) -> dict:
+    if len(formulas) > 2:
+        raise ValueError(
+            "circ_lm(type='cl') takes at most two formulas: "
+            "[mu-formula, logkappa-formula]."
+        )
+    mu_f = formulas[0]
+    if "~" not in mu_f or not mu_f.split("~", 1)[0].strip():
+        raise ValueError("the first formula must name the response, e.g. 'theta ~ x'.")
+    kappa_f = formulas[1] if len(formulas) == 2 else "~ 1"
+    response = mu_f.split("~", 1)[0].strip()
+    if response not in set(data.columns):
+        raise ValueError(
+            f"unknown response {response!r}; columns are {sorted(data.columns)}."
+        )
+    theta = np.mod(np.asarray(data[response].to_numpy(), dtype=float), 2.0 * np.pi)
+    x_mu, mu_terms = _circ_lm_design(mu_f, data, response)
+    x_ka, kappa_terms = _circ_lm_design(kappa_f, data, response)
+    has_mu, has_ka = len(mu_terms) > 0, len(kappa_terms) > 0
+    if has_mu and not has_ka:
+        model = "mean"
+    elif has_ka and not has_mu:
+        model = "kappa"
+    elif has_mu and has_ka:
+        model = "mixed"
+    else:
+        raise ValueError("no predictors in either formula; nothing to regress.")
+    if model == "mixed" and mu_terms != kappa_terms:
+        raise ValueError(
+            "the fisher-lee fitter ties mu and kappa to one shared design, but "
+            f"mu uses {mu_terms} and kappa uses {kappa_terms}. Use circ_gam for "
+            "different covariates per predictor."
+        )
+    x = x_ka if model == "kappa" else x_mu
+    fit = _circ_lm_cl_fit(theta, x, model, init, tol, maxit, verbose)
+
+    n = theta.size
+    p = x.shape[1]
+    npar = {"mean": p, "kappa": 1 + p, "mixed": 1 + 2 * p}[model]
+    if model == "kappa":
+        fitted = np.full(n, np.mod(fit["mu"], 2.0 * np.pi))
+    else:
+        fitted = np.mod(fit["mu"] + 2.0 * np.arctan(x @ fit["beta"]), 2.0 * np.pi)
+    # plotting/diagnostic frame: the raw covariate column(s) and the (mod 2π)
+    # response, so circ_plot can overlay the data and bound the covariate grid,
+    # and circ_check can place the residual-vs-covariate panel.
+    rhs_vars = _circ_lm_rhs_vars([mu_f, kappa_f], data)
+    frame = pl.DataFrame(
+        {
+            **{v: np.asarray(data[v].to_numpy(), dtype=float) for v in rhs_vars},
+            response: theta,
+        }
+    )
+    fit.update(
+        {
+            "model": model,
+            "n": n,
+            "npar": npar,
+            "aic": -2.0 * fit["loglik"] + 2.0 * npar,
+            "bic": -2.0 * fit["loglik"] + np.log(n) * npar,
+            "response": response,
+            "mu_formula": mu_f,
+            "kappa_formula": kappa_f,
+            "mu_terms": mu_terms,
+            "kappa_terms": kappa_terms,
+            "fitted": fitted,
+            "residuals": np.angle(np.exp(1j * (theta - fitted))),
+            "frame": frame,
+            "covariate": rhs_vars[0] if len(rhs_vars) == 1 else None,
+        }
+    )
+    return fit
+
+
+def _circ_lm_cl_fit(theta, x, model, init, tol, maxit, verbose) -> dict:
+    """Green (1984) IRLS for the von Mises MLE. Mean: ``mu_i = mu0 +
+    2*atan(X beta)``, constant kappa. Kappa: ``log kappa_i = alpha + X gamma``,
+    constant mu. Mixed: both. Scores and expected-information weights follow
+    Fisher (1993) §6.4. The tan-half link is inlined (``linkinv = 2*atan``,
+    ``mu_eta = 2/(1+eta^2)``).
+    """
+    n = theta.size
+    p = x.shape[1]
+    x1 = np.column_stack((np.ones(n), x))
+    ridge_x = 1e-8 * np.eye(p)
+    ridge_1 = 1e-8 * np.eye(p + 1)
+
+    def log_i0(k):
+        # log I0(k) via the exponentially scaled Bessel (raw i0 overflows ~710).
+        return k + np.log(i0e(k))
+
+    if init is not None and model in ("mean", "mixed"):
+        beta = np.resize(np.asarray(init, dtype=float).ravel(), p).astype(float)
+    else:
+        beta = np.zeros(p)
+    gamma = np.zeros(p)
+    alpha = 0.0
+    mu, kappa = 0.0, 1.0
+    ll = ll_old = -np.inf
+    diff = tol + 1.0
+    it = 0
+
+    for it in range(1, maxit + 1):
+        if model == "mean":
+            eta = x @ beta
+            rdev = theta - 2.0 * np.arctan(eta)
+            s, c = np.mean(np.sin(rdev)), np.mean(np.cos(rdev))
+            mu = np.arctan2(s, c)
+            kappa = float(A1inv(np.hypot(s, c)))
+            g = (2.0 / (1.0 + eta**2))[:, None] * x
+            w = kappa * A1(kappa)
+            u = kappa * np.sin(rdev - mu)
+            gtg = g.T @ g
+            beta = _safe_solve(w * gtg + ridge_x, g.T @ u + w * gtg @ beta)
+            ll = -n * log_i0(kappa) + kappa * np.sum(np.cos(rdev - mu))
+
+        elif model == "kappa":
+            kappa = np.exp(np.clip(alpha + x @ gamma, -50.0, 50.0))
+            mu = np.arctan2(
+                np.sum(kappa * np.sin(theta)), np.sum(kappa * np.cos(theta))
             )
+            a1p = np.maximum(A1prime(kappa), 1e-12)
+            y = (np.cos(theta - mu) - A1(kappa)) / (a1p * kappa)
+            w = kappa**2 * a1p
+            upd = _safe_solve(x1.T @ (w[:, None] * x1) + ridge_1, x1.T @ (w * y))
+            alpha = alpha + upd[0]
+            gamma = gamma + upd[1:]
+            ll = -np.sum(log_i0(kappa)) + np.sum(kappa * np.cos(theta - mu))
 
-        elif self.model_type == "kappa":
-            # Concentration Parameter Model
-            X1 = np.column_stack((np.ones(n), X))  # Add intercept
-            weights = (kappa**2) * self._A1_prime(kappa)
-            XtWX = X1.T @ (weights[:, None] * X1)
-
-            cov_gamma_alpha = _safe_inverse(XtWX)
-            se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
-            se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
-
-            # Fisher (1993), eq. 6.82: σ̂_μ = (Σ κ̂_i A1(κ̂_i) − 1/2)^(−1/2).
-            denom_mu = max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12)
-            se_mu = 1 / np.sqrt(denom_mu)
-
-            se_kappa = self._delta_se_kappa(kappa, X1, cov_gamma_alpha)
-
-            se_results.update(
-                {
-                    "se_alpha": se_alpha,
-                    "se_gamma": se_gamma,
-                    "se_mu": se_mu,
-                    "se_kappa": se_kappa,
-                }
+        else:  # mixed
+            kappa = np.exp(np.clip(alpha + x @ gamma, -50.0, 50.0))
+            eta = x @ beta
+            rdev = theta - 2.0 * np.arctan(eta)
+            mu = np.arctan2(np.sum(kappa * np.sin(rdev)), np.sum(kappa * np.cos(rdev)))
+            g = (2.0 / (1.0 + eta**2))[:, None] * x
+            wb = kappa * A1(kappa)
+            gtwg = g.T @ (wb[:, None] * g)
+            beta = _safe_solve(
+                gtwg + ridge_x, g.T @ (kappa * np.sin(rdev - mu)) + gtwg @ beta
             )
+            a1p = np.maximum(A1prime(kappa), 1e-12)
+            y = (np.cos(rdev - mu) - A1(kappa)) / (a1p * kappa)
+            wg = kappa**2 * a1p
+            upd = _safe_solve(x1.T @ (wg[:, None] * x1) + ridge_1, x1.T @ (wg * y))
+            alpha = alpha + upd[0]
+            gamma = gamma + upd[1:]
+            ll = -np.sum(log_i0(kappa)) + np.sum(kappa * np.cos(rdev - mu))
 
-        elif self.model_type == "mixed":
-            # Mixed Model
-            denom = 1 + (X @ beta) ** 2
-            G = 2 * X / denom[:, None]
-            weights_beta = kappa * A1(kappa)
-            XtGKGX = G.T @ (weights_beta[:, None] * G)
+        diff = abs(ll - ll_old)
+        if verbose:
+            print(f"iter {it}: logLik = {ll:.6f}, diff = {diff:.2e}")
+        if diff < tol:
+            break
+        ll_old = ll
 
-            cov_beta = _safe_inverse(XtGKGX)
-            se_beta = np.sqrt(np.diag(cov_beta))
+    converged = diff < tol
+    if not converged:
+        warnings.warn(
+            f"circ_lm(type='cl') did not converge in {maxit} iterations "
+            f"(last diff={diff:.2e}, tol={tol:.2e}).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
-            X1 = np.column_stack((np.ones(n), X))  # Add intercept
-            weights_gamma = (kappa**2) * self._A1_prime(kappa)
-            XtWX_gamma = X1.T @ (weights_gamma[:, None] * X1)
+    # mu/kappa/loglik evaluated at the converged coefficients (the loop carries
+    # them one IRLS step behind the final beta/alpha/gamma update).
+    if model == "mean":
+        rdev = theta - 2.0 * np.arctan(x @ beta)
+        s, c = np.mean(np.sin(rdev)), np.mean(np.cos(rdev))
+        mu = np.arctan2(s, c)
+        kappa = float(A1inv(np.hypot(s, c)))
+        ll = -n * log_i0(kappa) + kappa * np.sum(np.cos(rdev - mu))
+    else:
+        kappa = np.exp(np.clip(alpha + x @ gamma, -50.0, 50.0))
+        rdev = theta if model == "kappa" else theta - 2.0 * np.arctan(x @ beta)
+        mu = np.arctan2(np.sum(kappa * np.sin(rdev)), np.sum(kappa * np.cos(rdev)))
+        ll = -np.sum(log_i0(kappa)) + np.sum(kappa * np.cos(rdev - mu))
 
-            cov_gamma_alpha = _safe_inverse(XtWX_gamma)
-            se_alpha = np.sqrt(cov_gamma_alpha[0, 0])
-            se_gamma = np.sqrt(np.diag(cov_gamma_alpha[1:, 1:]))
+    se = _circ_lm_cl_se(theta, x, model, beta, alpha, gamma, kappa, mu)
+    return {
+        "mu": float(mu),
+        "kappa": float(kappa) if np.ndim(kappa) == 0 else kappa,
+        "beta": beta,
+        "alpha": float(alpha),
+        "gamma": gamma,
+        "loglik": float(ll),
+        "iter": it,
+        "converged": bool(converged),
+        **se,
+    }
 
-            # Fisher (1993), eq. 6.82: σ̂_μ = (Σ κ̂_i A1(κ̂_i) − 1/2)^(−1/2).
-            denom_mu = max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12)
-            se_mu = 1 / np.sqrt(denom_mu)
-            se_kappa = self._delta_se_kappa(kappa, X1, cov_gamma_alpha)
-            se_results.update(
-                {
-                    "se_beta": se_beta,
-                    "se_alpha": se_alpha,
-                    "se_gamma": se_gamma,
-                    "se_mu": se_mu,
-                    "se_kappa": se_kappa,
-                }
+
+def _circ_lm_cl_se(theta, x, model, beta, alpha, gamma, kappa, mu) -> dict:
+    """Large-sample SEs from the expected information (Fisher 1993, eq. 6.62-
+    6.64, 6.82). Per-observation kappa_i SE (kappa/mixed) by the delta method
+    on ``(alpha, gamma)``."""
+    n = theta.size
+    p = x.shape[1]
+    x1 = np.column_stack((np.ones(n), x))
+    # Vbeta / Vag are the coefficient covariances the flat-panel delta-method
+    # bands need (G Vbeta Gᵀ for the mean direction; Z Vag Zᵀ on the log-κ scale).
+    out: dict = {
+        "se_beta": None,
+        "se_alpha": None,
+        "se_gamma": None,
+        "Vbeta": None,
+        "Vag": None,
+    }
+    if model == "mean":
+        eta = x @ beta
+        g = (2.0 / (1.0 + eta**2))[:, None] * x
+        w = kappa * A1(kappa)
+        cov_b = _safe_inverse(w * (g.T @ g))
+        out["Vbeta"] = cov_b
+        out["se_beta"] = np.sqrt(np.clip(np.diag(cov_b), 0.0, None))
+        out["se_mu"] = 1.0 / np.sqrt(max((n - p) * w, 1e-12))
+        out["se_kappa"] = float(
+            np.sqrt(1.0 / max(n * (1 - A1(kappa) ** 2 - A1(kappa) / kappa), 1e-12))
+        )
+    else:
+        if model == "mixed":
+            eta = x @ beta
+            g = (2.0 / (1.0 + eta**2))[:, None] * x
+            cov_b = _safe_inverse(g.T @ ((kappa * A1(kappa))[:, None] * g))
+            out["Vbeta"] = cov_b
+            out["se_beta"] = np.sqrt(np.clip(np.diag(cov_b), 0.0, None))
+        w = kappa**2 * A1prime(kappa)
+        cov_ag = _safe_inverse(x1.T @ (w[:, None] * x1))
+        out["Vag"] = cov_ag
+        out["se_alpha"] = float(np.sqrt(max(cov_ag[0, 0], 0.0)))
+        out["se_gamma"] = np.sqrt(np.clip(np.diag(cov_ag)[1:], 0.0, None))
+        out["se_mu"] = 1.0 / np.sqrt(max(float(np.sum(kappa * A1(kappa))) - 0.5, 1e-12))
+        quad = np.einsum("ij,ij->i", x1 @ cov_ag, x1)
+        out["se_kappa"] = kappa * np.sqrt(np.clip(quad, 0.0, None))
+    return out
+
+
+# === cc — Sarma & Jammalamadaka harmonic circular-circular regression ======= #
+def _circ_lm_cc(formulas, data, order) -> dict:
+    if len(formulas) != 1:
+        raise ValueError(
+            "circ_lm(type='cc') takes a single formula, e.g. 'theta ~ phi'."
+        )
+    response, var, y, x, n = _circ_lm_one_predictor(formulas[0], data)
+    x = np.mod(x, 2.0 * np.pi)
+    y = np.mod(y, 2.0 * np.pi)
+    period = 2.0 * np.pi
+    term = f"harmonic({var}, k={order}, period={period})"
+    d = pl.DataFrame({var: x, "_cos_y": np.cos(y), "_sin_y": np.sin(y)})
+    cos_lm = lm(f"_cos_y ~ {term}", d)
+    sin_lm = lm(f"_sin_y ~ {term}", d)
+
+    cos_fit, sin_fit = _ravel(cos_lm.yhat), _ravel(sin_lm.yhat)
+    fitted = np.mod(np.arctan2(sin_fit, cos_fit), 2.0 * np.pi)
+    residuals = np.mod(y - fitted, 2.0 * np.pi)
+    rho = float(np.sqrt((cos_fit @ cos_fit + sin_fit @ sin_fit) / n))
+    a_k = float(np.mean(np.cos(residuals)))
+    if a_k < 0:
+        warnings.warn(
+            "mean residual cosine is negative; residuals anti-align with the fit "
+            "(kappa clamped to 0). Check for misspecification.",
+            UserWarning,
+            stacklevel=3,
+        )
+    kappa = float(A1inv(a_k))
+
+    # Higher-order test (Sarma & Jammalamadaka 1993): do the (order + 1)
+    # harmonics add signal beyond the fitted design? One χ² statistic each for
+    # cos(y), sin(y), using the fitted design's residual projection.
+    xm = np.asarray(cos_lm.X.to_numpy(), dtype=float)
+    w = np.column_stack((np.cos((order + 1) * x), np.sin((order + 1) * x)))
+    im = np.eye(n) - xm @ _safe_inverse(xm.T @ xm) @ xm.T
+    nmat = w @ _safe_inverse(w.T @ im @ w) @ w.T
+    res_c, res_s = _ravel(cos_lm.residuals), _ravel(sin_lm.residuals)
+    adj = max(n - (2 * order + 1), 1)
+    t1 = adj * float(res_c @ nmat @ res_c) / max(float(res_c @ res_c), 1e-12)
+    t2 = adj * float(res_s @ nmat @ res_s) / max(float(res_s @ res_s), 1e-12)
+    p_values = np.array([1.0 - chi2.cdf(t1, 2), 1.0 - chi2.cdf(t2, 2)], dtype=float)
+
+    return {
+        "var": var,
+        "response": response,
+        "order": int(order),
+        "n": n,
+        "coefficients": {
+            "cos": np.asarray(cos_lm.bhat.row(0), dtype=float),
+            "sin": np.asarray(sin_lm.bhat.row(0), dtype=float),
+        },
+        "rho": rho,
+        "A_k": a_k,
+        "kappa": kappa,
+        "fitted": fitted,
+        "residuals": residuals,
+        "p_values": p_values,
+        "cos_lm": cos_lm,
+        "sin_lm": sin_lm,
+        "frame": pl.DataFrame({var: x, response: y}),
+        "covariate": var,
+    }
+
+
+# === lc — harmonic linear-circular regression =============================== #
+_COSSIN_RE = re.compile(r"^(cos|sin)\((.*)\)$")
+
+
+def _clean_harmonic_label(name) -> str:
+    """hea's verbose harmonic design column name → the circlss-style coefficient
+    label (``(Intercept)`` / ``cos1`` / ``sin1`` / …), so the cc coefficient
+    table reads the same in both sibling packages."""
+    name = str(name)
+    if name == "(Intercept)":
+        return name
+    m = re.search(r"(cos|sin)\s*(\d+)$", name)
+    return f"{m.group(1)}{m.group(2)}" if m else name
+
+
+def _circ_lm_harmonics_table(fit) -> list:
+    """Per-harmonic amplitude/phase (with delta-method SEs) from a linear fit's
+    ``cos(expr)``/``sin(expr)`` coefficient pairs — the linear-circular summary
+    of how strongly and at what phase each angular harmonic drives the response.
+    Best-effort over hea's design column names; an unpaired term takes the
+    coefficient it has. Returns ``[]`` when no harmonic columns are present."""
+    names = list(fit.column_names)
+    coef = dict(zip(names, np.asarray(fit.bhat.row(0), dtype=float)))
+    try:
+        x = np.asarray(fit.X.to_numpy(), dtype=float)
+        cov = float(fit.sigma) ** 2 * _safe_inverse(x.T @ x)
+        idx = {nm: i for i, nm in enumerate(names)}
+    except Exception:
+        cov = idx = None
+    groups: dict = {}
+    for nm in names:
+        m = _COSSIN_RE.match(nm.replace(" ", ""))
+        if m:
+            groups.setdefault(m.group(2), {})[m.group(1)] = nm
+    rows = []
+    for expr, parts in groups.items():
+        cn, sn = parts.get("cos"), parts.get("sin")
+        a = coef.get(cn, 0.0) if cn else 0.0
+        b = coef.get(sn, 0.0) if sn else 0.0
+        amp = float(np.hypot(a, b))
+        se_amp = se_phase = float("nan")
+        if cov is not None and amp > 0 and cn in idx and sn in idx:
+            ic, isn = idx[cn], idx[sn]
+            vc, vs, cs = cov[ic, ic], cov[isn, isn], cov[ic, isn]
+            se_amp = float(
+                np.sqrt(max((a * a * vc + 2 * a * b * cs + b * b * vs) / amp**2, 0.0))
             )
-
-        else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
-
-        return se_results
-
-    def AIC(self):
-        """
-        Calculate Akaike Information Criterion (AIC).
-        """
-        if self.result is None:
-            raise ValueError("Model must be fitted before calculating AIC.")
-
-        log_likelihood = self.result["log_likelihood"]
-        if self.model_type == "mean":
-            n_params = len(self.result["beta"])  # Only beta
-        elif self.model_type == "kappa":
-            n_params = 1 + len(self.result["gamma"])  # alpha + gamma
-        elif self.model_type == "mixed":
-            n_params = (
-                1 + len(self.result["beta"]) + len(self.result["gamma"])
-            )  # alpha + beta + gamma
-        else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
-
-        return -2 * log_likelihood + 2 * n_params
-
-    def BIC(self):
-        """
-        Calculate Bayesian Information Criterion (BIC).
-        """
-        if self.result is None:
-            raise ValueError("Model must be fitted before calculating BIC.")
-
-        log_likelihood = self.result["log_likelihood"]
-        n = len(self.theta)
-        if self.model_type == "mean":
-            n_params = len(self.result["beta"])  # Only beta
-        elif self.model_type == "kappa":
-            n_params = 1 + len(self.result["gamma"])  # alpha + gamma
-        elif self.model_type == "mixed":
-            n_params = (
-                1 + len(self.result["beta"]) + len(self.result["gamma"])
-            )  # alpha + beta + gamma
-        else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
-
-        return -2 * log_likelihood + n_params * np.log(n)
-
-    def predict(self, X_new):
-        """
-        Predict circular response values for new predictor values.
-
-        Parameters
-        ----------
-        X_new: array-like, shape (n_samples, n_features)
-            New predictor data.
-
-        Returns
-        -------
-        theta_new: array-like, shape(n_samples, )
-            New circular response values.
-        """
-        if self.result is None:
-            raise ValueError("Model must be fitted before making predictions.")
-
-        X_arr = np.asarray(X_new, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr[:, None]
-        if not np.all(np.isfinite(X_arr)):
-            raise ValueError("`X_new` contains non-finite values.")
-        if X_arr.shape[1] != self.X.shape[1]:
-            raise ValueError(
-                f"Expected {self.X.shape[1]} predictors, received {X_arr.shape[1]}."
+            se_phase = float(
+                np.sqrt(max((b * b * vc - 2 * a * b * cs + a * a * vs) / amp**4, 0.0))
             )
+        rows.append(
+            {
+                "term": expr,
+                "cos": float(a),
+                "sin": float(b),
+                "amplitude": amp,
+                "phase": float(np.arctan2(b, a)),
+                "se_amplitude": se_amp,
+                "se_phase": se_phase,
+            }
+        )
+    return rows
 
-        mu = self.result["mu"]
-        if self.model_type == "kappa":
-            # Conditional mean is constant μ (β is not part of the model).
-            return np.full(X_arr.shape[0], np.mod(mu, 2 * np.pi))
 
-        beta = self.result.get("beta")
-        if beta is None or np.any(~np.isfinite(beta)):
-            raise ValueError("Model does not contain beta coefficients for prediction.")
-        return np.mod(mu + 2 * np.arctan(X_arr @ beta), 2 * np.pi)
+def _circ_lm_lc(formulas, data) -> dict:
+    """Linear response on a circular predictor: an OLS fit of the harmonic terms
+    written in the formula (``y ~ cos(phi) + sin(phi) + sin(2*phi)``). Returns a
+    fields dict carrying the underlying ``hea.models.lm`` (whose full interface
+    CircLM delegates to) plus the harmonic amplitude/phase table and the
+    least-squares fit metrics."""
+    if len(formulas) != 1:
+        raise ValueError(
+            "circ_lm(type='lc') takes a single formula, e.g. 'y ~ cos(phi) + sin(phi)'."
+        )
+    formula = formulas[0]
+    response = formula.split("~", 1)[0].strip()
+    if not response:
+        raise ValueError("the formula must name the response, e.g. 'y ~ phi'.")
+    fit = lm(formula, data)
+    yhat = _ravel(fit.yhat)
+    resid = _ravel(fit.residuals)
+    rhs_vars = _circ_lm_rhs_vars([formula], data)
+    var = rhs_vars[0] if len(rhs_vars) == 1 else None
+    frame = None
+    if var is not None:
+        x = np.mod(np.asarray(data[var].to_numpy(), dtype=float), 2.0 * np.pi)
+        frame = pl.DataFrame({var: x, response: yhat + resid})
+    return {
+        "lm": fit,
+        "var": var,
+        "response": response,
+        "coefficients": dict(
+            zip(fit.column_names, np.asarray(fit.bhat.row(0), dtype=float))
+        ),
+        "harmonics": _circ_lm_harmonics_table(fit),
+        "sigma": float(fit.sigma),
+        "r_squared": float(fit.r_squared),
+        "aic": float(fit.AIC),
+        "bic": float(fit.BIC),
+        "fitted": yhat,
+        "residuals": resid,
+        "frame": frame,
+        "covariate": var,
+    }
 
-    def predict_kappa(self, X_new) -> np.ndarray:
-        """Predict per-observation concentration κ_i = exp(α + X_iᵀγ).
 
-        Only meaningful for ``model_type`` in ``{"kappa", "mixed"}``; for the
-        ``"mean"`` model the concentration is a single scalar already in
-        ``self.result["kappa"]``.
-
-        Parameters
-        ----------
-        X_new : array-like, shape (n_samples, n_features) or (n_features,)
-            New predictor data.
-
-        Returns
-        -------
-        np.ndarray, shape (n_samples,)
-        """
-        if self.model_type == "mean":
-            raise ValueError(
-                "predict_kappa() is for model_type in {'kappa', 'mixed'}; "
-                "the 'mean' model has a scalar κ in result['kappa']."
-            )
-        X_arr = np.asarray(X_new, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr[:, None]
-        if X_arr.shape[1] != self.X.shape[1]:
-            raise ValueError(
-                f"Expected {self.X.shape[1]} predictors, received {X_arr.shape[1]}."
-            )
-        if not np.all(np.isfinite(X_arr)):
-            raise ValueError("`X_new` contains non-finite values.")
-        return self._predict_kappa(X_arr)
-
-    def _predict_kappa(self, X_arr: np.ndarray) -> np.ndarray:
-        """Internal: numpy-only κ̂(X) without input validation."""
-        alpha = self.result["alpha"]
-        gamma = self.result["gamma"]
-        eta = alpha + X_arr @ gamma
-        return np.exp(np.clip(eta, -50.0, 50.0))
-
-    def plot(
-        self,
-        figsize: Optional[Tuple[float, float]] = None,
-        n_curve: int = 200,
-        axes=None,
+# --------------------------------------------------------------------------- #
+# circ_gam — penalized-smooth distributional circular regression
+# --------------------------------------------------------------------------- #
+def _lss_catalog() -> dict:
+    """Lowercased name → ``*lss`` family instance, under both the alias
+    (``"vmlss"`` — shared with the circlss R package) and the distribution
+    name (``"vonmises"``)."""
+    cat: dict = {}
+    for fam in (
+        vmlss,
+        wclss,
+        pnlss,
+        cardlss,
+        cartlss,
+        wnlss,
+        jplss,
+        ssjplss,
+        kjlss,
+        vmftlss,
+        ajplss,
+        ibslss,
     ):
-        """Two-panel diagnostic figure.
+        cat[fam.name.lower()] = fam
+        cat[fam.dist.name.lower()] = fam
+    return cat
 
-        Layout depends on ``model_type`` and the number of predictors:
 
-        - 1D X, ``model_type`` in ``{"mean", "mixed"}``: fit overlay
-          (data and curve replicated at θ and θ+2π) and residuals vs X.
-        - 1D X, ``model_type`` == ``"kappa"``: data scatter with the
-          constant μ line, plus fitted κ_i = exp(α + X_iᵀγ) on the right.
-        - Multi-D X: residuals vs fitted angle, plus residual histogram.
+def _resolve_gam_family(family):
+    """``circ_gam``'s family resolution — permissive by design: circular
+    names/objects get the CircularLL treatment, anything else passes
+    through for hea to validate (gaussian and every other hea family ride
+    untouched)."""
+    if family is None:
+        return vmlss
+    if isinstance(family, str):
+        key = family.strip().lower()
+        cat = _lss_catalog()
+        if key in cat:
+            return cat[key]
+        import hea.family as _hea_family
 
-        Returns
-        -------
-        matplotlib.figure.Figure
-        """
+        obj = getattr(_hea_family, key, None)
+        if obj is None:
+            obj = getattr(_hea_family, key.capitalize(), None)
+        if obj is not None:
+            return obj
+        lss = ", ".join(sorted({f.name for f in cat.values()}))
+        raise ValueError(
+            f"unknown family {family!r}: not a circular family ({lss}, or "
+            "their distribution names) and not an hea family name. Pass an "
+            "hea family object for non-circular responses."
+        )
+    if isinstance(family, CircularLL):
+        return family
+    if getattr(family, "param_roles", None):
+        # a regression-ready circular distribution: wrap in its family
+        # class (katojones auto-routes to KatoJonesLL)
+        return _circular_family(family)
+    return family
+
+
+def _resolve_cyclic_knots_data(formulas, data, user_knots):
+    """``circ_gam``'s cyclic-knot defaulting.
+
+    For every cyclic smooth (``bs='cc'``/``'cp'``) whose knots the caller did
+    not pin, set the boundary knots to the full circular period ``[0, 2π]`` —
+    pycircstat2's angle convention (the branch ``Circular``/``angmod`` wrap
+    to) — so the basis wraps at the true period, not the observed data range.
+    A cyclic covariate must already be on ``[0, 2π]``: this raises (pointing at
+    the wrapping helpers) when one falls outside it, rather than silently
+    fitting a basis whose period is misaligned with the data. Explicit
+    ``user_knots`` win per variable; returns ``None`` when nothing is set.
+
+    (circlss's R twin instead brackets signed covariates with ``[-π, π]`` — the
+    R/``atan2`` convention; the call shape is shared, the branch differs by
+    ecosystem.)
+    """
+    cyclic = []
+    for f in formulas:
+        rhs = f.split("~", 1)[1] if "~" in f else f
+        cyclic.extend(_cyclic_smooth_vars(rhs))
+    cyclic = list(dict.fromkeys(cyclic))  # unique, formula order
+    knots = dict(user_knots) if user_knots else {}
+    if not cyclic:
+        return knots or None
+    cols = set(data.columns)
+    period = 2 * np.pi
+    for v in cyclic:
+        if v in knots or v not in cols:
+            continue  # user knots win; an absent var is left for hea to report
+        x = np.asarray(data[v].to_numpy(), dtype=float)
+        x = x[np.isfinite(x)]
+        if x.size == 0:
+            continue
+        lo, hi = float(x.min()), float(x.max())
+        if lo < -1e-6 or hi > period + 1e-6:
+            raise ValueError(
+                f"cyclic covariate {v!r} lies outside [0, 2π] (range "
+                f"[{lo:.3f}, {hi:.3f}]); pycircstat2 expects angles on that "
+                "branch. Wrap it (pycircstat2.utils.angmod / data2rad, or the "
+                f"Circular class) or pass knots={{{v!r}: [...]}} explicitly."
+            )
+        knots[v] = [0.0, period]
+    return knots or None
+
+
+# --------------------------------------------------------------------------- #
+# center=True — rotate a circular response to the link origin before fitting
+# --------------------------------------------------------------------------- #
+# A tan-half location (μ = 2·atan(η)) lives in an open 2π-window whose antipode
+# θ = π is unreachable, and η = tan(μ/2) grows without bound as μ approaches it.
+# Rotating the response so its circular mean sits at the link origin puts η at
+# ≈ 0 — the best-conditioned point of the link — and the fit's directions are
+# rotated back on the response scale. See ``circ_gam``'s ``center`` argument.
+def _wall_loc(fam):
+    """Column index of the tan-half circular-location LP — the parameter
+    carrying the antipode wall at θ = π — or ``None`` when the family has none.
+    ``pnlss`` (identity-linked Cartesian pair, derived atan2 direction) and
+    every linear-response family have no such column. The circlss
+    ``.circ_wall_loc`` twin; keys on the same ``tanhalf`` link that
+    :meth:`CircGAM._flat_panels` marks circular, so the identical column is
+    rotated everywhere."""
+    if not isinstance(fam, CircularLL):
+        return None
+    for j in range(fam.n_lp):
+        if fam.links[j].name == "tanhalf":
+            return j
+    return None
+
+
+#: Mean resultant length below which a circular mean is treated as having no
+#: direction at all. Orders of magnitude under any statistically meaningful
+#: resultant (a uniform sample of n draws sits near 1/sqrt(n)), so it fires only
+#: on numerically balanced data, where the angle would be rounding noise.
+_CENTER_RBAR_FLOOR = 1e-8
+
+
+def _center_ref(theta, weights=None):
+    """Reference angle to rotate a circular response by before fitting: the
+    (weighted) **circular mean**, unconditionally.
+
+    Rotating the mean to the link origin puts the fitted location coefficient
+    at η ≈ 0 for *every* fit, which is where the tan-half link is best
+    conditioned. Do not gate this on the response being near the wall: a gated
+    rotation leaves a well-clear response fitting at η = tan(μ/2), which does
+    not change the reachable optimum but does raise the solver's
+    non-convergence rate, and it makes the frame a discontinuous function of
+    the weights — so a mixture component whose mean drifts across the gate
+    changes frame mid-EM. The circular mean is the only rotation-equivariant
+    choice and is an exact fixed point for already-centred data, so a response
+    already at the origin gets ref ≈ 0 without a special case.
+
+    Returns 0 when the mean carries no direction: an empty response, no weight
+    anywhere, or a mean resultant length at the floating-point floor (balanced
+    data, where ``arctan2`` would resolve rounding noise into an arbitrary angle
+    that then moves unpredictably between a mixture's M-steps).
+
+    ``weights`` (a circ_mix component's responsibilities, say) weight the mean;
+    ``None`` is the plain mean over the whole response."""
+    theta = np.asarray(theta, dtype=float)
+    ok = np.isfinite(theta)
+    theta = theta[ok]
+    if theta.size == 0:
+        return 0.0
+    w = np.ones_like(theta) if weights is None else np.asarray(weights, float)[ok]
+    sw = float(np.sum(w))
+    C = float(np.sum(w * np.cos(theta)))
+    S = float(np.sum(w * np.sin(theta)))
+    if not (np.isfinite(sw) and np.isfinite(C) and np.isfinite(S)) or sw <= 0.0:
+        return 0.0
+    if np.hypot(C, S) / sw <= _CENTER_RBAR_FLOOR:
+        return 0.0
+    ref = float(np.arctan2(S, C))
+    return ref if np.isfinite(ref) else 0.0
+
+
+def _rotate_response(out, loc, ref):
+    """Rotate the circular-location column of a response-scale prediction back
+    to the original frame (``wrap(col + ref)``); scale/shape columns untouched.
+    A no-op when ``ref`` is 0 or there is no wall column. The circlss
+    ``.circ_rotate_response`` twin — works on the polars frame
+    ``predict(type="response")`` returns (column ``fit``/``fit.<loc>``) and on a
+    bare ndarray alike."""
+    if not ref or loc is None:
+        return out
+    if isinstance(out, pl.DataFrame):
+        col = "fit" if loc == 0 else f"fit.{loc}"
+        if col in out.columns:
+            out = out.with_columns(pl.Series(col, _wrap(out[col].to_numpy() + ref)))
+        return out
+    arr = np.asarray(out, dtype=float)
+    if arr.ndim == 2 and arr.shape[1] > loc:
+        arr = arr.copy()
+        arr[:, loc] = _wrap(arr[:, loc] + ref)
+        return arr
+    return out
+
+
+def _circ_prepare(formula, data, family, knots, center, weights):
+    """Shared front-door prep for :func:`circ_gam` and :func:`circ_bam`: family
+    resolution, trailing ``~ 1`` LP padding, response-name validation, off-wall
+    ``center`` rotation, and cyclic-knot defaulting. Returns
+    ``(fam, payload, df, merged_knots, ref)`` — everything the two wrappers then
+    hand to ``hea`` ``gam``/``bam`` verbatim (only the engine call and the
+    result reclass differ between them)."""
+    fam = _resolve_gam_family(family)
+    formulas = list(formula) if isinstance(formula, (list, tuple)) else [formula]
+    # Every location-scale family gets the trailing `~ 1` fill, keyed on the
+    # family declaring more than one linear predictor — the circlss twin, whose
+    # gate is `!is.null(family$param_names)` and so covers its gausslss/gammalss
+    # linear-response forks as well as the circular ones. Keying on `n_lp` (a
+    # class attribute, so it reads on an uninstantiated hea family too) keeps
+    # hea's `gaulss`/`gammals` — pycircstat2's linear-circular leg, already
+    # weight-aware upstream — on the same path as the *lss families. A
+    # single-LP family (`gaussian`, `poisson`, …) has no `n_lp` and is left
+    # entirely to hea.
+    n_lp = getattr(fam, "n_lp", None)
+    if isinstance(n_lp, int) and n_lp >= 2:
+        if "~" not in formulas[0] or not formulas[0].split("~", 1)[0].strip():
+            raise ValueError(
+                'the first formula must name the response, e.g. "theta ~ s(x)".'
+            )
+        if len(formulas) > n_lp:
+            fam_name = getattr(fam, "name", None) or type(fam).__name__
+            raise ValueError(
+                f"{fam_name} has {n_lp} linear predictors; got "
+                f"{len(formulas)} formulas."
+            )
+        # fewer formulas than parameters: hold the rest constant (~ 1), e.g.
+        # theta ~ s(x) with jplss smooths mu and pins kappa, psi.
+        formulas += ["~ 1"] * (n_lp - len(formulas))
+    df = _to_polars(data)
+    # center: rotate the circular response so its mean sits at the link origin,
+    # fit there, and report response-scale directions back via
+    # predict(type="response") / circ_plot. A no-op for families with no wall
+    # (pnlss's derived direction, the linear l~c leg) and for a response whose
+    # mean is already at the origin (the mean is a fixed point, so ref ≈ 0).
+    # Only the response column is rotated; the cyclic-smooth covariates — and so
+    # the knots resolved below — are untouched.
+    ref = 0.0
+    loc = _wall_loc(fam)
+    if loc is not None and center is not False:
+        resp = formulas[0].split("~", 1)[0].strip()
+        if resp in df.columns:
+            yc = np.asarray(df[resp].to_numpy(), dtype=float)
+            if yc.size:
+                w = weights
+                if w is not None:
+                    wa = np.asarray(w, dtype=float).ravel()
+                    w = wa if wa.size == yc.size else None
+                ref = _center_ref(yc, w) if center is True else float(center)
+                if np.isfinite(ref) and ref != 0.0:
+                    df = df.with_columns(
+                        pl.Series(resp, np.mod(yc - ref, 2.0 * np.pi))
+                    )
+                else:
+                    ref = 0.0
+    merged = _resolve_cyclic_knots_data(formulas, df, knots)
+    payload = formulas if len(formulas) > 1 else formulas[0]
+    return fam, payload, df, merged, ref
+
+
+def circ_gam(formula, data, family=None, knots=None, method="REML",
+             center=True, weights=None, **gam_kwargs):
+    """Circular GAM — ``hea.models.gam`` with circular defaults.
+
+    A deliberately thin front door: everything forwards to
+    ``hea.models.gam`` verbatim; what this function adds is defaults and
+    family resolution, nothing else.
+
+    - ``family=vmlss`` (distributional von Mises) and ``method="REML"``
+      unless overridden.
+    - Cyclic smooths (``bs='cc'``/``'cp'``) default their boundary knots to
+      the full circular period ``[0, 2π]`` — pycircstat2's angle convention
+      (the branch ``Circular``/``angmod`` wrap to) — so the basis wraps at the
+      true period, not the observed data range. Explicit ``knots=`` wins per
+      variable (mgcv's ``knots=list(...)`` semantics). A cyclic covariate must
+      already be on ``[0, 2π]``; otherwise ``circ_gam`` raises, pointing you to
+      :func:`pycircstat2.utils.angmod` / :func:`~pycircstat2.utils.data2rad`
+      (or the :class:`~pycircstat2.base.Circular` class) to wrap it.
+    - ``family`` may be a ``*lss`` instance, a regression-ready circular
+      distribution (auto-wrapped; ``katojones`` → :class:`KatoJonesLL`), a
+      string (``"vmlss"``/``"vonmises"``, … or any hea family name such as
+      ``"gaussian"``), or any hea family object — non-circular responses
+      pass through untouched, so a linear response on a circular smooth is
+      simply ``circ_gam("y ~ s(phi, bs='cc')", df, family="gaussian")``.
+    - Fewer formulas than the family has parameters: the remaining linear
+      predictors are filled with ``~ 1`` (held constant), so
+      ``circ_gam("theta ~ s(x)", df, family="jplss")`` smooths μ and pins
+      κ, ψ. The first formula must name the response.
+    - ``center=True`` (default) rotates a circular response to the tan-half
+      link's origin before fitting. The ``tanhalf``-linked families (``vmlss``,
+      ``wclss``, the shape families) place μ in an open 2π-window whose antipode
+      θ = π is unreachable, and η = tan(μ/2) is worst conditioned the closer μ
+      sits to it. ``circ_gam`` rotates the response to a frame centred on its
+      circular mean — so the fit runs at η ≈ 0 whatever the data's direction —
+      fits there, and rotates response-scale directions back:
+      ``predict(type="response")`` and ``circ_plot`` report in the original
+      frame, while the link scale (``coef``, ``predict(type="link")``) and the
+      raw ``fitted_values`` stay in the centred fit frame. The applied rotation
+      is stored on ``.circ_center`` (0.0 when none). Pass ``center=False`` to
+      disable it, or a number to set the reference angle directly. A no-op for
+      ``pnlss`` (a derived atan2 direction, no wall) and the linear ``l~c``
+      leg; a mean that must *wind through* the wall still needs ``pnlss``.
+      The rotation applies to every ``tanhalf`` fit, so read fitted directions
+      off ``predict(type="response")`` (or ``CircMix.params()``), never off
+      ``coef()``.
+    - ``weights=`` — per-observation prior weights (hea's ``gam(weights=)``:
+      frequency/precision multipliers on each log-likelihood term). Named
+      explicitly for discoverability and because a finite-mixture EM M-step
+      fits weighted by responsibilities; the same vector also weights the
+      ``center`` reference (a component's responsibility-weighted mean).
+      Defaults to hea's unit weights. There is no ``subset``/``na.action`` fit
+      knob as in R's ``gam`` — pre-filter the frame (``df.filter(...)``) to
+      subset, and NA rows are dropped automatically. An ``offset`` goes in the
+      per-LP formula as an ``offset(...)`` atom (hea's rule for the multi-LP
+      families here), not as an argument. The circlss ``weights=`` twin.
+
+    The circlss/mgcv twin call — cyclic knots auto-pinned to the period::
+
+        # R:  b2 <- gam(list(theta ~ s(phi, bs="cc"), ~ s(phi, bs="cc")),
+        #               family = vmlss(), data = dat, method = "REML")
+        b2 = circ_gam(["theta ~ s(phi, bs='cc')", "~ s(phi, bs='cc')"],
+                      data=dat)   # phi on [0, 2π] → knots default to [0, 2π]
+
+    Returns a :class:`CircGAM`: the fitted ``hea`` gam — every attribute and
+    method (``summary()``, ``predict()``, ``AIC``, ``check()``, ``fitted``,
+    ``Vp``, ``edf`` …) directly reachable, reclassed in place — plus the
+    circular ``circ_check`` / ``circ_resid`` (and ``circ_plot``).
+
+    .. note:: **Reproducibility / parity.** ``hea`` inherits mgcv's loose
+       default ``efs_tol=0.1`` for the EFS optimizer, which can leave ~1e-3
+       run-to-run gaps in the coefficients and smoothing parameters. For
+       reproducible, cross-engine-parity, or benchmarking fits, tighten the
+       control knobs (they forward straight through ``**gam_kwargs``)::
+
+           circ_gam(..., control={"efs_tol": 1e-8, "epsilon": 1e-10})
+
+       which collapses that disagreement to machine precision.
+
+    .. note:: **Multi-LP convergence.** The EFS optimizer (used for the
+       Tier-2 families, ``available_derivs == 0``) caps its outer loop at
+       ``efs_maxit=200`` to match mgcv. A 3-/4-LP shape family with two flat
+       shape directions (``jplss``, ``ssjplss``) can need more than that to
+       satisfy ``efs_tol`` and otherwise stops at "iteration limit reached";
+       raise the cap for such hea-native fits with
+       ``circ_gam(..., control={"efs_maxit": 500})``. Keep it at 200 for mgcv
+       cross-engine parity.
+
+    .. warning:: tanhalf-linked families (``vmlss``, ``wclss``, and the
+       shape families) place μ in an open 2π-window: a mean that must sweep
+       *through the antipode* — common when the covariate is itself
+       circular — is unrepresentable. Use ``pnlss`` (projected normal, two
+       identity-linked location LPs) for full-circle mean sweeps. Same
+       convention as circlss documents on the R side.
+    """
+    fam, payload, df, merged, ref = _circ_prepare(
+        formula, data, family, knots, center, weights
+    )
+    # `weights` is a plain hea gam kwarg (no R-style NSE to route around);
+    # forwarded only when set so hea keeps its own default (unit weights). It
+    # also fed the center reference above. An `offset` is NOT a constructor arg
+    # for the general (multi-LP) families circ_gam fits — hea wants it as an
+    # ``offset(...)`` atom in the per-LP formula — so it is left to pass through
+    # ``**gam_kwargs`` unchanged (hea validates it). `subset` / `na.action` have
+    # no hea fit-time knob: pre-filter the frame (``df.filter(...)``) to subset,
+    # and NA rows are dropped automatically (na.omit).
+    if weights is not None:
+        gam_kwargs["weights"] = weights
+    fit = gam(payload, df, family=fam, knots=merged, method=method, **gam_kwargs)
+    # reclass in place into the circular result object (the Python analog of R's
+    # `class(fit) <- c("circ_gam", class(fit))`): every hea gam attribute/method
+    # stays directly reachable, plus the circular circ_plot/circ_check/circ_resid.
+    fit.__class__ = CircGAM
+    fit.circ_center = ref  # rotation applied at fit time (0.0 if none)
+    return fit
+
+
+def circ_bam(formula, data, family=None, knots=None, method="fREML",
+             center=True, discrete=True, weights=None, optimizer=("efs",),
+             **bam_kwargs):
+    """Circular **big** additive model — ``hea.models.bam(discrete=True)`` with
+    the same circular defaults as :func:`circ_gam`.
+
+    A `circ_gam` that scales to large *n*. It fits the identical circular
+    distributional model, but on ``hea``'s **discrete** rail: the design is
+    compressed to per-covariate bins and every *n*-dependent assembly runs on
+    those kernels, so cost grows with the number of *distinct* covariate values
+    rather than the number of rows. The reward is speed at large *n*; the price
+    is a controlled approximation — binned bases make the fit agree with
+    ``circ_gam`` at a ~1e-3 grade, not to machine precision.
+
+    **This is a pycircstat2-only capability.** ``mgcv::bam`` refuses a general
+    (multi-parameter) family outright — ``"general families not supported by
+    bam"`` (bam.r:2653) — so circlss, built on mgcv, has no discrete circular
+    rail. ``hea`` completed mgcv's dormant discrete general-family branch, and
+    every ``*lss`` family here declares ``discrete_ok`` and carries the two
+    ``DiscreteX`` seams (``_etas``/``initialize_coef``) the rail needs.
+
+    Signature mirrors :func:`circ_gam` — same family resolution, ``~ 1`` LP
+    padding, off-wall ``center`` rotation, cyclic-knot defaulting, and
+    ``weights=`` — plus:
+
+    - ``method="fREML"`` (bam's fast-REML default; ``hea`` aliases it to the
+      same REML criterion).
+    - ``discrete=True`` (the only supported mode here). ``discrete=False`` asks
+      ``hea`` for the dense chunked path, which — like ``mgcv`` — is not wired
+      for general families and raises; use :func:`circ_gam` for a dense fit.
+    - ``optimizer=("efs",)`` — extended Fellner–Schall — is the **default here**.
+      hea's own bam default is BFGS over the deriv-1 REML trace, a placeholder
+      mirroring mgcv's not-yet-implemented discrete general-family default; EFS
+      is the intended (and, on these families, markedly faster) selector, so
+      circ_bam sets it explicitly until hea's default flips. Full Newton is off
+      the discrete rail (the same reason mgcv caps it). Pass ``optimizer=`` to
+      override (e.g. ``optimizer=None`` for hea's current BFGS default).
+    - ``chunk_size=`` and ``nthreads=`` forward through ``**bam_kwargs`` to tune
+      the binning/parallelism.
+
+    Reproducibility and the tanhalf-wall caveat are exactly as documented on
+    :func:`circ_gam`; for cross-fit reproducibility tighten
+    ``control={"efs_tol": 1e-8, "epsilon": 1e-10}`` when on the EFS optimizer.
+
+    Returns a :class:`CircBAM` — a :class:`CircGAM` (all its circular
+    ``predict`` rotate-back, ``circ_plot``/``circ_check``/``circ_resid`` and the
+    geometry-aware header) whose fitting surface is ``hea``'s ``bam``.
+    """
+    fam, payload, df, merged, ref = _circ_prepare(
+        formula, data, family, knots, center, weights
+    )
+    if weights is not None:
+        bam_kwargs["weights"] = weights
+    fit = bam(payload, df, family=fam, knots=merged, method=method,
+              discrete=discrete, optimizer=optimizer, **bam_kwargs)
+    fit.__class__ = CircBAM
+    fit.circ_center = ref  # rotation applied at fit time (0.0 if none)
+    return fit
+
+
+# --------------------------------------------------------------------------- #
+# Circular regression diagnostics & result objects
+# --------------------------------------------------------------------------- #
+def _wrap(a):
+    """Wrap angle(s) to (−π, π]."""
+    return np.angle(np.exp(1j * np.asarray(a, dtype=float)))
+
+
+def _to_02pi(a):
+    """Wrap angle(s) to pycircstat2's [0, 2π) convention. Unlike a bare
+    ``np.mod(a, 2π)``, the float boundary is folded down: ``np.mod`` returns
+    *exactly* 2π for a tiny negative input (2π − ε rounds up), and a parameter of
+    exactly 2π trips some laws' domain checks (e.g. ``katojones.logpdf`` → NaN)."""
+    m = np.mod(np.asarray(a, dtype=float), 2.0 * np.pi)
+    return np.where(m >= 2.0 * np.pi, 0.0, m)
+
+
+def _circ_sd_from_R(R):
+    """Circular SD ``√(−2·log R)`` from the mean resultant length ``R`` — the
+    **predictive** angular spread a circular location band shows (the spread of
+    the responses about the fitted direction), not a confidence interval of the
+    mean. ``R`` is held off 0/1 (finite band) and the result capped at π — a
+    half-circle each way is the whole circle, the honest near-uniform limit
+    rather than an over-wrapping ribbon. The circlss ``.circ_sd_from_R`` twin,
+    shared by the closed-form circ_lm path (``R = A1(κ)``) and the quadrature
+    circ_gam path (:func:`_circ_sd_quad`)."""
+    R = np.clip(np.asarray(R, dtype=float), np.finfo(float).eps, 1.0 - 1e-12)
+    return np.minimum(np.sqrt(-2.0 * np.log(R)), np.pi)
+
+
+def _circ_sd_quad(fam, resp_fit, M=512):
+    """Per-grid-row circular SD of the fitted law, by deterministic quadrature
+    of the family's OWN density — the circlss ``.circ_sd_quad`` twin.
+
+    ``resp_fit`` is the ``(n_grid, n_lp)`` response-scale parameter matrix. For
+    each row the family's ``logpdf`` is evaluated on a fine angle grid at those
+    parameters, giving the density ``f``; the mean resultant length
+    ``R = |∫ e^{iθ} f| / ∫ f`` then feeds :func:`_circ_sd_from_R`. One exact
+    path for every CircularLL family — von Mises (``R = A1(κ)``), wrapped
+    Cauchy/normal/cardioid (ρ), Cartwright, Kato–Jones, the projected normal's
+    derived direction, and the skew/flexible laws whose ``R`` has no closed
+    form alike."""
+    resp = np.atleast_2d(np.asarray(resp_fit, dtype=float))
+    n = resp.shape[0]
+    tg = np.linspace(0.0, 2.0 * np.pi, M, endpoint=False)
+    params = {
+        name: np.repeat(
+            _to_02pi(resp[:, j]) if fam.links[j].name == "tanhalf" else resp[:, j],
+            M,
+        )
+        for j, name in enumerate(fam.params)
+    }
+    ll = np.asarray(fam._loglik_values(np.tile(tg, n), params), dtype=float)
+    f = np.exp(ll).reshape(n, M)
+    # drop non-finite density points (some laws' logpdf — e.g. katojones — can
+    # return NaN/Inf at isolated grid angles): they contribute 0 to the moment
+    # integral, leaving a well-posed R from the finite remainder.
+    f = np.where(np.isfinite(f), f, 0.0)
+    Z = f.sum(axis=1)
+    R = np.hypot(f @ np.cos(tg), f @ np.sin(tg)) / np.where(Z > 0.0, Z, 1.0)
+    return _circ_sd_from_R(R)
+
+
+def _pvonmises(theta, mu=0.0, kappa=1.0, jmax=60, tol=1e-12):
+    """von Mises CDF in the residual frame, origin at the antipode −π::
+
+        F(d) = (d + π)/(2π) + (1/π) Σ_{j≥1} [I_j(κ)/I_0(κ)] sin(j d)/j,
+        d = wrap(θ − μ)
+
+    The analytic probability-integral transform of the von Mises residual —
+    F(−π)=0, F(μ)=½, F(π)=1, so F(θ)~U(0,1) under the model. Bessel ratios use
+    the exponentially scaled ``ive`` so they stay finite at large κ. Vectorised
+    over θ, μ, κ; matches ``circular::pvonmises(from = μ − π)`` to machine
+    precision (the cross-language quantile-residual reference)."""
+    d = _wrap(np.asarray(theta, dtype=float) - np.asarray(mu, dtype=float))
+    kappa = np.asarray(kappa, dtype=float)
+    out = (d + np.pi) / (2.0 * np.pi)
+    i0 = ive(0, kappa)
+    for j in range(1, int(jmax) + 1):
+        rj = ive(j, kappa) / i0
+        out = out + rj * np.sin(j * d) / (j * np.pi)
+        if np.max(np.abs(rj)) < tol:
+            break
+    return np.clip(out, 0.0, 1.0)
+
+
+def _watson_u2(u):
+    """Watson's U² test of uniformity for PIT values ``u`` ∈ [0, 1) — the
+    rotation-invariant goodness-of-fit statistic for the circle (Kolmogorov–
+    Smirnov is origin-dependent and wrong here). Returns ``{"stat", "p"}`` with
+    the asymptotic upper-tail p-value; deterministic given ``u``."""
+    u = np.sort(np.asarray(u, dtype=float))
+    n = u.size
+    i = np.arange(1, n + 1)
+    ubar = float(u.mean())
+    stat = float(
+        np.sum((u - (2 * i - 1) / (2 * n)) ** 2)
+        - n * (ubar - 0.5) ** 2
+        + 1.0 / (12 * n)
+    )
+    p = 0.0
+    for m in range(1, 51):
+        term = (-1) ** (m - 1) * np.exp(-2.0 * m * m * np.pi**2 * stat)
+        p += term
+        if abs(term) < 1e-12:
+            break
+    return {"stat": stat, "p": float(min(max(2.0 * p, 0.0), 1.0))}
+
+
+class _ResidArray(np.ndarray):
+    """Residual ndarray tagged with the residual ``type`` (and ``scale`` for the
+    quantile residual) — the circlss ``attr(, "type")`` / ``attr(, "scale")``
+    parity, surviving slicing/ufuncs via ``__array_finalize__``."""
+
+    def __new__(cls, data, type=None, scale=None):
+        obj = np.asarray(data, dtype=float).view(cls)
+        obj.type = type
+        obj.scale = scale
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None:
+            return
+        self.type = getattr(obj, "type", None)
+        self.scale = getattr(obj, "scale", None)
+
+
+class _CircRegressionMixin:
+    """Shared circular diagnostics for :class:`CircGAM` / :class:`CircLM` — the
+    object-oriented counterpart of circlss's ``circ_resid`` / ``circ_check`` S3
+    generics. The public methods drive off two per-class hooks each subclass
+    supplies — :meth:`_resid_parts` (the residual primitive bundle) and
+    :meth:`_check_backend` (the leg-specific goodness-of-fit rows) — so there is
+    no standalone dispatch function and no ``isinstance`` ladder."""
+
+    def circ_resid(self, type="quantile", nsim=1000, scale="uniform"):
+        """Circular regression residuals — the quantity every circ_check panel
+        is a function of, since "observed − fitted" is undefined for two angles.
+
+        ``type``: ``"quantile"`` (the probability-integral-transform residual,
+        calibrated even when the concentration varies; default), ``"deviance"``
+        (signed root of the per-observation deviance, ≈ N(0,1) under a good
+        fit), ``"angular"`` (the wrapped ``y − μ̂`` ∈ (−π, π], the raw response
+        residual), or ``"pearson"`` (score-standardized). ``scale`` applies to
+        the quantile residual: ``"uniform"`` returns the PIT on (0, 1) (pairs
+        with the Watson U² Q-Q), ``"normal"`` the Dunn–Smyth N(0, 1) residual.
+        ``nsim`` is accepted for circlss API parity; pycircstat2's PIT is
+        analytic for every family, so it is unused. The result is an ndarray
+        carrying ``.type`` (and ``.scale`` for the quantile residual)."""
+        parts = self._resid_parts()
+        if type == "angular":
+            r = parts["resid_response"]()
+        elif type == "deviance":
+            r = parts["resid_deviance"]()
+        elif type == "pearson":
+            fn = parts.get("resid_pearson")
+            if fn is None:
+                raise ValueError("Pearson residuals are not available for this fit.")
+            r = fn()
+        elif type == "quantile":
+            r = self._quantile_resid(parts, scale)
+        else:
+            raise ValueError(
+                "type must be 'quantile', 'deviance', 'angular' or 'pearson'; "
+                f"got {type!r}."
+            )
+        return _ResidArray(
+            np.asarray(r, dtype=float),
+            type=type,
+            scale=scale if type == "quantile" else None,
+        )
+
+    def _quantile_resid(self, parts, scale):
+        cdf = parts.get("cdf")
+        if cdf is None:
+            raise ValueError(
+                f"no distribution function for {parts['family_label']}; cannot "
+                "form a quantile residual."
+            )
+        u = np.clip(np.asarray(cdf(), dtype=float), 1e-6, 1.0 - 1e-6)
+        return norm.ppf(u) if scale == "normal" else u
+
+    def circ_check(self, which=None, nsim=1000, rug=True, seed=None, figsize=None):
+        """Diagnostic-panel display (the circular ``gam.check`` / ``plot.lm``
+        analogue, and the companion to ``circ_plot``): lays out the residual
+        panel grid, prints the goodness-of-fit table, and returns the matplotlib
+        Figure. ``which`` picks the panels (``None`` → the response-appropriate
+        default ``rose``/``obsfit``/``residcov``/``qq.unif``; ``"all"`` adds the
+        deviance-residual panels ``qq.norm``/``scaleloc``/``hist`` and the
+        influence panel ``cook``); ``rug`` adds a covariate rug. The
+        statistics are printed (Watson U² + residual location + the leg backend);
+        as with ``summary`` nothing is returned but the Figure. ``nsim`` /
+        ``seed`` are accepted for circlss API parity (the PIT is analytic)."""
         import matplotlib.pyplot as plt
 
-        n_features = self.X.shape[1]
-        is_1d = n_features == 1
+        parts = self._resid_parts()
+        keys, warn_rose = _check_keys(which, parts["response_circular"])
+        if warn_rose:
+            print("circ_check: panel 'rose' needs a circular response; dropping it.")
+        lev = self._leverage() if "cook" in keys else None
+        if "cook" in keys and lev is None:
+            print(
+                "circ_check: per-observation leverage is unavailable for this "
+                "fit; dropping the 'cook' panel."
+            )
+            keys = [k for k in keys if k != "cook"]
+        ang = parts["resid_response"]()
+        u = self._quantile_resid(parts, "uniform")
+        watson = _watson_u2(u)
+        dev = (
+            parts["resid_deviance"]()
+            if any(k in keys for k in ("qq.norm", "scaleloc", "hist", "cook"))
+            else None
+        )
+        cinfo = self._check_cov() or {
+            "name": "fitted direction",
+            "values": parts["fitted_dir"],
+            "circular": parts["response_circular"],
+        }
+        self._print_check_table(parts, ang, watson)
 
-        if axes is None:
-            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
+        ncol = int(np.ceil(np.sqrt(len(keys))))
+        nrow = int(np.ceil(len(keys) / ncol))
+        fig = plt.figure(figsize=figsize or (4.8 * ncol, 4.2 * nrow))
+        for i, key in enumerate(keys):
+            ax = fig.add_subplot(
+                nrow, ncol, i + 1, projection="polar" if key == "rose" else None
+            )
+            if key == "rose":
+                _panel_rose(ax, ang)
+            elif key == "obsfit":
+                _panel_obsfit(ax, parts)
+            elif key == "residcov":
+                _panel_residcov(ax, ang, cinfo, parts["response_circular"], rug)
+            elif key == "qq.unif":
+                _panel_qqunif(ax, u, watson)
+            elif key == "qq.norm":
+                _panel_qqnorm(ax, dev)
+            elif key == "scaleloc":
+                _panel_scaleloc(
+                    ax, dev, parts["fitted_dir"], parts["response_circular"]
+                )
+            elif key == "hist":
+                _panel_hist(ax, dev)
+            elif key == "cook":
+                _panel_cook(ax, dev, lev)
+        fig.tight_layout()
+        return fig
+
+    def _print_check_table(self, parts, ang, watson):
+        """Print the R-style goodness-of-fit table (the ``circ_check`` header):
+        the residual location, the Watson U² PIT-uniformity test, and the
+        leg-specific backend rows."""
+        print(f"\ncirc_check: {parts['family_label']}   n = {parts['n']}")
+        if parts["response_circular"]:
+            sb, cb = float(np.mean(np.sin(ang))), float(np.mean(np.cos(ang)))
+            print(
+                f"  residual mean direction = {np.arctan2(sb, cb):+.4f} rad"
+                f"   resultant length = {np.hypot(sb, cb):.4f}"
+            )
         else:
-            axes = list(axes)
-            if len(axes) != 2:
-                raise ValueError("`axes` must be a sequence of length 2.")
-            fig = axes[0].figure
+            print(
+                f"  residual mean = {np.mean(ang):+.4f}   "
+                f"sd = {np.std(ang, ddof=1):.4f}"
+            )
+        print(
+            f"  Watson U2 (PIT uniformity) = {watson['stat']:.4f}   "
+            f"p = {watson['p']:.4f}"
+        )
+        backend = self._check_backend()
+        if "edf" in backend:
+            print(f"  effective degrees of freedom = {backend['edf']:.3f}")
+        elif "p_values" in backend and backend["p_values"] is not None:
+            pv = backend["p_values"]
+            print(
+                f"  higher-order harmonic test: p(cos) = {pv[0]:.4f}   "
+                f"p(sin) = {pv[1]:.4f}"
+            )
+        elif "r_squared" in backend:
+            print(
+                f"  R-squared = {backend['r_squared']:.4f}   "
+                f"residual sigma = {backend['sigma']:.4f}"
+            )
+        elif "converged" in backend:
+            kap = backend["kappa"]
+            kstr = (
+                f"= {kap:.3f}"
+                if np.isscalar(kap)
+                else f"in [{kap[0]:.3f}, {kap[1]:.3f}]"
+            )
+            print(f"  converged = {backend['converged']}   kappa {kstr}")
 
-        if not is_1d:
-            self._plot_residual_diagnostic(axes)
+    def circ_plot(self, view="both", n=200, se=True, rug=True, figsize=None):
+        """Circular effect display — the geometry-aware counterpart to the
+        per-term plots. ``view``: ``"both"`` (default) places the fitted location
+        curve on its natural surface beside the flat location panel;
+        ``"geometry"`` draws only that surface — a cylinder (circular~linear),
+        torus (circular~circular) or upright can (linear~circular); ``"flat"``
+        draws one response-scale panel per modelled parameter against the
+        covariate (a circular location broken at the ±π jump, banded by its
+        ± circular-SD predictive spread — a concentration/shape parameter keeps
+        a 2-SE band — the observed responses overlaid). A surface-less fit falls back to the flat
+        view. Returns the matplotlib Figure. A fit with no single covariate axis
+        defers (to hea's per-term ``plot`` for a CircGAM, else a message pointing
+        at ``coef``/``predict``/``summary``)."""
+        import matplotlib.pyplot as plt
+
+        kind, resp_circular, cov_circular, cov = self._geometry()
+        if cov is None:
+            return self._plot_fallback()
+        xv = np.asarray(self._model_frame()[cov].to_numpy(), dtype=float)
+        if cov_circular:
+            rng = (-np.pi, np.pi) if np.nanmin(xv) < 0 else (0.0, 2.0 * np.pi)
+        else:
+            rng = (float(np.nanmin(xv)), float(np.nanmax(xv)))
+        grid = np.linspace(rng[0], rng[1], n)
+        nd = pl.DataFrame({cov: grid})
+        panels = self._flat_panels(grid, nd)
+        if panels is None:
+            print(
+                "circ_plot: this is a multi-covariate cl fit; use "
+                "coef()/predict()/summary()."
+            )
+            return None
+        rv = np.asarray(self._response_values(), dtype=float)
+        # a centred CircGAM stores the rotated response; rotate the overlay back
+        # by +circ_center so it shares the panels' original frame (0 otherwise,
+        # and for CircLM, which has no circ_center). Circular responses display on
+        # [0, 2π), pycircstat2's angle convention.
+        ref = getattr(self, "circ_center", 0.0)
+        yobs = np.mod(rv + ref, 2.0 * np.pi) if resp_circular else rv
+        surface = {"cl": "cylinder", "cc": "torus", "lc": "can"}.get(kind)
+        surf_idx = (
+            next((i for i, p in enumerate(panels) if p.get("circular")), 0)
+            if resp_circular
+            else 0
+        )
+        if view != "flat" and surface is None:
+            print("circ_plot: no surface for this fit; drawing the flat view.")
+            view = "flat"
+
+        if view == "flat":
+            npan = len(panels)
+            ncol = int(np.ceil(np.sqrt(npan)))
+            nrow = int(np.ceil(npan / ncol))
+            fig, axes = plt.subplots(
+                nrow, ncol, figsize=figsize or (5.0 * ncol, 4.0 * nrow), squeeze=False
+            )
+            axes = axes.ravel()
+            for i, p in enumerate(panels):
+                _flat_panel(
+                    axes[i],
+                    grid,
+                    p,
+                    cov,
+                    se,
+                    xv if i == surf_idx else None,
+                    yobs if i == surf_idx else None,
+                    rug,
+                )
+            for j in range(npan, len(axes)):
+                axes[j].axis("off")
             fig.tight_layout()
             return fig
 
-        x_data = self.X[:, 0]
-        theta_data = np.mod(self.theta, 2 * np.pi)
-        feature_label = self.feature_names[0]
-
-        x_grid = np.linspace(x_data.min(), x_data.max(), n_curve)
-        x_grid_2d = x_grid[:, None]
-
-        ax = axes[0]
-        if self.model_type in ("mean", "mixed"):
-            mu = self.result["mu"]
-            beta = self.result["beta"]
-            curve = np.mod(mu + 2 * np.arctan(x_grid * beta[0]), 2 * np.pi)
-            curve_plot = curve.astype(float).copy()
-            jumps = np.where(np.abs(np.diff(curve)) > np.pi)[0]
-            curve_plot[jumps] = np.nan
-            ax.plot(x_grid, curve_plot, color="C1", lw=2, label="fit")
-            ax.plot(x_grid, curve_plot + 2 * np.pi, color="C1", lw=2)
-        else:  # kappa-only: conditional mean is the constant μ.
-            mu = self.result["mu"]
-            ax.axhline(mu, color="C1", lw=2, label=f"μ = {mu:.3f}")
-            ax.axhline(mu + 2 * np.pi, color="C1", lw=2)
-
-        ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
-        ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
-        ax.set_ylim(0, 4 * np.pi)
-        ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
-        ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
-        ax.set_xlabel(feature_label)
-        ax.set_ylabel("θ")
-        ax.set_title("Fit overlay")
-        ax.legend(loc="best", frameon=False)
-
-        ax = axes[1]
-        if self.model_type == "kappa":
-            kappa_curve = self._predict_kappa(x_grid_2d)
-            ax.plot(x_grid, kappa_curve, color="C1", lw=2)
-            ax.set_ylabel("κ̂(X) = exp(α + Xγ)")
-            ax.set_title("Fitted concentration")
+        sp = panels[surf_idx]
+        if sp.get("circular") and sp.get("csd") is not None:
+            # circular surface band = the ± circular-SD ribbon on the tube
+            lo, hi = (sp["mid"] - sp["csd"], sp["mid"] + sp["csd"]) if se else (None, None)
         else:
-            residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
-            ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
-            ax.axhline(0.0, color="k", lw=0.5)
-            ax.set_ylabel("Residual (rad)")
-            ax.set_title("Residuals vs X")
-        ax.set_xlabel(feature_label)
-
+            lo, hi = (sp.get("lo"), sp.get("hi")) if se else (None, None)
+        if view == "both":
+            fig = plt.figure(figsize=figsize or (12.0, 5.0))
+            ax3 = fig.add_subplot(1, 2, 1, projection="3d")
+            _geometry_panel(ax3, grid, sp["mid"], xv, yobs, surface, lo, hi)
+            ax2 = fig.add_subplot(1, 2, 2)
+            _flat_panel(ax2, grid, sp, cov, se, xv, yobs, rug)
+        else:
+            fig = plt.figure(figsize=figsize or (6.5, 6.0))
+            ax3 = fig.add_subplot(1, 1, 1, projection="3d")
+            _geometry_panel(ax3, grid, sp["mid"], xv, yobs, surface, lo, hi)
         fig.tight_layout()
         return fig
 
-    def _fitted_mean(self) -> np.ndarray:
-        """Conditional mean angle at the training X (constant μ for kappa-only)."""
-        mu = self.result["mu"]
-        if self.model_type == "kappa":
-            return np.full(self.theta.shape, mu)
-        beta = self.result["beta"]
-        return mu + 2 * np.arctan(self.X @ beta)
 
-    def _plot_residual_diagnostic(self, axes) -> None:
-        residuals = np.angle(np.exp(1j * (self.theta - self._fitted_mean())))
-        fitted = np.mod(self._fitted_mean(), 2 * np.pi)
-        ax = axes[0]
-        ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
-        ax.axhline(0.0, color="k", lw=0.5)
-        ax.set_xlabel("Fitted θ (rad)")
-        ax.set_ylabel("Residual (rad)")
-        ax.set_title("Residuals vs fitted")
+class CircGAM(_CircRegressionMixin, gam):
+    """Circular-response GAM fit: the hea ``gam`` — every attribute and method
+    (``summary``, ``predict``, ``fitted``, ``AIC``, ``logLik``, ``Vp``, ``edf``,
+    ``influence``, ``cooks_distance``, ``check``, ``plot``, ``vis``) directly
+    reachable — plus the circular-aware ``circ_check`` / ``circ_resid``.
 
-        ax = axes[1]
-        ax.hist(residuals, bins=20, color="C0", alpha=0.7, edgecolor="black")
-        ax.axvline(0.0, color="k", lw=0.5)
-        ax.set_xlabel("Residual (rad)")
-        ax.set_ylabel("Count")
-        ax.set_title("Residual histogram")
+    Returned by :func:`circ_gam`, constructed by reclassing the fitted gam in
+    place (the Python analog of R's ``class(fit) <- c("circ_gam", class(fit))``),
+    so it carries no ``__init__`` of its own."""
 
-    @staticmethod
-    def _two_sided_p(t_value: float) -> float:
-        if np.isnan(t_value):
-            return np.nan
-        return float(2.0 * norm.sf(np.abs(t_value)))
+    #: rotation (rad) applied to the response at fit time when ``center`` was on
+    #: (see :func:`circ_gam`); 0.0 for an uncentred fit. The class default keeps
+    #: pre-``circ_center`` pickles and any directly built CircGAM safe.
+    circ_center = 0.0
 
-    def summary(self):
-        if self.result is None:
-            raise ValueError("Model must be fitted before summarizing.")
+    #: front-door name printed in the header (``CircBAM`` overrides to circ_bam).
+    _front_door = "circ_gam"
 
-        # Title based on model type
-        if self.model_type == "mean":
-            print("\nCircular Regression for the Mean Direction\n")
-        elif self.model_type == "kappa":
-            print("\nCircular Regression for the Concentration Parameter\n")
-        elif self.model_type == "mixed":
-            print("\nMixed Circular-Linear Regression\n")
+    def __repr__(self):
+        """hea ``gam``'s print output, prefixed with a geometry-aware
+        ``circ_gam`` header — the circlss ``print.circ_gam`` twin. The header
+        names the leg (circular-linear / circular-circular / linear-circular /
+        location-scale, from :meth:`_geometry`), the family and — when the
+        family exposes them — its response parameters, and, for a centred fit,
+        the rotation applied. A plain (non-distributional) family gets hea's
+        output unchanged, as R leaves an ordinary ``gaussian()`` fit unheaded.
 
-        # Call
-        print("Call:")
-        print(f"  CLRegression(model_type='{self.model_type}')\n")
-
-        # Coefficients for mean direction (Beta)
-        se_beta = self.result.get("se_beta")
-        if (
-            self.model_type in ["mean", "mixed"]
-            and self.result.get("beta") is not None
-            and se_beta is not None
-        ):
-            print("Coefficients for Mean Direction (Beta):\n")
-            print(
-                f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)'}"
+        ``__str__`` is inherited from hea's ``gam`` and defers to
+        ``self.__repr__()``, so ``print(fit)`` picks this header up too."""
+        fam = self.family
+        n_lp = getattr(fam, "n_lp", None) or 0
+        if not (isinstance(fam, CircularLL) or n_lp >= 2):
+            return super().__repr__()  # plain family: hea's repr, no header
+        kind, resp_circular, _, _ = self._geometry()
+        head = {
+            "cl": "Circular GAM (circular-linear)",
+            "cc": "Circular GAM (circular-circular)",
+            "lc": "Linear-circular GAM",
+            "ll": "Location-scale GAM",
+        }.get(kind, "Circular GAM" if resp_circular else "Location-scale GAM")
+        fam_name = getattr(fam, "name", None) or type(fam).__name__
+        line = f"{head} via {self._front_door}() -- family {fam_name}"
+        params = getattr(fam, "params", None)
+        if params:
+            line += f", parameters: {', '.join(params)}"
+        header = line + "\n"
+        ref = getattr(self, "circ_center", 0.0)
+        if ref:
+            header += (
+                f"  centered at {ref:+.4g} rad for fitting; "
+                "directions reported in original frame\n"
             )
-            for i, coef in enumerate(self.result["beta"]):
-                se_val = se_beta[i]
-                t_value = coef / se_val if se_val else np.nan
-                p_value = self._two_sided_p(t_value)
-                print(
-                    f"β{i:<3} {coef:<12.5f} {se_val:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value):<3}"
-                )
+        return header + super().__repr__()
 
-        # Coefficients for concentration parameter (Gamma)
-        se_gamma = self.result.get("se_gamma")
-        se_alpha = self.result.get("se_alpha")
-        if (
-            self.model_type in ["kappa", "mixed"]
-            and self.result.get("gamma") is not None
-            and se_gamma is not None
-            and se_alpha is not None
-        ):
-            print("\nCoefficients for Concentration (Gamma):\n")
-            print(
-                f"{'':<5} {'Estimate':<12} {'Std. Error':<12} {'t value':<10} {'Pr(>|t|)':<12}"
-            )
-            # Report alpha as the first coefficient
-            alpha = self.result["alpha"]
-            t_value_alpha = alpha / se_alpha if se_alpha else np.nan
-            p_value_alpha = self._two_sided_p(t_value_alpha)
-            print(
-                f"α{'':<5} {alpha:<12.5f} {se_alpha:<12.5f} {t_value_alpha:<10.2f} {p_value_alpha:<12.5f}{significance_code(p_value_alpha)}"
-            )
-            for i, coef in enumerate(self.result["gamma"]):
-                se_val = se_gamma[i]
-                t_value = coef / se_val if se_val else np.nan
-                p_value = self._two_sided_p(t_value)
-                print(
-                    f"γ{i:<5} {coef:<12.5f} {se_val:<12.5f} {t_value:<10.2f} {p_value:<12.5f}{significance_code(p_value)}"
-                )
+    def predict(self, *args, **kwargs):
+        """``hea.models.gam.predict`` with the centring rotation undone on the
+        response scale. When the fit was centred (``circ_center != 0``),
+        ``type="response"`` (hea's default) rotates the circular-location column
+        back to the original frame — the circlss ``predict.circ_gam`` twin;
+        ``type="link"``/``"lpmatrix"``/``"terms"`` pass straight through, in the
+        centred fit frame. Identical to hea's ``predict`` for an uncentred fit."""
+        out = super().predict(*args, **kwargs)
+        ref = getattr(self, "circ_center", 0.0)
+        if not ref:
+            return out
+        typ = kwargs.get("type")
+        if typ is None and len(args) >= 2:
+            typ = args[1]
+        if (typ or "response") != "response":
+            return out
+        return _rotate_response(out, _wall_loc(self.family), ref)
 
-        # Summary for mu and kappa
-        print("\nSummary:")
-        print("  Mean Direction (mu) in radians:")
-        mu = self.result["mu"]
-        se_mu = self.result.get("se_mu")
-        if se_mu is not None:
-            print(f"    μ: {mu:.5f} (SE: {se_mu:.5f})")
-        else:
-            print(f"    μ: {mu:.5f}")
+    def _response_name(self):
+        fl = self.formula
+        first = fl[0] if isinstance(fl, (list, tuple)) else fl
+        return first.split("~", 1)[0].strip()
 
-        print("\n  Concentration Parameter (kappa):")
-        kappa = self.result["kappa"]
-        se_kappa = self.result.get("se_kappa")
-        if isinstance(kappa, np.ndarray):
-            print("    Index    kappa        Std. Error")
-            for i, k in enumerate(kappa, start=1):
-                se_val = se_kappa[i - 1] if se_kappa is not None else float("nan")
-                print(f"    [{i}]    {k:>10.5f}    {se_val:>10.5f}")
-            # Per-obs κ_i are correlated (shared α, γ), so averaging individual
-            # SEs is not the SE of the mean — report only the point estimate.
-            print(f"    Mean:    {np.mean(kappa):.5f}")
-        else:
-            if se_kappa is not None:
-                print(f"    κ: {kappa:.5f} (SE: {se_kappa:.5f})")
+    def _resid_parts(self):
+        fam = self.family
+        fm = np.asarray(self.fitted, dtype=float)
+        if fm.ndim == 1:
+            fm = fm[:, None]
+        y = np.asarray(self.data[self._response_name()].to_numpy(), dtype=float)
+        n = y.size
+        if isinstance(fam, CircularLL):
+            direction = np.asarray(fam._fitted_direction(fm), dtype=float)
+            if getattr(fam.dist, "name", "") == "vonmises":
+
+                def cdf():
+                    return _pvonmises(y, direction, fm[:, 1])
             else:
-                print(f"    κ: {kappa:.5f}")
-
-        # Summary for model fit metrics
-        print("\nModel Fit Metrics:\n")
-        print(f"{'Metric':<12} {'Value':<12}")
-        log_likelihood = self.result.get("log_likelihood", float("nan"))
-        nll = -log_likelihood  # Negative log-likelihood
-        print(f"{'nLL':<12} {nll:<12.5f}")
-        print(f"{'AIC':<12} {self.AIC():<12.5f}")
-        print(f"{'BIC':<12} {self.BIC():<12.5f}")
-
-        # Notes
-        print("\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
-        print("p-values are approximated using the normal distribution.\n")
-
-
-class CCRegression:
-    """
-    Circular-Circular Regression.
-
-    Fits a circular response to circular predictors using a specified order of harmonics.
-
-    Parameters
-    ----------
-    theta : np.ndarray
-        A numpy array of circular response values in radians.
-    x : np.ndarray
-        A numpy array of circular predictor values in radians.
-    order : int, optional
-        Order of harmonics to include in the model (default is 1).
-    level : float, optional
-        Significance level for testing higher-order terms (default is 0.05).
-
-    Attributes
-    ----------
-    rho : float
-        Circular correlation coefficient.
-    fitted : np.ndarray
-        Fitted values of the circular response in radians.
-    residuals : np.ndarray
-        Residuals of the circular response in radians.
-    coefficients : dict
-        Coefficients of the cos and sin terms for each harmonic order.
-    p_values : np.ndarray
-        P-values for higher-order terms.
-    kappa : float
-        Concentration of the residuals, A1⁻¹(mean cos(residuals)).
-    A_k : float
-        Mean cosine of the residuals (input to A1⁻¹).
-    message : str
-        Message indicating the significance of higher-order terms.
-
-    Methods
-    -------
-    summary()
-        Print the harmonic coefficient table, ρ, residual κ, and the test
-        of higher-order terms.
-    predict(x)
-        Predict the circular response at new ``x``.
-    plot(figsize=None, n_curve=200, axes=None)
-        Two-panel diagnostic figure (fit overlay for 1-D ``x``; residuals
-        vs fitted + histogram for multi-D).
-
-    Notes
-    -----
-    The implementation is ported from the ``lm.circular.cc`` in the
-    ``circular`` R package (Agostinelli & Lund).
-
-    References
-    ----------
-    - Jammalamadaka, S. R., & Sengupta, A. (2001) Topics in Circular Statistics. World Scientific.
-    - Pewsey, A., Neuhäuser, M., & Ruxton, G. D. (2014) Circular Statistics in R. Oxford University Press.
-    """
-
-    def __init__(
-        self,
-        formula: Optional[str] = None,
-        data: Optional[pd.DataFrame] = None,
-        theta: Optional[np.ndarray] = None,
-        x: Optional[np.ndarray] = None,
-        order: int = 1,
-        level: float = 0.05,
-    ):
-        if formula and data is not None:
-            theta_arr, x_arr, self.feature_names = self._parse_formula(formula, data)
-            self.theta = self._validate_input(theta_arr)
-            self.x = self._validate_input(x_arr)
-            if self.x.ndim == 1:
-                self.x = self.x[:, None]
-        elif theta is not None and x is not None:
-            self.theta = self._validate_input(theta)
-            self.x = self._validate_input(x)
-            if self.x.ndim == 1:
-                self.x = self.x[:, None]
-            self.feature_names = [f"x{i}" for i in range(self.x.shape[1])]
-        else:
-            raise ValueError("Provide either a formula + data or theta and x.")
-
-        if self.theta.ndim != 1:
-            raise ValueError(
-                f"`theta` must be 1-dimensional (got shape {self.theta.shape})."
-            )
-        if self.theta.size != self.x.shape[0]:
-            raise ValueError("`theta` and `x` must have matching numbers of rows.")
-
-        self.order = order
-        self.level = level
-
-        if self.order < 1:
-            raise ValueError("`order` must be a positive integer.")
-        if not (0 < self.level < 1):
-            raise ValueError("`level` must lie between 0 and 1.")
-
-        n_params = 1 + 2 * self.x.shape[1] * self.order
-        if self.theta.size <= n_params:
-            raise ValueError(
-                f"order={self.order} requires more than {n_params} observations "
-                f"(got {self.theta.size}); reduce `order` or provide more data."
-            )
-
-        # Fit the model
-        self.result = self._fit()
-
-    @staticmethod
-    def _validate_input(arr: np.ndarray) -> np.ndarray:
-        """Validate angular input and wrap to ``[0, 2π)``.
-
-        The model is 2π-periodic, so values are normalised modulo ``2π``.
-        Input is expected to be in radians; degrees would silently wrap to
-        the wrong range (e.g. 360° → 360 mod 2π ≈ 5.97 rad ≈ 342°).
-        """
-        arr_np = np.asarray(arr, dtype=float)
-        if arr_np.ndim == 0:
-            raise ValueError("Input must be at least one-dimensional.")
-        if not np.all(np.isfinite(arr_np)):
-            raise ValueError("Circular input contains non-finite values.")
-        if arr_np.size and float(np.max(np.abs(arr_np))) > 4 * np.pi:
-            warnings.warn(
-                "Circular input contains values with |x| > 4π; expected "
-                "radians. Degree-valued input will be silently wrapped "
-                "modulo 2π and produce incorrect results — use np.deg2rad.",
-                UserWarning,
-                stacklevel=3,
-            )
-        return np.mod(arr_np, 2 * np.pi)
-
-    def _parse_formula(
-        self, formula: str, data: pd.DataFrame
-    ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        parts = formula.split("~")
-        if len(parts) != 2:
-            raise ValueError(
-                f"Formula must contain exactly one '~'; got: {formula!r}"
-            )
-        theta_col, x_cols = parts
-        theta = data[theta_col.strip()].to_numpy()
-        x_cols = [col.strip() for col in x_cols.split("+") if col.strip()]
-        if not x_cols:
-            raise ValueError(f"No predictors found in formula: {formula!r}")
-        X = data[x_cols].to_numpy()
-        return theta, X, x_cols
-
-    def _design_matrix(self, x: np.ndarray) -> np.ndarray:
-        """Harmonic design matrix [1 | cos(kx_j) | sin(kx_j)] for given x."""
-        if x.ndim == 1:
-            x = x[:, None]
-        n, n_features = x.shape
-        cos_terms, sin_terms = [], []
-        for j in range(n_features):
-            for k in range(1, self.order + 1):
-                cos_terms.append(np.cos(k * x[:, j]))
-                sin_terms.append(np.sin(k * x[:, j]))
-        return np.column_stack([np.ones(n)] + cos_terms + sin_terms)
-
-    def _fit(self):
-        n = self.x.shape[0]
-        order = self.order
-        n_features = self.x.shape[1]
-
-        # Track which (feature, harmonic) each design column corresponds to.
-        cos_labels: List[Tuple[int, int]] = []
-        sin_labels: List[Tuple[int, int]] = []
-        for j in range(n_features):
-            for k in range(1, order + 1):
-                cos_labels.append((j, k))
-                sin_labels.append((j, k))
-
-        Y_cos = np.cos(self.theta)
-        Y_sin = np.sin(self.theta)
-
-        X = self._design_matrix(self.x)
-        beta_cos, _, _, _ = lstsq(X, Y_cos)
-        beta_sin, _, _, _ = lstsq(X, Y_sin)
-
-        # Fitted values
-        cos_fit = X @ beta_cos
-        sin_fit = X @ beta_sin
-        fitted = np.mod(np.arctan2(sin_fit, cos_fit), 2 * np.pi)
-
-        # Residuals (angular for diagnostics + raw OLS residuals on cos/sin)
-        residuals = np.angle(np.exp(1j * (self.theta - fitted)))
-        residual_cos = Y_cos - cos_fit
-        residual_sin = Y_sin - sin_fit
-
-        # Circular correlation coefficient
-        rho = float(np.clip(np.sqrt(np.mean(cos_fit**2 + sin_fit**2)), 0.0, 1.0))
-
-        # Per-coefficient OLS SEs for the cos/sin sub-models. Used by summary()
-        # to print a CL/LC-style coefficient table; not part of the R parity
-        # surface (lm.circular.cc returns only the coefficient matrix).
-        XtX_inv = _safe_inverse(X.T @ X)
-        diag_inv = np.maximum(np.diag(XtX_inv), 0.0)
-        df_resid = max(n - X.shape[1], 1)
-        sigma2_cos = float(residual_cos @ residual_cos) / df_resid
-        sigma2_sin = float(residual_sin @ residual_sin) / df_resid
-        se_beta_cos = np.sqrt(sigma2_cos * diag_inv)
-        se_beta_sin = np.sqrt(sigma2_sin * diag_inv)
-
-        # Test higher-order terms
-        higher_order_cos = []
-        higher_order_sin = []
-        for j in range(n_features):
-            x_col = self.x[:, j]
-            higher_order_cos.append(np.cos((order + 1) * x_col))
-            higher_order_sin.append(np.sin((order + 1) * x_col))
-        if higher_order_cos:
-            W = np.column_stack(higher_order_cos + higher_order_sin)
-        else:
-            W = np.empty((n, 0))
-
-        # Projection matrix for the current model
-        if W.size:
-            M = X @ XtX_inv @ X.T
-            H = W.T @ (np.eye(n) - M) @ W
-            H_inv = _safe_inverse(H)
-            N = W @ H_inv @ W.T
-
-            denom_cos = float(residual_cos @ residual_cos)
-            denom_sin = float(residual_sin @ residual_sin)
-            adj = max(n - (2 * order + 1), 1)
-            T1 = (
-                adj
-                * float(residual_cos @ N @ residual_cos)
-                / max(denom_cos, 1e-12)
-            )
-            T2 = (
-                adj
-                * float(residual_sin @ N @ residual_sin)
-                / max(denom_sin, 1e-12)
-            )
-
-            p1 = 1 - chi2.cdf(T1, W.shape[1])
-            p2 = 1 - chi2.cdf(T2, W.shape[1])
-            p_values = np.array([p1, p2], dtype=float)
-        else:
-            p_values = np.array([np.nan, np.nan], dtype=float)
-
-        # Message about higher-order terms
-        if np.all(np.isnan(p_values)):
-            message = "No additional harmonics available for testing."
-        elif np.all(p_values > self.level):
-            message = (
-                f"Higher-order terms are not significant at the {self.level} level."
-            )
-        else:
-            message = f"Higher-order terms are significant at the {self.level} level."
-
-        # Residual concentration (R parity): A1inv of the mean cosine of residuals.
-        A_k = float(np.mean(np.cos(residuals)))
-        if A_k < 0:
-            warnings.warn(
-                f"Mean residual cosine A_k={A_k:.4f} is negative — residuals "
-                "are systematically anti-aligned with the fitted direction. "
-                "κ has been clamped to 0; check for sign errors or model "
-                "misspecification.",
-                UserWarning,
-                stacklevel=3,
-            )
-        kappa_residual = float(A1inv(A_k))
-
-        return {
-            "rho": rho,
-            "fitted": fitted,
-            "residuals": residuals,
-            "coefficients": {
-                "cos": beta_cos,
-                "sin": beta_sin,
-            },
-            "se_coefficients": {
-                "cos": se_beta_cos,
-                "sin": se_beta_sin,
-            },
-            "df_resid": df_resid,
-            "cos_labels": cos_labels,
-            "sin_labels": sin_labels,
-            "p_values": p_values,
-            "A_k": A_k,
-            "kappa": kappa_residual,
-            "message": message,
-        }
-
-    def predict(self, x: np.ndarray) -> np.ndarray:
-        """Predict the circular response at new predictor values.
-
-        Parameters
-        ----------
-        x : array-like, shape (n,) or (n, n_features)
-            New predictor values in radians. For multi-feature models the
-            second axis must match ``self.x.shape[1]``.
-
-        Returns
-        -------
-        np.ndarray, shape (n,)
-            Predicted angles wrapped to ``[0, 2π)``.
-        """
-        x_arr = np.asarray(x, dtype=float)
-        if x_arr.ndim == 1:
-            x_arr = x_arr[:, None]
-        if x_arr.shape[1] != self.x.shape[1]:
-            raise ValueError(
-                f"Expected {self.x.shape[1]} predictor column(s); received "
-                f"{x_arr.shape[1]}."
-            )
-        x_arr = np.mod(x_arr, 2 * np.pi)
-        design = self._design_matrix(x_arr)
-        cos_pred = design @ self.result["coefficients"]["cos"]
-        sin_pred = design @ self.result["coefficients"]["sin"]
-        return np.mod(np.arctan2(sin_pred, cos_pred), 2 * np.pi)
-
-    def plot(
-        self,
-        figsize: Optional[Tuple[float, float]] = None,
-        n_curve: int = 200,
-        axes=None,
-    ):
-        """Two-panel diagnostic figure.
-
-        For a single circular predictor, the left panel is a fit overlay
-        with both data and curve replicated at ``θ`` and ``θ + 2π`` (Pewsey
-        Fig 6.10 convention) so the wrap-around does not visually break the
-        relationship; the right panel shows the wrapped residuals against
-        the predictor.
-
-        For multiple circular predictors, the left panel shows residuals
-        vs the fitted angle and the right panel a residual histogram.
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-        """
-        import matplotlib.pyplot as plt
-
-        n_features = self.x.shape[1]
-
-        if axes is None:
-            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 5))
-        else:
-            axes = list(axes)
-            if len(axes) != 2:
-                raise ValueError("`axes` must be a sequence of length 2.")
-            fig = axes[0].figure
-
-        if n_features == 1:
-            x_data = self.x[:, 0]
-            theta_data = self.theta
-            residuals = self.result["residuals"]
-            x_grid = np.linspace(0.0, 2 * np.pi, n_curve)
-            theta_pred = self.predict(x_grid)
-            # Break the curve where it wraps so plot() doesn't draw a
-            # vertical jump connecting 2π to 0.
-            theta_plot = theta_pred.astype(float).copy()
-            jumps = np.where(np.abs(np.diff(theta_pred)) > np.pi)[0]
-            theta_plot[jumps] = np.nan
-
-            ax = axes[0]
-            ax.plot(x_grid, theta_plot, color="C1", lw=2, label="fit")
-            ax.plot(x_grid, theta_plot + 2 * np.pi, color="C1", lw=2)
-            ax.scatter(x_data, theta_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
-            ax.scatter(x_data, theta_data + 2 * np.pi, color="C0", s=20, alpha=0.6, edgecolors="none")
-            ax.set_xlim(0, 2 * np.pi)
-            ax.set_ylim(0, 4 * np.pi)
-            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
-            ax.set_yticks([0, np.pi, 2 * np.pi, 3 * np.pi, 4 * np.pi])
-            ax.set_yticklabels(["0", "π", "2π", "3π", "4π"])
-            ax.set_xlabel(self.feature_names[0])
-            ax.set_ylabel("θ")
-            ax.set_title("Fit overlay")
-            ax.legend(loc="best", frameon=False)
-
-            ax = axes[1]
-            ax.scatter(x_data, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
-            ax.axhline(0.0, color="k", lw=0.5)
-            ax.set_xlim(0, 2 * np.pi)
-            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
-            ax.set_xlabel(self.feature_names[0])
-            ax.set_ylabel("Residual (rad)")
-            ax.set_title("Residuals vs predictor")
-        else:
-            residuals = self.result["residuals"]
-            fitted = self.result["fitted"]
-
-            ax = axes[0]
-            ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
-            ax.axhline(0.0, color="k", lw=0.5)
-            ax.set_xlabel("Fitted θ (rad)")
-            ax.set_ylabel("Residual (rad)")
-            ax.set_title("Residuals vs fitted")
-
-            ax = axes[1]
-            ax.hist(residuals, bins=20, color="C0", alpha=0.7, edgecolor="black")
-            ax.axvline(0.0, color="k", lw=0.5)
-            ax.set_xlabel("Residual (rad)")
-            ax.set_ylabel("Count")
-            ax.set_title("Residual histogram")
-
-        fig.tight_layout()
-        return fig
-
-    def summary(self):
-        """
-        Print a summary of the regression results.
-        """
-        print("\nCircular-Circular Regression\n")
-        print(f"Circular Correlation Coefficient (rho): {self.result['rho']:.5f}")
-        print(f"Mean Residual Cosine (A_k):             {self.result['A_k']:.5f}")
-        print(f"Residual Concentration (kappa):         {self.result['kappa']:.5f}\n")
-
-        cos_coeffs = self.result["coefficients"]["cos"]
-        sin_coeffs = self.result["coefficients"]["sin"]
-        se_cos = self.result["se_coefficients"]["cos"]
-        se_sin = self.result["se_coefficients"]["sin"]
-        df_resid = self.result["df_resid"]
-        cos_labels = self.result.get("cos_labels", [])
-        sin_labels = self.result.get("sin_labels", [])
-
-        intercept_label = "(Intercept)"
-        cos_label_strs = [f"cos(x{f + 1},k={k})" for (f, k) in cos_labels]
-        sin_label_strs = [f"sin(x{f + 1},k={k})" for (f, k) in sin_labels]
-        row_labels = [intercept_label, *cos_label_strs, *sin_label_strs]
-        label_width = max(12, *(len(s) for s in row_labels))
-
-        def _print_block(title: str, coefs: np.ndarray, ses: np.ndarray) -> None:
-            print(f"{title}:\n")
-            print(
-                f"{'':<{label_width}} {'Estimate':<12} {'Std. Error':<12} "
-                f"{'t value':<10} {'Pr(>|t|)':<12}"
-            )
-            for label, coef, se_val in zip(row_labels, coefs, ses):
-                t_val = coef / se_val if se_val else np.nan
-                if np.isnan(t_val):
-                    p_val = np.nan
-                else:
-                    p_val = float(2.0 * student_t.sf(np.abs(t_val), df=df_resid))
-                print(
-                    f"{label:<{label_width}} {coef:<12.5f} {se_val:<12.5f} "
-                    f"{t_val:<10.2f} {p_val:<12.5f}{significance_code(p_val)}"
-                )
-            print()
-
-        _print_block("Coefficients (Cosine Model)", cos_coeffs, se_cos)
-        _print_block("Coefficients (Sine Model)", sin_coeffs, se_sin)
-
-        # Higher-order test (parity with R's lm.circular.cc): jointly tests
-        # whether the order+1 cos/sin pair adds explanatory power, separately
-        # for the cosine and sine sub-models.
-        p1, p2 = self.result["p_values"]
-        print("Higher-Order Terms Test:\n")
-        print(f"{'':<{label_width}} {'Pr(>χ²)':<12}")
-        print(f"{'cosine model':<{label_width}} {p1:<12.5f}{significance_code(p1)}")
-        print(f"{'sine model':<{label_width}} {p2:<12.5f}{significance_code(p2)}")
-
-        print(f"\n{self.result['message']}")
-        print(
-            "\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1"
-        )
-        print(
-            "Per-coefficient p-values use the t distribution; the higher-order "
-            "test uses χ² (Jammalamadaka & Sengupta 2001).\n"
-        )
-
-
-# Markers used by LCRegression's formula parser.
-# `[^\W\d_]\w*` matches a Python-style identifier including Unicode letters
-# (e.g. Greek `θ`), while still forbidding a leading digit.
-_LC_IDENT = r"[^\W\d_]\w*"
-# Accept both `harmonic(theta, k=K)` and `harmonic(theta, K)`.
-_LC_HARMONIC_RE = re.compile(
-    rf"harmonic\s*\(\s*({_LC_IDENT})\s*(?:,\s*(?:k\s*=\s*)?(\d+)\s*)?\)"
-)
-_LC_UNSUPPORTED_RE = re.compile(r"\b(skew|flat)\s*\(")
-# Coefficient-name pattern as emitted by hea: e.g. "cos(theta)",
-# "sin(2 * theta)", or "cos(theta * 2)" — multiplier may appear on either side.
-_LC_TRIG_RE = re.compile(
-    rf"^(cos|sin)\(\s*"
-    rf"(?:(?P<lmult>\d+)\s*\*\s*(?P<lvar>{_LC_IDENT})"
-    rf"|(?P<rvar>{_LC_IDENT})(?:\s*\*\s*(?P<rmult>\d+))?)"
-    rf"\s*\)$"
-)
-
-
-class LCRegression:
-    """
-    Linear–Circular Regression.
-
-    Models a linear response Y as a function of a circular regressor θ
-    (in radians). Backed by ``hea.lm``.
-
-    Formula syntax
-    --------------
-    The right-hand side accepts either a marker that expands to a Fourier
-    basis, or fully explicit ``cos(...) / sin(...)`` terms (or both).
-
-    - ``"y ~ harmonic(theta)"`` — basic cosine model (Pewsey et al. 2014, §8.4.1)
-    - ``"y ~ harmonic(theta, k=K)"`` — extended model with K harmonics (§8.4.2)
-    - ``"y ~ cos(theta) + sin(theta) + cos(3*theta) + sin(3*theta)"`` —
-      fully explicit; useful for non-contiguous harmonic orders
-    - ``"y ~ harmonic(theta, k=2) + temperature"`` — mix marker with extra
-      linear covariates
-
-    Markers ``skew(theta)`` and ``flat(theta)`` are reserved for the
-    nonlinear models in §8.4.3 / §8.4.4 and currently raise
-    ``NotImplementedError`` (they need a nonlinear least-squares backend
-    that ``hea`` does not yet provide).
-
-    Parameters
-    ----------
-    formula : str
-        R-style formula. See above.
-    data : pandas.DataFrame or polars.DataFrame
-        Input data. Pandas inputs are converted to polars internally.
-
-    Attributes
-    ----------
-    formula : str
-        The original formula passed in.
-    expanded_formula : str
-        Formula after marker expansion, as actually fit by ``hea.lm``.
-    lm_fit : hea.lm
-        The underlying linear-model fit. Use it for diagnostics
-        (``.plot()``, ``.summary()``, ``.r_squared``, etc.).
-    result : dict
-        - coefficients : dict of {name: value} from the linear fit
-        - harmonics : list of dicts, one per matched ``cos(k·θ)/sin(k·θ)``
-          pair, each with ``variable``, ``k``, ``cos_coef``, ``sin_coef``,
-          ``amplitude``, ``phase``, ``se_amplitude``, ``se_phase`` (the
-          last two via the delta method on the (cos, sin) covariance).
-        - sigma, r_squared, aic, bic : scalars
-        - fitted, residuals : np.ndarray
-
-    Notes
-    -----
-    The harmonic-pair detector recognises only **integer** multipliers,
-    written on either side of ``*`` (e.g. ``cos(theta)``, ``cos(2*theta)``,
-    ``cos(theta*2)``). A term like ``cos(0.5*theta)`` is treated as a regular
-    linear predictor and won't appear in ``result['harmonics']``.
-
-    References
-    ----------
-    Pewsey, A., Neuhäuser, M., Ruxton, G. D. (2014). *Circular Statistics
-    in R*. Oxford University Press, §8.4.
-    """
-
-    def __init__(
-        self,
-        formula: str,
-        data: Union[pd.DataFrame, "pl.DataFrame"],
-    ):
-        if not isinstance(formula, str) or "~" not in formula:
-            raise ValueError(
-                f"Formula must be a string containing '~'; got {formula!r}"
-            )
-
-        self.formula = formula
-        self.response = formula.split("~", 1)[0].strip()
-        self.data = self._to_polars(data)
-        self.expanded_formula = self._expand_formula(formula)
-        self.lm_fit = _hea_lm(self.expanded_formula, self.data)
-        self.result = self._build_result()
-
-    @staticmethod
-    def _to_polars(data: Union[pd.DataFrame, "pl.DataFrame"]) -> "pl.DataFrame":
-        if isinstance(data, pl.DataFrame):
-            return data
-        if isinstance(data, pd.DataFrame):
-            return pl.from_pandas(data)
-        raise TypeError(
-            f"`data` must be a pandas or polars DataFrame; got {type(data).__name__}"
-        )
-
-    @staticmethod
-    def _expand_formula(formula: str) -> str:
-        lhs, _, rhs = formula.partition("~")
-        if _LC_UNSUPPORTED_RE.search(rhs):
-            raise NotImplementedError(
-                "skew() and flat() markers require a nonlinear least-squares "
-                "backend (hea.nls), which is not yet available."
-            )
-
-        def _expand(match: "re.Match[str]") -> str:
-            col = match.group(1)
-            k = int(match.group(2)) if match.group(2) else 1
-            if k < 1:
-                raise ValueError(f"harmonic(..., k={k}): k must be a positive integer.")
-            terms = []
-            for j in range(1, k + 1):
-                if j == 1:
-                    terms.append(f"cos({col}) + sin({col})")
-                else:
-                    terms.append(f"cos({j}*{col}) + sin({j}*{col})")
-            return " + ".join(terms)
-
-        expanded_rhs = _LC_HARMONIC_RE.sub(_expand, rhs)
-        return f"{lhs.strip()} ~ {expanded_rhs.strip()}"
-
-    def _build_result(self) -> dict:
-        bhat_df = self.lm_fit.bhat
-        coef_names = list(bhat_df.columns)
-        coef_values = list(bhat_df.row(0))
-        coefficients = dict(zip(coef_names, coef_values))
-
-        cov = np.asarray(self.lm_fit.V_bhat, dtype=float)
-        column_names = list(self.lm_fit.column_names)
-        name_to_idx = {n: i for i, n in enumerate(column_names)}
-
-        # Group cos/sin terms by (variable, multiplier).
-        groups: dict = {}
-        for name, value in coefficients.items():
-            m = _LC_TRIG_RE.match(name)
-            if not m:
-                continue
-            func = m.group(1)
-            if m.group("lvar") is not None:
-                var = m.group("lvar")
-                k = int(m.group("lmult"))
-            else:
-                var = m.group("rvar")
-                k = int(m.group("rmult")) if m.group("rmult") else 1
-            slot = groups.setdefault((var, k), {})
-            slot[func] = (name, value)
-
-        harmonics = []
-        for (var, k), pair in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1])):
-            cos_entry = pair.get("cos")
-            sin_entry = pair.get("sin")
-            cos_val = cos_entry[1] if cos_entry else None
-            sin_val = sin_entry[1] if sin_entry else None
-
-            amplitude = phase = se_amp = se_phase = None
-            if cos_val is not None and sin_val is not None:
-                amplitude = float(np.hypot(cos_val, sin_val))
-                phase = float(np.arctan2(sin_val, cos_val))
-                # Delta-method SEs from the (c, s) covariance block.
-                ic = name_to_idx.get(cos_entry[0])
-                isn = name_to_idx.get(sin_entry[0])
-                if ic is not None and isn is not None and amplitude > 0:
-                    var_c = cov[ic, ic]
-                    var_s = cov[isn, isn]
-                    cov_cs = cov[ic, isn]
-                    r2 = amplitude ** 2
-                    var_amp = (
-                        cos_val ** 2 * var_c
-                        + 2 * cos_val * sin_val * cov_cs
-                        + sin_val ** 2 * var_s
-                    ) / r2
-                    var_phase = (
-                        sin_val ** 2 * var_c
-                        - 2 * cos_val * sin_val * cov_cs
-                        + cos_val ** 2 * var_s
-                    ) / (r2 ** 2)
-                    se_amp = float(np.sqrt(max(var_amp, 0.0)))
-                    se_phase = float(np.sqrt(max(var_phase, 0.0)))
-
-            harmonics.append(
-                {
-                    "variable": var,
-                    "k": k,
-                    "cos_coef": cos_val,
-                    "sin_coef": sin_val,
-                    "amplitude": amplitude,
-                    "phase": phase,
-                    "se_amplitude": se_amp,
-                    "se_phase": se_phase,
+                params = {
+                    nm: (
+                        np.mod(fm[:, j], 2.0 * np.pi)
+                        if fam.links[j].name == "tanhalf"
+                        else fm[:, j]
+                    )
+                    for j, nm in enumerate(fam.params)
                 }
-            )
 
-        residuals = self.lm_fit.residuals
-        if isinstance(residuals, pl.DataFrame):
-            residuals = residuals.to_numpy().ravel()
-        fitted = self.lm_fit.yhat
-        if isinstance(fitted, pl.DataFrame):
-            fitted = fitted.to_numpy().ravel()
+                def cdf():
+                    return np.clip(
+                        np.asarray(fam.dist.cdf(y, **params), dtype=float), 0.0, 1.0
+                    )
 
+            return {
+                "y": _wrap(y),
+                "response_circular": True,
+                "fitted_dir": _wrap(direction),
+                "n": n,
+                "family_label": fam.name,
+                "resid_response": lambda: fam.residuals(y, fm, type="response"),
+                "resid_deviance": lambda: fam.residuals(y, fm, type="deviance"),
+                "resid_pearson": lambda: fam.residuals(y, fm, type="pearson"),
+                "cdf": cdf,
+            }
+        # linear-response gam (e.g. gaussian on a cyclic covariate): hea owns
+        # the residuals; the PIT is the gaussian probability-integral transform.
+        mean = fm[:, 0]
+        sigma = np.sqrt(float(getattr(self, "scale", 1.0) or 1.0))
         return {
-            "coefficients": coefficients,
-            "harmonics": harmonics,
-            "sigma": float(self.lm_fit.sigma),
-            "r_squared": float(self.lm_fit.r_squared),
-            "aic": float(self.lm_fit.AIC),
-            "bic": float(self.lm_fit.BIC),
-            "fitted": np.asarray(fitted, dtype=float),
-            "residuals": np.asarray(residuals, dtype=float),
+            "y": y,
+            "response_circular": False,
+            "fitted_dir": mean,
+            "n": n,
+            "family_label": getattr(fam, "name", type(fam).__name__),
+            "resid_response": lambda: _ravel(self.residuals_of("response")),
+            "resid_deviance": lambda: _ravel(self.residuals_of("deviance")),
+            "resid_pearson": lambda: _ravel(self.residuals_of("pearson")),
+            "cdf": lambda: norm.cdf((y - mean) / sigma),
         }
 
-    def predict(
-        self, data: Union[pd.DataFrame, "pl.DataFrame"]
-    ) -> np.ndarray:
-        """Predict the linear response for new values of the regressors."""
-        new = self._to_polars(data)
-        out = self.lm_fit.predict(new=new)
-        if isinstance(out, pl.DataFrame):
-            out = out.to_numpy().ravel()
-        return np.asarray(out, dtype=float)
+    def _check_backend(self):
+        try:
+            return {"edf": float(np.sum(np.asarray(self.edf, dtype=float)))}
+        except Exception:
+            return {}
 
-    def summary(self) -> None:
-        """Print a full diagnostic summary.
+    # ---- plotting hooks (the mixin's circ_plot drives off these) --------- #
+    def _model_frame(self):
+        return self.data
 
-        Reuses ``hea.lm.summary()`` for the standard regression block
-        (residual quantiles, coefficient table with SEs/CIs/t/p, fit metrics)
-        and appends a harmonic-decomposition table with delta-method SEs and
-        95% CIs for each cos/sin amplitude and phase.
-        """
-        print("\nLinear-Circular Regression")
-        if self.expanded_formula != self.formula:
-            print(f"User formula:     {self.formula}")
-            print(f"Expanded formula: {self.expanded_formula}")
-        print()
+    def _response_values(self):
+        return np.asarray(self.data[self._response_name()].to_numpy(), dtype=float)
 
-        # hea.lm.summary() prints to stdout and returns None.
-        self.lm_fit.summary()
+    def _plot_fallback(self):
+        # no single covariate axis for the circular display: defer to hea's
+        # per-term plot.gam on the un-reclassed object (mgcv's term plots).
+        return self.plot()
 
-        if self.result["harmonics"]:
-            self._print_harmonic_table()
+    def _covariate(self):
+        fl = self.formula if isinstance(self.formula, (list, tuple)) else [self.formula]
+        resp = self._response_name()
+        cols = set(self.data.columns)
+        seen, out = set(), []
+        for f in fl:
+            rhs = f.split("~", 1)[1] if "~" in f else f
+            # Unicode-aware identifier (matches Greek covariate names like ``θ``;
+            # forbids a leading digit) — an ASCII-only class would miss θ and
+            # leave the fit looking covariate-less, collapsing circ_plot to the
+            # mgcv term-plot fallback.
+            for tok in re.findall(r"[^\W\d_]\w*", rhs):
+                if tok in cols and tok != resp and tok not in seen:
+                    seen.add(tok)
+                    out.append(tok)
+        return out[0] if len(out) == 1 else None
 
-    def _print_harmonic_table(self) -> None:
-        z = float(norm.ppf(0.975))
+    def _geometry(self):
+        fam = self.family
+        resp_circular = isinstance(fam, CircularLL)
+        cov = self._covariate()
+        fl = self.formula if isinstance(self.formula, (list, tuple)) else [self.formula]
+        cyclic = set()
+        for f in fl:
+            cyclic |= set(_cyclic_smooth_vars(f.split("~", 1)[1] if "~" in f else f))
+        cov_circular = cov is not None and cov in cyclic
+        if cov is None:
+            kind = None
+        elif resp_circular and not cov_circular:
+            kind = "cl"
+        elif resp_circular and cov_circular:
+            kind = "cc"
+        elif not resp_circular and cov_circular:
+            kind = "lc"
+        else:
+            kind = "ll"
+        return kind, resp_circular, cov_circular, cov
 
-        def _fmt(value):
-            return "n/a" if value is None else f"{value:.4f}"
+    def _flat_panels(self, grid, nd):
+        fam = self.family
+        if not isinstance(fam, CircularLL):
+            # linear-response gam (e.g. gaussian on a cyclic covariate): the
+            # response-scale mean with its 2-SE band.
+            pr = self.predict(nd, type="response", se_fit=True)
+            mid = pr["fit"].to_numpy()
+            se = pr["se.fit"].to_numpy()
+            return [
+                {
+                    "name": self._response_name(),
+                    "circular": False,
+                    "mid": mid,
+                    "lo": mid - 2.0 * se,
+                    "hi": mid + 2.0 * se,
+                }
+            ]
+        pr = self.predict(nd, type="link", se_fit=True).to_numpy()
+        nlp = fam.n_lp
+        eta, seta = pr[:, :nlp], pr[:, nlp : 2 * nlp]
+        resp_fit = np.column_stack(
+            [np.asarray(fam.links[j].linkinv(eta[:, j]), dtype=float) for j in range(nlp)]
+        )
+        # A circular location carries the ± circular-SD PREDICTIVE band (the
+        # spread of the responses about the fitted direction), from one
+        # quadrature of the fitted law per grid point — one path for every
+        # family, incl. pnlss's derived direction below. Scale/shape parameters
+        # keep the delta-method 2-SE band. The circlss plot twin.
+        csd = _circ_sd_quad(fam, resp_fit)
+        twopi = 2.0 * np.pi
+        panels = []
+        for j in range(nlp):
+            if fam.links[j].name == "tanhalf":
+                panels.append(
+                    {"name": fam.params[j], "circular": True,
+                     "mid": np.mod(resp_fit[:, j], twopi), "csd": csd}
+                )
+            else:
+                li = fam.links[j].linkinv
+                panels.append(
+                    {
+                        "name": fam.params[j],
+                        "circular": False,
+                        "mid": resp_fit[:, j],
+                        "lo": np.asarray(li(eta[:, j] - 2 * seta[:, j]), dtype=float),
+                        "hi": np.asarray(li(eta[:, j] + 2 * seta[:, j]), dtype=float),
+                    }
+                )
+        # derived mean direction (e.g. pnlss's atan2(mu2, mu1)): a circular
+        # direction, so the same ± circular-SD predictive band as a native
+        # circular location (its concentration is implicit in the two LPs).
+        loc = fam.dist.params_by_role().get("location", [])
+        if len(loc) == 2:
+            i1, i2 = (fam.params.index(loc[0]), fam.params.index(loc[1]))
+            mid = np.arctan2(resp_fit[:, i2], resp_fit[:, i1])
+            panels.append(
+                {"name": "direction", "circular": True,
+                 "mid": np.mod(mid, twopi), "csd": csd}
+            )
+        # centred fit: rotate every circular location/direction curve back to the
+        # original frame (its csd half-width is rotation-invariant). A no-op when
+        # uncentred or wall-less (ref == 0). Matches the +ref the observed overlay
+        # gets in circ_plot, and circlss's plot twin.
+        ref = getattr(self, "circ_center", 0.0)
+        if ref:
+            for p in panels:
+                if p.get("circular"):
+                    p["mid"] = np.mod(np.asarray(p["mid"], dtype=float) + ref, twopi)
+        return panels
 
-        def _ci(value, se):
-            if value is None or se is None:
-                return "n/a"
-            return f"[{value - z * se:.4f}, {value + z * se:.4f}]"
+    def _check_cov(self):
+        cov = self._covariate()
+        if cov is None:
+            return None
+        _, _, cov_circular, _ = self._geometry()
+        return {
+            "name": cov,
+            "values": np.asarray(self.data[cov].to_numpy(), dtype=float),
+            "circular": cov_circular,
+        }
 
-        rows = []
-        for h in self.result["harmonics"]:
-            amp, ph = h["amplitude"], h["phase"]
-            se_a, se_p = h["se_amplitude"], h["se_phase"]
-            label = f"{h['variable']}, k={h['k']}"
-            rows.append(
-                (label, _fmt(amp), _fmt(se_a), _ci(amp, se_a), _fmt(ph), _fmt(se_p), _ci(ph, se_p))
+    def _leverage(self):
+        # a general-family GAM exposes no per-observation hat (mgcv/hea); the
+        # principled influence summary is the k.check edf table instead, so the
+        # cook panel is dropped (R-faithful).
+        h = getattr(self, "hat", None)
+        if h is not None and np.asarray(h).size:
+            return {
+                "h": np.asarray(h, dtype=float),
+                "p": float(np.sum(np.asarray(self.edf, dtype=float))),
+            }
+        return None
+
+
+class CircBAM(CircGAM, bam):
+    """Circular big-additive-model fit: the discrete-rail twin of
+    :class:`CircGAM`, returned by :func:`circ_bam`.
+
+    Inherits every circular method from :class:`CircGAM` — the ``predict``
+    rotate-back, the geometry-aware header, ``_flat_panels``/``_resid_parts``
+    and hence ``circ_plot``/``circ_check``/``circ_resid`` — while its fitting
+    surface (and the ``predict`` those methods call via ``super()``) is
+    ``hea``'s :class:`~hea.models.bam.bam`, so the binned discrete design is
+    used throughout. Constructed by reclassing a fitted ``bam`` in place, so it
+    carries no ``__init__`` of its own; ``print`` reports the geometry header
+    (``_geometry`` is family/covariate-based, engine-agnostic)."""
+
+    _front_door = "circ_bam"
+
+
+class CircLM(_CircRegressionMixin):
+    """Classical circular regression result — the cl/cc/lc legs of
+    :func:`circ_lm`.
+
+    Fields are reachable both as attributes and as mapping keys (``m.mu`` or
+    ``m["mu"]``, ``m.kappa``/``m["kappa"]`` …, the dict-style back-compat), and
+    for the lc leg every unknown attribute delegates to the wrapped hea ``lm``
+    (so ``m.bhat``, ``m.plot``, ``m.ci_bhat``, ``m.AIC`` keep working). Adds
+    ``summary`` / ``predict`` / ``coef`` / ``logLik`` and the circular
+    ``circ_check`` / ``circ_resid``."""
+
+    def __init__(self, type, fields):
+        self.type = type
+        self._fields = dict(fields)
+        for k, v in self._fields.items():
+            setattr(self, k, v)
+
+    def __getitem__(self, key):
+        return self._fields[key]
+
+    def __contains__(self, key):
+        return key in self._fields
+
+    def keys(self):
+        return self._fields.keys()
+
+    def __getattr__(self, name):
+        # reached only when normal lookup fails; the lc leg delegates to its lm
+        lm_fit = self.__dict__.get("lm")
+        if lm_fit is not None and hasattr(lm_fit, name):
+            return getattr(lm_fit, name)
+        raise AttributeError(name)
+
+    # ---- parts adapter (the mixin's residual hook) ----------------------- #
+    def _resid_parts(self):
+        return self._parts_vm() if self.type in ("cl", "cc") else self._parts_lc()
+
+    def _obs_response(self):
+        return np.asarray(self.frame[self.response].to_numpy(), dtype=float)
+
+    def _parts_vm(self):
+        y = self._obs_response()
+        direction = np.asarray(self.fitted, dtype=float)
+        kappa = np.broadcast_to(np.asarray(self.kappa, dtype=float), y.shape).astype(
+            float
+        )
+        yw, dw = _wrap(y), _wrap(direction)
+
+        def ang():
+            return _wrap(yw - dw)
+
+        def dev():
+            d = ang()
+            return np.sign(np.sin(d)) * np.sqrt(
+                np.clip(2.0 * kappa * (1.0 - np.cos(d)), 0.0, None)
             )
 
-        headers = (
-            "term",
-            "amplitude",
-            "SE",
-            "CI[2.5%, 97.5%]",
-            "phase",
-            "SE",
-            "CI[2.5%, 97.5%]",
+        def pear():
+            d = ang()
+            safe = np.where(kappa == 0, 1.0, kappa)
+            v = np.where(kappa == 0, 0.5, A1(kappa) / safe)
+            return np.sin(d) / np.sqrt(v)
+
+        return {
+            "y": yw,
+            "response_circular": True,
+            "fitted_dir": dw,
+            "n": y.size,
+            "family_label": f"circ_lm:{self.type}",
+            "resid_response": ang,
+            "resid_deviance": dev,
+            "resid_pearson": pear,
+            "cdf": lambda: _pvonmises(y, direction, kappa),
+        }
+
+    def _parts_lc(self):
+        fit = np.asarray(self.fitted, dtype=float)
+        resid = np.asarray(self.residuals, dtype=float)
+        sigma = float(self.sigma)
+        return {
+            "y": fit + resid,
+            "response_circular": False,
+            "fitted_dir": fit,
+            "n": fit.size,
+            "family_label": "circ_lm:lc",
+            "resid_response": lambda: resid,
+            "resid_deviance": lambda: resid / sigma,
+            "resid_pearson": lambda: resid / sigma,
+            "cdf": lambda: norm.cdf(resid / sigma),
+        }
+
+    def _check_backend(self):
+        if self.type == "cc":
+            return {"p_values": self._fields.get("p_values")}
+        if self.type == "lc":
+            return {"r_squared": float(self.r_squared), "sigma": float(self.sigma)}
+        kappa = np.asarray(self.kappa, dtype=float)
+        krange = (
+            float(kappa)
+            if kappa.size == 1
+            else (float(np.min(kappa)), float(np.max(kappa)))
         )
-        widths = [
-            max(len(h), max(len(r[i]) for r in rows)) for i, h in enumerate(headers)
+        return {"converged": bool(self._fields.get("converged", True)), "kappa": krange}
+
+    # ---- plotting hooks (the mixin's circ_plot drives off these) --------- #
+    def _model_frame(self):
+        return self.frame
+
+    def _response_values(self):
+        return np.asarray(self.frame[self.response].to_numpy(), dtype=float)
+
+    def _plot_fallback(self):
+        # no single covariate axis (a multi-covariate cl fit): there is no
+        # geometry/flat view to draw — point at the numeric accessors.
+        print(
+            "circ_plot: the geometry/flat views need exactly one covariate; "
+            "this is a multi-covariate fit. Use coef()/predict()/summary()."
+        )
+        return None
+
+    def _geometry(self):
+        return (
+            self.type,
+            self.type in ("cl", "cc"),
+            self.type in ("cc", "lc"),
+            self.covariate,
+        )
+
+    def _flat_panels(self, grid, nd):
+        if self.covariate is None:
+            return None
+        if self.type == "lc":
+            return [{"name": self.response, "circular": False, **self._lc_loc(grid)}]
+        if self.type == "cc":
+            return [{"name": self.response, "circular": True, **self._cc_loc(grid)}]
+        # cl: the location μ carries the ± circular-SD PREDICTIVE band from the
+        # fitted concentration at each grid point (√(−2 log A1(κ)), constant for
+        # the mean model, varying for a κ-model); the κ panel keeps its 2-SE
+        # band. The circlss plot twin.
+        ka = self._cl_kappa(nd)
+        csd = _circ_sd_from_R(A1(np.asarray(ka["mid"], dtype=float)))
+        return [
+            {"name": self.response, "circular": True, **self._cl_mu(nd, csd)},
+            {"name": "kappa", "circular": False, **ka},
         ]
 
-        print("\nHarmonic decomposition:")
-        line = "  ".join(f"{h:<{w}s}" for h, w in zip(headers, widths))
-        print(line)
-        print("-" * len(line))
-        for r in rows:
-            print("  ".join(f"{c:<{w}s}" for c, w in zip(r, widths)))
+    def _cl_mu(self, nd, csd):
+        """Fisher–Lee mean direction μ = μ0 + 2·atan(Xβ) (on [0, 2π)) with the
+        ± circular-SD predictive band (``csd``, the angular spread of the fitted
+        von Mises)."""
+        xn, _ = _circ_lm_design(self.mu_formula, nd, self.response)
+        eta = xn @ self.beta if xn.shape[1] else np.zeros(nd.height)
+        mid = np.mod(self.mu + 2.0 * np.arctan(eta), 2.0 * np.pi)
+        return {"mid": mid, "csd": csd}
+
+    def _cl_kappa(self, nd):
+        """Concentration log κ = α + Zγ with its band on the log scale (through
+        Vαγ), then exp()'d back to the response scale."""
+        zn, _ = _circ_lm_design(self.kappa_formula, nd, self.response)
+        if not zn.shape[1]:
+            mid = np.full(nd.height, float(np.atleast_1d(self.kappa)[0]))
+            if self.se_kappa is None:
+                return {"mid": mid, "lo": None, "hi": None}
+            sk = float(np.atleast_1d(self.se_kappa)[0])
+            return {"mid": mid, "lo": mid - 2.0 * sk, "hi": mid + 2.0 * sk}
+        eta = self.alpha + zn @ self.gamma
+        vag = self._fields.get("Vag")
+        if vag is None:
+            return {"mid": np.exp(eta), "lo": None, "hi": None}
+        z1 = np.column_stack([np.ones(nd.height), zn])
+        se_eta = np.sqrt(np.clip(np.sum((z1 @ vag) * z1, axis=1), 0.0, None))
+        return {
+            "mid": np.exp(eta),
+            "lo": np.exp(eta - 2.0 * se_eta),
+            "hi": np.exp(eta + 2.0 * se_eta),
+        }
+
+    def _cc_loc(self, grid):
+        """Harmonic circular–circular location atan2(ŝ, ĉ) with the ± circular-SD
+        predictive band from the fitted residual concentration κ
+        (√(−2 log A1(κ)), constant across the grid). The circlss plot twin."""
+        nd = pl.DataFrame({self.var: np.mod(grid, 2.0 * np.pi)})
+        cf = self.cos_lm.predict(nd)["fit"].to_numpy()
+        sf = self.sin_lm.predict(nd)["fit"].to_numpy()
+        mid = np.mod(np.arctan2(sf, cf), 2.0 * np.pi)
+        csd = float(_circ_sd_from_R(A1(float(np.atleast_1d(self.kappa)[0]))))
+        return {"mid": mid, "csd": csd}
+
+    def _lc_loc(self, grid):
+        """Harmonic linear–circular mean over the cyclic covariate: the OLS
+        prediction band directly."""
+        nd = pl.DataFrame({self.var: np.mod(grid, 2.0 * np.pi)})
+        pr = self.lm.predict(nd, se_fit=True)
+        fit, se = pr["fit"].to_numpy(), pr["se.fit"].to_numpy()
+        return {"mid": fit, "lo": fit - 2.0 * se, "hi": fit + 2.0 * se}
+
+    def _check_cov(self):
+        if self.covariate is None:
+            return None
+        return {
+            "name": self.covariate,
+            "values": np.asarray(self.frame[self.covariate].to_numpy(), dtype=float),
+            "circular": self.type in ("cc", "lc"),
+        }
+
+    def _leverage(self):
+        """Per-observation leverage for the influence panel: lc/cc are ordinary
+        least squares (the hat diagonal; the cc cos/sin share one design), cl
+        reconstructs the converged IRLS hat from the stored design and
+        coefficient covariance."""
+        if self.type == "cl":
+            return self._cl_leverage()
+        x = np.asarray(
+            (self.lm if self.type == "lc" else self.cos_lm).X.to_numpy(), dtype=float
+        )
+        hat = np.sum((x @ _safe_inverse(x.T @ x)) * x, axis=1)
+        return {"h": np.clip(hat, 0.0, 1.0), "p": float(x.shape[1])}
+
+    def _cl_leverage(self):
+        fr = self.frame
+        if self.model in ("mean", "mixed") and self._fields.get("Vbeta") is not None:
+            x, _ = _circ_lm_design(self.mu_formula, fr, self.response)
+            if not x.shape[1]:
+                return None
+            eta = x @ self.beta
+            g = (2.0 / (1.0 + eta**2))[:, None] * x
+            kap = np.broadcast_to(np.asarray(self.kappa, dtype=float), eta.shape)
+            h = (kap * A1(kap)) * np.sum((g @ self._fields["Vbeta"]) * g, axis=1)
+            return {"h": np.asarray(h, dtype=float), "p": float(g.shape[1])}
+        if self.model == "kappa" and self._fields.get("Vag") is not None:
+            z, _ = _circ_lm_design(self.kappa_formula, fr, self.response)
+            z1 = np.column_stack([np.ones(z.shape[0]), z])
+            kap = np.broadcast_to(np.asarray(self.kappa, dtype=float), (z1.shape[0],))
+            h = (kap**2 * A1prime(kap)) * np.sum(
+                (z1 @ self._fields["Vag"]) * z1, axis=1
+            )
+            return {"h": np.asarray(h, dtype=float), "p": float(z1.shape[1])}
+        return None
+
+    # ---- result methods -------------------------------------------------- #
+    def coef(self):
+        if "coefficients" in self._fields:
+            return self._fields["coefficients"]
+        return {"beta": self.beta, "alpha": self.alpha, "gamma": self.gamma}
+
+    def predict(self, newdata=None, type="direction"):
+        """Predicted values. ``newdata=None`` returns the fitted values. cc/lc
+        rebuild on the angular covariate; cl returns the mean ``"direction"`` or
+        the ``"kappa"`` concentration."""
+        if newdata is None:
+            return self.fitted
+        nd = _to_polars(newdata)
+        if self.type == "lc":
+            return self.lm.predict(nd)
+        if self.type == "cc":
+            cf = _ravel(self.cos_lm.predict(nd))
+            sf = _ravel(self.sin_lm.predict(nd))
+            return np.mod(np.arctan2(sf, cf), 2.0 * np.pi)
+        if type == "kappa":
+            if self.model == "mean":
+                return np.full(nd.height, float(self.kappa))
+            z, _ = _circ_lm_design(self.kappa_formula, nd, self.response)
+            return np.exp(self.alpha + z @ self.gamma)
+        if self.model == "kappa":
+            return np.full(nd.height, np.mod(self.mu, 2.0 * np.pi))
+        xn, _ = _circ_lm_design(self.mu_formula, nd, self.response)
+        return np.mod(self.mu + 2.0 * np.arctan(xn @ self.beta), 2.0 * np.pi)
+
+    def logLik(self):
+        if self.type == "cc":
+            raise ValueError(
+                "type='cc' is two separate least-squares fits and has no single "
+                "log-likelihood."
+            )
+        return float(self.loglik)
+
+    @staticmethod
+    def _print_coefmat(est, se, names):
+        """R ``printCoefmat``-style coefficient table — Estimate / Std. Error /
+        z value / Pr(>|z|) (normal approximation) with significance codes."""
+        est = np.atleast_1d(np.asarray(est, dtype=float))
+        se = np.atleast_1d(np.asarray(se, dtype=float))
+        names = [str(nm) for nm in names]
+        w = max([11, *(len(nm) for nm in names)])
         print(
-            "Phase in radians; SEs and CIs from the delta method on (cos, sin) "
-            "coefficients.\n"
+            f"{'':<{w}}  {'Estimate':>11}  {'Std. Error':>11}  "
+            f"{'z value':>9}  {'Pr(>|z|)':>10}"
+        )
+        for nm, e, s in zip(names, est, se):
+            z = e / s if s and np.isfinite(s) and s > 0 else np.nan
+            p = 2.0 * float(norm.cdf(-abs(z))) if np.isfinite(z) else np.nan
+            stars = significance_code(p) if np.isfinite(p) else ""
+            print(f"{nm:<{w}}  {e:>11.5f}  {s:>11.5f}  {z:>9.3f}  {p:>10.3g} {stars}")
+
+    def _print_harmonics(self):
+        print("\nHarmonic amplitude / phase:")
+        hdr = f"{'term':<16}  {'amplitude':>10}  {'se':>9}  {'phase':>10}  {'se':>9}"
+        print(hdr)
+        print("-" * len(hdr))
+        for h in self.harmonics:
+            print(
+                f"{h['term']:<16}  {h['amplitude']:>10.4f}  "
+                f"{h['se_amplitude']:>9.4f}  {h['phase']:>10.4f}  "
+                f"{h['se_phase']:>9.4f}"
+            )
+        print(
+            "Phase in radians; SEs from the delta method on the (cos, sin) "
+            "coefficients."
         )
 
-    def plot(
-        self,
-        figsize: Optional[Tuple[float, float]] = None,
-        n_curve: int = 200,
-        ci: bool = True,
-        pi: bool = False,
-        level: float = 0.95,
-        axes=None,
-    ):
-        """Two-panel diagnostic figure.
-
-        Left:  scatter (θ, y) with the fitted curve over the data's θ range,
-               optionally with confidence and/or prediction bands.
-        Right: residuals vs fitted values.
-
-        For models with extra non-circular covariates (e.g. ``y ~
-        harmonic(θ) + temperature``), the curve is drawn fixing those
-        covariates at their column means.
-
-        Parameters
-        ----------
-        figsize : tuple, optional
-            Matplotlib figure size; defaults to ``(11, 4.5)``.
-        n_curve : int
-            Number of θ points used to draw the fitted curve.
-        ci, pi : bool
-            Whether to shade a confidence band (``ci``) and/or prediction
-            band (``pi``) at the requested ``level``.
-        level : float
-            Coverage probability for the bands (default 0.95).
-        axes : sequence of matplotlib Axes, optional
-            Two pre-existing axes to draw into. If omitted, a fresh figure
-            is created.
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-        """
-        import matplotlib.pyplot as plt
-
-        if not self.result["harmonics"]:
-            raise ValueError(
-                "plot() requires at least one matched cos/sin pair "
-                "(harmonic decomposition)."
-            )
-
-        theta_var = self.result["harmonics"][0]["variable"]
-        theta_data = self.data[theta_var].to_numpy()
-        y_data = self.data[self.response].to_numpy()
-        fitted = self.result["fitted"]
-        residuals = self.result["residuals"]
-
-        # Build a θ grid spanning the data; hold any other covariates at their mean.
-        t_lo = float(min(theta_data.min(), 0.0))
-        t_hi = float(max(theta_data.max(), 2 * np.pi))
-        theta_grid = np.linspace(t_lo, t_hi, n_curve)
-        grid: dict = {theta_var: theta_grid}
-        for col in self.data.columns:
-            if col in (theta_var, self.response):
-                continue
-            series = self.data[col]
-            if series.dtype.is_numeric():
-                grid[col] = np.full(n_curve, float(series.mean()))
+    def summary(self):
+        """Print the regression summary in the R ``print.circ_lm`` style shared
+        with the circlss sibling package — the Fisher–Lee mean & log-κ
+        coefficient tables (cl), the cos/sin coefficient matrix with ρ, residual
+        κ and the higher-order test (cc), or hea's R-style least-squares block
+        with the harmonic amplitude/phase table (lc). Prints only; the values
+        are reachable as attributes (``m.mu``, ``m.kappa``, ``m.aic`` …)."""
+        if self.type == "cl":
+            head = {
+                "mean": "Circular-linear regression (Fisher–Lee), mean direction",
+                "kappa": "Circular-linear regression (Fisher–Lee), concentration",
+                "mixed": "Circular-linear regression (Fisher–Lee), mean and "
+                "concentration",
+            }[self.model]
+            print(f"\n{head}\n")
+            if self.model in ("mean", "mixed"):
+                print("Mean direction   mu = mu0 + 2*atan(X beta):")
+                self._print_coefmat(self.beta, self.se_beta, self.mu_terms)
+                print()
+            if self.model in ("kappa", "mixed"):
+                print("Concentration   log(kappa) = alpha + Z gamma:")
+                self._print_coefmat(
+                    np.concatenate([[self.alpha], np.atleast_1d(self.gamma)]),
+                    np.concatenate([[self.se_alpha], np.atleast_1d(self.se_gamma)]),
+                    ["(Intercept)", *self.kappa_terms],
+                )
+                print()
+            kap = np.asarray(self.kappa, dtype=float)
+            if kap.size == 1:
+                sk = (
+                    float(np.atleast_1d(self.se_kappa)[0])
+                    if self.se_kappa is not None
+                    else float("nan")
+                )
+                kline = f"kappa: {float(kap):.4f} ({sk:.4f})"
             else:
-                # Hold non-numeric columns at their mode.
-                grid[col] = [series.mode()[0]] * n_curve
-        grid_df = pl.DataFrame(grid)
-
-        yhat_df = self.lm_fit.predict(grid_df)
-        yhat = np.asarray(yhat_df.to_numpy()).ravel()
-        alpha = 1.0 - level
-        ci_lo = ci_hi = pi_lo = pi_hi = None
-        if ci:
-            arr = self.lm_fit.compute_ci_yhat(yhat=yhat_df, Xnew=grid_df, alpha=alpha).to_numpy()
-            ci_lo, ci_hi = arr[:, 0], arr[:, 1]
-        if pi:
-            arr = self.lm_fit.compute_pi_yhat(yhat=yhat_df, Xnew=grid_df, alpha=alpha).to_numpy()
-            pi_lo, pi_hi = arr[:, 0], arr[:, 1]
-
-        if axes is None:
-            fig, axes = plt.subplots(1, 2, figsize=figsize or (11, 4.5))
-        else:
-            axes = list(axes)
-            if len(axes) != 2:
-                raise ValueError("`axes` must be a sequence of length 2.")
-            fig = axes[0].figure
-
-        ax = axes[0]
-        if pi_lo is not None:
-            ax.fill_between(
-                theta_grid, pi_lo, pi_hi,
-                color="C1", alpha=0.15, label=f"{int(level*100)}% PI",
+                kline = f"kappa: {kap.min():.4f} to {kap.max():.4f} (per observation)"
+            print(f"mu0: {self.mu:.4f} ({self.se_mu:.4f})    {kline}")
+            print(
+                f"logLik: {self.loglik:.4f}   AIC: {self.aic:.4f}   "
+                f"BIC: {self.bic:.4f}   n: {self.n}"
             )
-        if ci_lo is not None:
-            ax.fill_between(
-                theta_grid, ci_lo, ci_hi,
-                color="C1", alpha=0.30, label=f"{int(level*100)}% CI",
+            if not self._fields.get("converged", True):
+                print("** did not converge **")
+            print("\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
+            print("p-values use the normal approximation.")
+        elif self.type == "cc":
+            print(f"\nCircular-circular regression (harmonic, order {self.order})")
+            print(f"  {self.response} ~ {self.var}   n = {self.n}\n")
+            print("Coefficients:")
+            labels = [_clean_harmonic_label(nm) for nm in self.cos_lm.column_names]
+            cos = np.atleast_1d(np.asarray(self.coefficients["cos"], dtype=float))
+            sin = np.atleast_1d(np.asarray(self.coefficients["sin"], dtype=float))
+            w = max([11, *(len(nm) for nm in labels)])
+            print(f"{'':<{w}}  {'cos':>11}  {'sin':>11}")
+            for nm, c, s in zip(labels, cos, sin):
+                print(f"{nm:<{w}}  {c:>11.5f}  {s:>11.5f}")
+            print(
+                f"\nrho: {self.rho:.4f}    residual kappa: {self.kappa:.4f} "
+                f"(A_k = {self.A_k:.4f})"
             )
-        ax.plot(theta_grid, yhat, color="C1", lw=2, label="fit")
-        ax.scatter(theta_data, y_data, color="C0", s=20, alpha=0.6, edgecolors="none", label="data")
-        ax.set_xlabel(theta_var)
-        ax.set_ylabel(self.response)
-        ax.set_title("Fit overlay")
-        ax.legend(loc="best", frameon=False)
+            print(
+                f"Higher-order test p-values:  cos = {self.p_values[0]:.4f}, "
+                f"sin = {self.p_values[1]:.4f}"
+            )
+            print(
+                "Higher-order terms not significant at the 0.05 level."
+                if np.all(np.asarray(self.p_values) > 0.05)
+                else "Higher-order terms significant at the 0.05 level."
+            )
+        else:  # lc — hea's R-style least-squares block + the harmonic table
+            print("\nLinear-circular regression (harmonic)")
+            print(f"  {self.response} ~ {self.var}   n = {self.n}\n")
+            # hea's SummaryLm is the full R summary.lm block (residual
+            # quantiles, coefficient table, residual SE, R², F, AIC/BIC); the
+            # harmonic amplitude/phase table is the linear-circular addendum.
+            print(self.lm.summary())
+            if self.harmonics:
+                self._print_harmonics()
 
-        # If the grid covers a full 2π span, mark the canonical ticks.
-        if t_lo <= 0 and t_hi >= 2 * np.pi:
-            ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-            ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+    def __repr__(self):
+        if self.type == "cl":
+            return f"CircLM(cl, model={self.model!r}, mu={self.mu:.4f}, n={self.n})"
+        if self.type == "cc":
+            return (
+                f"CircLM(cc, {self.response} ~ {self.var}, "
+                f"order={self.order}, rho={self.rho:.4f}, n={self.n})"
+            )
+        return f"CircLM(lc, {self.response} ~ {self.var}, R²={self.r_squared:.4f})"
 
-        ax = axes[1]
-        ax.scatter(fitted, residuals, color="C0", s=20, alpha=0.6, edgecolors="none")
-        ax.axhline(0.0, color="k", lw=0.5)
-        ax.set_xlabel("Fitted")
-        ax.set_ylabel("Residual")
-        ax.set_title("Residuals vs fitted")
 
-        fig.tight_layout()
-        return fig
+# --------------------------------------------------------------------------- #
+# Plotting primitives (matplotlib). Module-private and grouped so a later pass
+# can lift them wholesale into visualization.py; circ_plot drives them off the
+# per-class _geometry()/_flat_panels() hooks.
+# --------------------------------------------------------------------------- #
+def _band_fill(ax, grid, lo, hi):
+    """A translucent band that breaks at NaN gaps — the non-circular (scale /
+    shape / linear-response) panels, drawn directly against the covariate."""
+    lo = np.asarray(lo, dtype=float)
+    hi = np.asarray(hi, dtype=float)
+    ok = np.isfinite(lo) & np.isfinite(hi)
+    ax.fill_between(
+        grid, lo, hi, where=ok, color="steelblue", alpha=0.25,
+        linewidth=0.0, interpolate=False,
+    )
+
+
+# Circular location curves/bands are drawn in pycircstat2's [0, 2π) convention by
+# UNWRAPPING each to a continuous phase and tiling every 2π copy that can reach
+# the panel, letting set_ylim clip the rest. That keeps both the curve and its
+# band continuous across the 0/2π cut — they exit one edge and re-enter the
+# other, and a wide band wraps the full height instead of clipping — rather than
+# a principal branch broken at the cut. The circlss plot twin.
+def _unwrap_runs(v):
+    """Maximal finite runs of ``v``, each unwrapped to a continuous phase (the
+    per-step differences folded into (−π, π] and accumulated); returns a list of
+    ``(index_array, phase_array)``."""
+    v = np.asarray(v, dtype=float)
+    ok = np.isfinite(v)
+    runs, i, n = [], 0, v.size
+    while i < n:
+        if not ok[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and ok[j]:
+            j += 1
+        idx = np.arange(i, j)
+        m = v[idx]
+        if m.size > 1:
+            fold = np.angle(np.exp(1j * np.diff(m)))
+            m = m[0] + np.concatenate([[0.0], np.cumsum(fold)])
+        runs.append((idx, m))
+        i = j
+    return runs
+
+
+def _tile_k(lo_min, hi_max, view=(0.0, 2.0 * np.pi)):
+    """The 2π-shift indices ``k`` whose copy ``[· + 2πk]`` can reach ``view``."""
+    period = 2.0 * np.pi
+    return range(
+        int(np.ceil((view[0] - hi_max) / period)),
+        int(np.floor((view[1] - lo_min) / period)) + 1,
+    )
+
+
+def _band_fill_circular(ax, grid, mid, csd, view=(0.0, 2.0 * np.pi)):
+    """The ± circular-SD band of an unwrapped location, tiled across the wrap."""
+    grid = np.asarray(grid, dtype=float)
+    csd = np.broadcast_to(np.asarray(csd, dtype=float), np.asarray(mid).shape)
+    for idx, phase in _unwrap_runs(mid):
+        g, lo, hi = grid[idx], phase - csd[idx], phase + csd[idx]
+        for k in _tile_k(float(lo.min()), float(hi.max()), view):
+            ax.fill_between(
+                g, lo + 2 * np.pi * k, hi + 2 * np.pi * k,
+                color="steelblue", alpha=0.25, linewidth=0.0,
+            )
+
+
+def _lines_circular(ax, grid, mid, view=(0.0, 2.0 * np.pi), **kw):
+    """The location curve, tiled to match its band (continuous across the cut)."""
+    grid = np.asarray(grid, dtype=float)
+    for idx, phase in _unwrap_runs(mid):
+        g = grid[idx]
+        for k in _tile_k(float(phase.min()), float(phase.max()), view):
+            ax.plot(g, phase + 2 * np.pi * k, **kw)
+
+
+def _flat_panel(ax, grid, panel, xlab, se, xobs, yobs, rug):
+    """One response-scale panel against the covariate. A circular location uses
+    the [0, 2π) convention with ``ylim=(0, 2π)``, its curve and ± circular-SD
+    band tiled continuously across the wrap; a scale/shape/linear panel draws a
+    2-SE shadow directly. The observed responses (and an optional rug) overlay."""
+    mid = np.asarray(panel["mid"], dtype=float)
+    if panel.get("circular"):
+        ylim = [0.0, 2.0 * np.pi]
+        mid = np.mod(mid, 2.0 * np.pi)
+        if xobs is not None and yobs is not None:
+            ax.scatter(xobs, np.mod(yobs, 2.0 * np.pi), s=6, c="black",
+                       alpha=0.25, edgecolors="none")
+        csd = panel.get("csd")
+        if se and csd is not None:
+            _band_fill_circular(ax, grid, mid, csd)
+        _lines_circular(ax, grid, mid, color="steelblue", lw=2)
+    else:
+        lo, hi = panel.get("lo"), panel.get("hi")
+        cat = np.concatenate(
+            [mid] + [np.asarray(v, float) for v in (lo, hi) if v is not None]
+        )
+        ylim = [float(np.nanmin(cat)), float(np.nanmax(cat))]
+        if yobs is not None and len(yobs):
+            ylim = [min(ylim[0], float(np.min(yobs))),
+                    max(ylim[1], float(np.max(yobs)))]
+        if xobs is not None and yobs is not None:
+            ax.scatter(xobs, yobs, s=6, c="black", alpha=0.25, edgecolors="none")
+        if se and lo is not None and hi is not None:
+            _band_fill(ax, grid, lo, hi)
+        ax.plot(grid, mid, color="steelblue", lw=2)
+    if rug and xobs is not None:
+        ax.plot(xobs, np.full(len(xobs), ylim[0]), "|", color="black",
+                alpha=0.3, markersize=6)
+    ax.set_xlabel(xlab)
+    ax.set_ylabel(panel["name"])
+    ax.set_title(panel["name"])
+    ax.set_ylim(*ylim)
+
+
+def _coord(c):
+    """Identity covariate/response coordinate map (the surface uses the value
+    as-is, e.g. an angle around a ring or tube)."""
+    return np.asarray(c, dtype=float)
+
+
+def _surface_maps(kind, grid, xobs, yspan):
+    """``(to_u, to_v, xyz, mesh)`` for a regression geometry surface — the
+    covariate→u and response→v coordinate maps, the ``xyz(u, v)`` embedding, and
+    the wireframe mesh. cylinder (c~l): response angle wraps the tube, covariate
+    runs the axis; torus (c~c): covariate around the ring, response around the
+    tube; can (l~c): cyclic covariate wraps the ring, linear response is the
+    height."""
+    if kind == "torus":
+        big_r, r = 2.0, 0.82
+
+        def xyz(u, v):
+            u, v = np.asarray(u, float), np.asarray(v, float)
+            return (
+                (big_r + r * np.cos(v)) * np.cos(u),
+                (big_r + r * np.cos(v)) * np.sin(u),
+                r * np.sin(v),
+            )
+
+        to_u = to_v = _coord
+        uu, vv = np.linspace(-np.pi, np.pi, 49), np.linspace(-np.pi, np.pi, 37)
+    elif kind == "cylinder":
+        rho, axlen = 0.95, 3.2
+        ref = np.concatenate([np.asarray(grid, float), np.asarray(xobs, float)])
+        lo, hi = float(np.nanmin(ref)), float(np.nanmax(ref))
+        span = (hi - lo) or 1.0
+
+        def to_u(c):
+            return (np.asarray(c, float) - lo) / span * 2 * axlen - axlen
+
+        def xyz(u, v):
+            u, v = np.asarray(u, float), np.asarray(v, float)
+            return (u, rho * np.cos(v), rho * np.sin(v))
+
+        to_v = _coord
+        uu, vv = np.linspace(-axlen, axlen, 25), np.linspace(-np.pi, np.pi, 37)
+    else:  # can
+        r, height = 1.0, 1.5
+        ys = (
+            np.asarray(yspan, float)
+            if yspan is not None and len(yspan)
+            else np.array([-1.0, 1.0])
+        )
+        ylo, yhi = float(np.nanmin(ys)), float(np.nanmax(ys))
+        yspw = (yhi - ylo) or 1.0
+
+        def to_v(c):
+            return (np.asarray(c, float) - ylo) / yspw * 2 * height - height
+
+        def xyz(u, v):
+            u, v = np.asarray(u, float), np.asarray(v, float)
+            return (r * np.cos(u), r * np.sin(u), v)
+
+        to_u = _coord
+        uu, vv = np.linspace(-np.pi, np.pi, 49), np.linspace(-height, height, 19)
+    grid_u, grid_v = np.meshgrid(uu, vv)
+    return to_u, to_v, xyz, xyz(grid_u, grid_v)
+
+
+def _geometry_panel(ax, grid, zv, xobs, yobs, surface, lo=None, hi=None, main=None):
+    """Draw the fitted location curve on its natural surface (the 3-D
+    counterpart of the flat location panel): wireframe canvas, optional band
+    ribbon (± circular-SD for a circular location), the fitted curve, and the
+    observed points."""
+    yspan = None
+    if surface == "can":
+        parts = [np.asarray(zv, float)]
+        for v in (yobs, lo, hi):
+            if v is not None:
+                parts.append(np.asarray(v, float))
+        yspan = np.concatenate(parts)
+    ref_x = xobs if xobs is not None else grid
+    to_u, to_v, xyz, (mx, my, mz) = _surface_maps(surface, grid, ref_x, yspan)
+    ax.plot_wireframe(mx, my, mz, color="0.85", linewidth=0.4)
+    # preserve the surface's true proportions (a flat donut / long tube) — else
+    # matplotlib stretches each axis to a cube and the torus reads as a ball.
+    ax.set_box_aspect((np.ptp(mx), np.ptp(my), np.ptp(mz)))
+    if lo is not None and hi is not None:
+        # Subdivide the band across its width into K strips so every quad hugs
+        # the tube's curvature — a single lo→hi quad would chord straight
+        # through the interior, since the cylinder/torus embedding is nonlinear
+        # in the tube angle. On a circular response, break the ribbon at the ±π
+        # direction wrap so adjacent columns don't sheet across the surface.
+        lo = np.asarray(lo, dtype=float)
+        hi = np.asarray(hi, dtype=float)
+        steps = np.linspace(0.0, 1.0, 9)[:, None]
+        vband = to_v(lo)[None, :] + (to_v(hi) - to_v(lo))[None, :] * steps
+        uband = np.broadcast_to(to_u(grid)[None, :], vband.shape)
+        # np.array (not asarray) → writable copies: the cylinder passes u
+        # straight through as x (a read-only broadcast), which the wrap-break
+        # NaN assignment below would otherwise reject.
+        bx, by, bz = (np.array(a, dtype=float) for a in xyz(uband, vband))
+        if surface != "can":
+            cut = np.where(np.abs(np.diff(np.asarray(zv, dtype=float))) > np.pi)[0]
+            for arr in (bx, by, bz):
+                arr[:, cut + 1] = np.nan
+        ax.plot_surface(
+            bx, by, bz, color="#c0392b", alpha=0.15, linewidth=0, shade=False
+        )
+    cx, cy, cz = xyz(to_u(grid), to_v(zv))
+    ax.plot(cx, cy, cz, color="#c0392b", lw=3)
+    if xobs is not None and yobs is not None:
+        ox, oy, oz = xyz(to_u(xobs), to_v(yobs))
+        ax.scatter(ox, oy, oz, c="#1f4e79", s=8, alpha=0.6)
+    ax.set_axis_off()
+    ax.set_title(
+        main
+        or {
+            "torus": "torus · circular–circular",
+            "cylinder": "cylinder · circular–linear",
+            "can": "can · linear–circular",
+        }[surface]
+    )
+    # per-surface view matching circlss's persp(phi=) elevation
+    elev, azim = {"torus": (40, -55), "cylinder": (16, -65),
+                  "can": (18, -55)}.get(surface, (25, -60))
+    ax.view_init(elev=elev, azim=azim)
+
+
+# ---- circ_check diagnostic-panel drawers ----------------------------------- #
+def _check_keys(which, response_circular):
+    """Resolve the circ_check panel keys: ``None`` → the response-appropriate
+    default, ``"all"`` → every panel, else the given key(s) (validated). ``rose``
+    is dropped for a linear response (it needs an angular residual)."""
+    known = [
+        "rose",
+        "obsfit",
+        "residcov",
+        "qq.unif",
+        "qq.norm",
+        "scaleloc",
+        "hist",
+        "cook",
+    ]
+    default = ["rose", "obsfit", "residcov", "qq.unif"]
+    if which is None:
+        keys = list(default)
+    elif which == "all":
+        keys = list(known)
+    elif isinstance(which, str):
+        keys = [which]
+    else:
+        keys = list(which)
+    bad = [k for k in keys if k not in known]
+    if bad:
+        raise ValueError(f"unknown panel key(s): {bad}. Available: {known} (or 'all').")
+    warn_rose = (
+        not response_circular
+        and which is not None
+        and which != "all"
+        and "rose" in keys
+    )
+    if not response_circular:
+        keys = [k for k in keys if k != "rose"]
+    if not keys:
+        raise ValueError("no panels to draw.")
+    return keys, warn_rose
+
+
+def _panel_rose(ax, ang, nbins=24):
+    """Rose diagram of the angular residuals (polar axis): equal-width sectors
+    with radius ∝ √count (so sector area encodes frequency); the firebrick arrow
+    is the residual mean resultant. One tight wedge at 0 is a good fit."""
+    ang = _wrap(ang)
+    edges = np.linspace(-np.pi, np.pi, nbins + 1)
+    counts, _ = np.histogram(ang, bins=edges)
+    rad = np.sqrt(counts / counts.max()) if counts.max() > 0 else counts.astype(float)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    ax.bar(
+        centers,
+        rad,
+        width=2 * np.pi / nbins,
+        color="steelblue",
+        alpha=0.5,
+        edgecolor="steelblue",
+        linewidth=0.6,
+    )
+    sb, cb = float(np.mean(np.sin(ang))), float(np.mean(np.cos(ang)))
+    rbar = np.hypot(sb, cb)
+    if rbar > 1e-8:
+        ax.annotate(
+            "",
+            xy=(np.arctan2(sb, cb), rbar),
+            xytext=(0, 0),
+            arrowprops=dict(color="firebrick", lw=2, arrowstyle="-|>"),
+        )
+    ax.set_yticklabels([])
+    ax.set_title("angular residuals")
+
+
+def _panel_obsfit(ax, parts):
+    """Observed vs fitted. Circular: the wrapped diagonal and its ±2π copies are
+    perfect calibration, so off-diagonal mass shows where on the circle the fit
+    fails. Linear: the ordinary scatter with y = x."""
+    y, f = parts["y"], parts["fitted_dir"]
+    ax.scatter(f, y, s=6, c="black", alpha=0.4, edgecolors="none")
+    if parts["response_circular"]:
+        ax.set_xlim(-np.pi, np.pi)
+        ax.set_ylim(-np.pi, np.pi)
+        ax.set_aspect("equal")
+        for off in (-2 * np.pi, 0.0, 2 * np.pi):
+            ax.plot(
+                [-np.pi, np.pi],
+                [-np.pi + off, np.pi + off],
+                color="steelblue",
+                lw=1,
+                ls="-" if off == 0 else "--",
+            )
+        ax.set_xlabel("fitted direction")
+    else:
+        lim = [float(min(np.min(f), np.min(y))), float(max(np.max(f), np.max(y)))]
+        ax.plot(lim, lim, color="steelblue", lw=1)
+        ax.set_xlabel("fitted")
+    ax.set_ylabel("observed")
+    ax.set_title("observed vs fitted")
+
+
+def _panel_residcov(ax, resid, cinfo, resid_circular, rug):
+    """Residual vs covariate — leftover trend means missed structure (add a
+    harmonic, or raise the basis dimension). A cyclic covariate gets a circular
+    x-range."""
+    x = np.asarray(cinfo["values"], dtype=float)
+    ax.scatter(x, resid, s=6, c="black", alpha=0.4, edgecolors="none")
+    ax.axhline(0.0, color="steelblue", lw=1)
+    if cinfo["circular"]:
+        ax.set_xlim((-np.pi, np.pi) if np.nanmin(x) < 0 else (0.0, 2 * np.pi))
+    if rug:
+        ax.plot(
+            x,
+            np.full(x.size, ax.get_ylim()[0]),
+            "|",
+            color="black",
+            alpha=0.3,
+            markersize=5,
+        )
+    ax.set_xlabel(cinfo["name"])
+    ax.set_ylabel("angular residual" if resid_circular else "residual")
+    ax.set_title("residual vs covariate")
+
+
+def _panel_qqunif(ax, u, watson):
+    """Quantile-residual uniform Q-Q: ordered PIT residuals against (i−½)/n on
+    the unit square. Points on the line ⇒ calibrated; the corner carries the
+    Watson U² statistic and its uniformity p-value."""
+    us = np.sort(u)
+    n = us.size
+    pp = (np.arange(1, n + 1) - 0.5) / n
+    ax.scatter(pp, us, s=6, c="black", alpha=0.5, edgecolors="none")
+    ax.plot([0, 1], [0, 1], color="steelblue", lw=1)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
+    ax.set_xlabel("theoretical U(0, 1) quantile")
+    ax.set_ylabel("ordered PIT residual")
+    ax.set_title("quantile-residual Q-Q")
+    ax.text(
+        0.04,
+        0.92,
+        f"Watson U2 = {watson['stat']:.3f}\np = {watson['p']:.3f}",
+        transform=ax.transAxes,
+        fontsize=8,
+        va="top",
+    )
+
+
+def _panel_qqnorm(ax, dev):
+    """Normal Q-Q of the deviance residuals — holds on the circle because the
+    deviance residual is constructed ≈ N(0, 1)."""
+    from scipy.stats import probplot
+
+    probplot(np.asarray(dev, dtype=float), dist="norm", plot=ax)
+    ax.set_title("deviance-residual normal Q-Q")
+
+
+def _panel_scaleloc(ax, dev, fitted, resp_circular):
+    """Scale-location: √|deviance residual| vs the fitted location — a trend is
+    the circular failure mode (the dispersion/concentration model is wrong)."""
+    rs = np.sqrt(np.abs(dev))
+    ax.scatter(fitted, rs, s=6, c="black", alpha=0.4, edgecolors="none")
+    if resp_circular:
+        ax.set_xlim(-np.pi, np.pi)
+    ax.set_xlabel("fitted direction" if resp_circular else "fitted")
+    ax.set_ylabel(r"$\sqrt{|\mathrm{deviance\ residual}|}$")
+    ax.set_title("scale-location")
+
+
+def _panel_hist(ax, dev):
+    """Histogram of the deviance residuals with the standard-normal reference."""
+    dev = np.asarray(dev, dtype=float)
+    ax.hist(
+        dev, bins="fd", density=True, color="steelblue", alpha=0.4, edgecolor="white"
+    )
+    xs = np.linspace(float(dev.min()), float(dev.max()), 200)
+    ax.plot(xs, norm.pdf(xs), color="firebrick", lw=1.5)
+    ax.set_xlabel("deviance residual")
+    ax.set_title("deviance-residual histogram")
+
+
+def _panel_cook(ax, dev, lev):
+    """Residuals vs leverage with Cook's-distance contours — a high-leverage
+    point with a large residual swings the fit. Standardized deviance residual
+    dev/√(1−h); points past 4/n are labelled by index."""
+    h = np.asarray(lev["h"], dtype=float)
+    p = float(lev["p"])
+    rstd = dev / np.sqrt(np.clip(1.0 - h, 1e-8, None))
+    cooks = rstd**2 * h / (p * np.clip(1.0 - h, 1e-8, None))
+    ax.scatter(h, rstd, s=6, c="black", alpha=0.45, edgecolors="none")
+    ax.axhline(0.0, color="steelblue", ls="--", lw=1)
+    flagged = np.where(cooks > 4.0 / h.size)[0]
+    for i in flagged:
+        ax.annotate(str(i), (h[i], rstd[i]), fontsize=6, color="firebrick")
+    ax.set_xlabel("leverage")
+    ax.set_ylabel("std. deviance residual")
+    ax.set_title("residuals vs leverage")

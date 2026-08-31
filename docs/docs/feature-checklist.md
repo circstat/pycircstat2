@@ -83,9 +83,9 @@
 |-----------------------------------------------|----------------|------------|-------------------|---------------|---------------------------|
 | Circular-Circular Correlation                 | `circ_corrcc`  | `corrcc`   | `circ_corrcc`     | `circ.cor`    | `cor.circular`            |
 | Circular-Linear Correlation                   | `circ_corrcl`  | `corrcl`   | `circ_corrcl`     | -             | -                         |
-| Circular-Circular Regression                  | `CCRegression` | -          | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
-| Circular-Linear Regression [^cl-resp]         | `CLRegression` | -          | -                 | -             | `lm.circular(type="c-l")` |
-| Linear-Circular Regression (harmonic) [^lc-resp] | `LCRegression` | -          | -                 | -             | -                         |
+| Circular-Circular Regression                  | `circ_lm(type="cc")` | -    | -                 | `circ.reg`    | `lm.circular(type="c-c")` |
+| Circular-Linear Regression [^cl-resp]         | `circ_lm(type="cl")` | -    | -                 | -             | `lm.circular(type="c-l")` |
+| Linear-Circular Regression (harmonic) [^lc-resp] | `circ_lm(type="lc")` | - | -                 | -             | -                         |
 
 
 

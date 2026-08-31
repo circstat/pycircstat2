@@ -3,7 +3,7 @@ from importlib import resources as importlib_resources
 from typing import Union
 
 import numpy as np
-import pandas as pd
+import hea.io
 from scipy.special import i0e, i1e
 
 
@@ -137,7 +137,7 @@ def load_data(
     name: str,
     source: str = "fisher",
     print_meta: bool = False,
-) -> pd.DataFrame:
+) -> "hea.DataFrame":
     __source__ = ["fisher", "zar", "mardia", "pewsey", "jammalamadaka"]
 
     # check source
@@ -149,7 +149,18 @@ def load_data(
     # load data
     data_files = importlib_resources.files("pycircstat2")
     csv_path = str(data_files / f"data/{source}/{name}.csv")
-    csv_data = pd.read_csv(csv_path, index_col=0)
+    # ``hea.io.read_csv`` returns a tidyverse-capable ``hea.DataFrame`` (an IS-A
+    # subclass of ``pl.DataFrame``), so loaded datasets support tidy verbs
+    # (``mutate``/``filter``/``summarize``/``count``/…) directly — convenient in
+    # the example notebooks — while staying drop-in for any polars / array use.
+    csv_data = hea.io.read_csv(csv_path)
+    # pandas loaded these with index_col=0: the first column was the row index,
+    # excluded from the data. Polars has no index, so drop the first column to
+    # preserve that layout (columns line up by name and position with the old
+    # pandas frames). For most files this is an unnamed 1-based counter; for a
+    # few (e.g. zar/D4) it is a sample id pandas used as the index. Re-wrap so
+    # the hea.DataFrame subclass survives the native ``drop``.
+    csv_data = hea.DataFrame(csv_data.drop(csv_data.columns[0]))
 
     json_path = str(data_files / f"data/{source}/{name}.csv-metadata.json")
     with open(json_path) as f:
@@ -233,6 +244,67 @@ def rotate_data(alpha: np.ndarray, angle: float, unit: str = "radian") -> np.nda
 def A1(kappa: np.ndarray) -> np.ndarray:
     # i1e(κ)/i0e(κ) = (i1(κ) e^-κ)/(i0(κ) e^-κ) — stable for large κ where i0/i1 overflow.
     return i1e(kappa) / i0e(kappa)
+
+def A1prime(kappa: np.ndarray) -> np.ndarray:
+    r"""Derivative of the mean-resultant function ``A1(κ) = I_1(κ)/I_0(κ)``.
+
+    ``A1'(κ) = 1 − A1(κ)/κ − A1(κ)²`` — equivalently ``-∂²/∂κ² log I_0(κ)``'s
+    negative, i.e. the von Mises Fisher information for the concentration. As
+    ``κ → 0`` the ``A1/κ`` term is the removable singularity ``A1(κ)/κ → 1/2``,
+    so ``A1'(0) = 1/2``; the limit is filled in explicitly to avoid 0/0.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    a1 = A1(kappa)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = 1.0 - np.where(kappa == 0.0, 0.5, a1 / kappa) - a1**2
+    return out[()] if out.ndim == 0 else out
+
+def A1prime2(kappa: np.ndarray) -> np.ndarray:
+    r"""Second derivative of ``A1(κ)``, by differentiating
+    ``A1' = 1 − A1/κ − A1²``:
+
+    ``A1''(κ) = −A1'/κ + A1/κ² − 2 A1 A1'``.
+
+    The ``−A1'/κ`` and ``A1/κ²`` terms are each ``≈ 1/(2κ)`` and cancel
+    catastrophically as ``κ → 0`` (the true value is ``≈ −3κ/8``), so below
+    ``κ < 0.01`` the Maclaurin series ``−3κ/8 + 5κ³/24 − 77κ⁵/1024`` is used;
+    both branches agree to ~1e-12 at the switch. ``A1''(0) = 0``.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    a1 = A1(kappa)
+    d1 = A1prime(kappa)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rec = -d1 / kappa + a1 / kappa**2 - 2.0 * a1 * d1
+    k2 = kappa * kappa
+    series = kappa * (-3.0 / 8.0 + k2 * (5.0 / 24.0 - k2 * (77.0 / 1024.0)))
+    out = np.where(kappa < 0.01, series, rec)
+    return out[()] if out.ndim == 0 else out
+
+def A1prime3(kappa: np.ndarray) -> np.ndarray:
+    r"""Third derivative of ``A1(κ)``, by differentiating ``A1''``:
+
+    ``A1'''(κ) = −A1''/κ + 2A1'/κ² − 2A1/κ³ − 2A1'² − 2 A1 A1''.``
+
+    Same removable cancellation as :func:`A1prime2` (here ``2A1'/κ²`` vs
+    ``2A1/κ³``, each ``≈ 1/κ²``): below ``κ < 0.01`` the Maclaurin series
+    ``−3/8 + 5κ²/8 − 385κ⁴/1024`` is used. ``A1'''(0) = −3/8``.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    a1 = A1(kappa)
+    d1 = A1prime(kappa)
+    d2 = A1prime2(kappa)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rec = (
+            -d2 / kappa
+            + 2.0 * d1 / kappa**2
+            - 2.0 * a1 / kappa**3
+            - 2.0 * d1 * d1
+            - 2.0 * a1 * d2
+        )
+    k2 = kappa * kappa
+    series = -3.0 / 8.0 + k2 * (5.0 / 8.0 - k2 * (385.0 / 1024.0))
+    out = np.where(kappa < 0.01, series, rec)
+    return out[()] if out.ndim == 0 else out
 
 def A1inv(R: float) -> float:
     # A1 maps kappa>=0 to [0, 1); clamp R to that range to avoid the

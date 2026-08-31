@@ -459,7 +459,7 @@ class Circular:
         ```
         from pycircstat2 import load_data, Circular
 
-        data = load_data("B3", source="fisher")["θ"].values
+        data = load_data("B3", source="fisher")["θ"].to_numpy()
         c = Circular(data, unit="degree")
         c.plot(config={"scatter": {"color" : "blue", "size": 15}})
         ```

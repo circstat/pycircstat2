@@ -14,5 +14,8 @@ dev/
 dist/
 docs/site/
 build/
+tmp/
 
 *copy*
+.claude
+*/plans
