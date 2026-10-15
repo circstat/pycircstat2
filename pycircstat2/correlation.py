@@ -162,8 +162,10 @@ def _circ_corrcc_fl(
         m_raas = np.mean(raas)
         s2_raas = np.var(raas, ddof=1)
         z = norm.ppf(0.975)
-        lb = n * r - (n - 1) * m_raas - z * np.sqrt(s2_raas / n)
-        ub = n * r - (n - 1) * m_raas + z * np.sqrt(s2_raas / n)
+        # The pseudovalues are n*r - (n-1)*raas, so their SD is (n-1) times larger.
+        standard_error = (n - 1) * np.sqrt(s2_raas / n)
+        lb = n * r - (n - 1) * m_raas - z * standard_error
+        ub = n * r - (n - 1) * m_raas + z * standard_error
 
         reject = ~(lb <= 0 <= ub)
 

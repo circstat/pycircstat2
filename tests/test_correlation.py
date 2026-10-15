@@ -1,7 +1,28 @@
 import numpy as np
+from scipy.stats import norm
 
 from pycircstat2 import Circular, load_data
 from pycircstat2.correlation import circ_corrcc, circ_corrcl
+
+
+def test_fisher_lee_jackknife_uses_pseudovalue_standard_error():
+    data = load_data("milwaukee", source="jammalamadaka")
+    a = np.deg2rad(data["theta"].to_numpy())
+    b = np.deg2rad(data["psi"].to_numpy())
+    n = len(a)
+    r = circ_corrcc(a, b, method="fl")
+    leave_one_out = np.array([
+        circ_corrcc(np.delete(a, i), np.delete(b, i), method="fl")
+        for i in range(n)
+    ])
+    pseudovalues = n * r - (n - 1) * leave_one_out
+    half_width = norm.ppf(0.975) * pseudovalues.std(ddof=1) / np.sqrt(n)
+    lower = pseudovalues.mean() - half_width
+    upper = pseudovalues.mean() + half_width
+    assert lower < 0 < upper
+    result = circ_corrcc(a, b, method="fl", test=True)
+    assert result.r == r
+    assert not result.reject_null
 
 
 def test_circ_corrcc():
