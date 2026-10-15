@@ -107,6 +107,14 @@ def _coerce_angles(
     return array, None
 
 
+def _has_zero_pairwise_variation(angles: np.ndarray) -> bool:
+    """Detect constant or antipodal directions without an absolute variance floor."""
+    differences = angles - angles[0]
+    # sin(k*pi) has rounding residuals proportional to the argument's magnitude.
+    tolerance = np.finfo(float).eps * np.abs(differences)
+    return bool(np.all(np.abs(np.sin(differences)) <= tolerance))
+
+
 def _circ_corrcc_fl(
     a: Union[Circular, np.ndarray, Sequence[float]],
     b: Union[Circular, np.ndarray, Sequence[float]],
@@ -146,7 +154,7 @@ def _circ_corrcc_fl(
         diff_b = np.sin(np.subtract.outer(b, b)[np.triu_indices(len(b), k=1)])
         num = np.sum(diff_a * diff_b)
         den = np.sqrt(np.sum(diff_a**2) * np.sum(diff_b**2))
-        if np.isclose(den, 0.0):
+        if den == 0.0 or _has_zero_pairwise_variation(a) or _has_zero_pairwise_variation(b):
             raise ValueError("Degenerate data produced zero variance in pairwise differences.")
         return num / den
 
@@ -223,7 +231,7 @@ def _circ_corrcc_js(
     Sb = np.sin(bbar)
     num = np.sum(Sa * Sb)
     den = np.sqrt(np.sum(Sa**2) * np.sum(Sb**2))
-    if np.isclose(den, 0.0):
+    if den == 0.0 or _has_zero_pairwise_variation(a_alpha) or _has_zero_pairwise_variation(b_alpha):
         raise ValueError("Degenerate data produced zero variance around the mean direction.")
     r = num / den
 
@@ -232,7 +240,7 @@ def _circ_corrcc_js(
         l20 = np.mean(Sa**2)
         l02 = np.mean(Sb**2)
         l22 = np.mean(Sa**2 * Sb**2)
-        if np.isclose(l22, 0.0):
+        if l22 == 0.0:
             raise ValueError("Degenerate data caused division by zero in variance term.")
         test_stat = np.sqrt(n) * np.sqrt(l20 * l02 / l22) * r
         p_val = 2 * (1 - norm.cdf(np.abs(test_stat)))
